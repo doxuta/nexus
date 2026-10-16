@@ -13,10 +13,10 @@ rules), and that metadata is the only thing an AI is allowed to change.
 | Safe to ship | Changes land as drafts; a human publishes; any version can be rolled back |
 | Safe by construction | Tenant isolation and row-level access on every query; the app and its assistant only see what the user may see |
 | Works with your agents | The same validated actions are meant to be exposed over MCP: agents propose, humans dispose *(in progress)* |
-| Measured, not vibed | A record/replay gateway and an eval suite for the builder *(in progress)* |
+| Measured, not vibed | The whole loop runs in CI against a recorded model (record/replay gateway); an eval suite for the builder *(in progress)* |
 
 > **Status:** work in progress, being finished in the open. The engine, the drafts → publish → rollback flow,
-> access control and the CRM pack run today; the MCP endpoint, replay mode and the eval numbers are tracked in
+> access control and the CRM pack run today; the MCP endpoint and the eval numbers are tracked in
 > [Issues](../../issues). The UI is Vietnamese-first; English coverage is partial.
 
 ## Quickstart
@@ -36,6 +36,7 @@ Workspace code: `northwind`. These credentials are for your laptop only; the com
 override. AI features stay off until you point `AI_GATEWAY_BASE_URL` at an OpenAI-compatible gateway and set
 `AI_ENABLED=true`.
 Without a model or key, `AI_ENABLED=true AI_GATEWAY_MODE=replay AI_GATEWAY_CASSETTE=/cassettes/<name>.jsonl docker compose up` answers from a cassette in `./cassettes`, recorded once the same way with `AI_GATEWAY_MODE=record` and a live gateway.
+The whole loop (the builder asks for a helpdesk, previews, publishes; the rep uses it and is refused an edit; a layout change is rolled back) runs in Chrome against that stack with `cassettes/demo-loop.jsonl`: `node nexus-web/scripts/demo-loop.mjs <screenshot-dir>` after `npm ci` in `nexus-web/`.
 
 ## What's inside
 
