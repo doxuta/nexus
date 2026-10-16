@@ -16,6 +16,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
 	"nexus/platform/internal/config"
 	"nexus/platform/internal/metadata"
 )
@@ -443,6 +446,54 @@ func TestReplay_DrivesTheBuilderWithoutBaseURLOrKey(t *testing.T) {
 	}
 	if got.Outcome != outcomeOK || got.Reply != recorded.Reply || len(got.Draft) != 1 || got.Draft[0].Entity == nil || got.Draft[0].Entity.Name != "appointments" {
 		t.Fatalf("replayed turn = %q %q %+v; want the recorded reply and the appointments draft", got.Outcome, got.Reply, got.Draft)
+	}
+}
+
+// A replayed turn costs nothing by design, so the zero-usage canary — there to catch a live gateway
+// that stops reporting usage — stays quiet for it, on the builder and on the assistant; a live
+// gateway that reports no usage still trips it on both.
+func TestReplay_ZeroUsageCanaryStaysQuiet(t *testing.T) {
+	ctx := context.Background()
+	canaries := func(gw Completer) int {
+		t.Helper()
+		core, logs := observer.New(zap.WarnLevel)
+		logger := zap.New(core)
+		if _, err := NewAIBuilderAgent(enabledCfg(3), gw, twoTenantReader(), nil, nil, logger).
+			Chat(ctx, Scope{UserID: "admin"}, "tenant-A", "", []ChatMessage{{Role: "user", Content: "Build a simple helpdesk"}}); err != nil {
+			t.Fatalf("builder turn: %v", err)
+		}
+		rd := &fakeRecordReader{ents: []metadata.EntityDefinition{{Name: "tickets", Label: "Tickets"}}}
+		if _, err := NewAssistantAgent(enabledCfg(3), gw, rd, nil, logger).
+			Ask(ctx, callerScope(), "tenant-A", "", []ChatMessage{{Role: "user", Content: "How many tickets are open?"}}); err != nil {
+			t.Fatalf("assistant turn: %v", err)
+		}
+		return logs.FilterMessageSnippet("gateway returned no usage on a successful").Len()
+	}
+	noUsage := func(text string) ChatResponse {
+		r := finalTextResp(text)
+		r.Usage = Usage{}
+		return r
+	}
+	if n := canaries(&scriptedGateway{t: t, responses: []ChatResponse{noUsage("built"), noUsage("answered")}}); n != 2 {
+		t.Fatalf("a live gateway without usage logged the canary %d times; want once per agent", n)
+	}
+
+	path := filepath.Join(t.TempDir(), "turns.jsonl")
+	rec, err := newRecorder(&scriptedGateway{t: t, responses: []ChatResponse{finalTextResp("built"), finalTextResp("answered")}}, path)
+	if err != nil {
+		t.Fatalf("newRecorder: %v", err)
+	}
+	if n := canaries(rec); n != 0 {
+		t.Fatalf("recording turns that report usage logged the canary %d times", n)
+	}
+	cfg := enabledCfg(3)
+	cfg.GatewayMode, cfg.Cassette = config.AIGatewayReplay, path
+	replay, err := NewCompleter(cfg)
+	if err != nil {
+		t.Fatalf("NewCompleter(replay): %v", err)
+	}
+	if n := canaries(replay); n != 0 {
+		t.Fatalf("replayed turns logged the zero-usage canary %d times; want none, their zero usage is by design", n)
 	}
 }
 

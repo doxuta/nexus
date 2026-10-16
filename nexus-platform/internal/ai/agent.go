@@ -348,8 +348,9 @@ func (a *AIBuilderAgent) recordRun(ctx context.Context, run Run) {
 	// impossible — a gateway that stops returning a `usage` block would silently turn M4's daily
 	// token budget (BudgetGuard, spec §12) into a no-op: every turn would look free and the tenant
 	// could never be capped. This never blocks the turn (the reply already succeeded) — it only
-	// makes the condition observable in ops logs.
-	if run.Outcome == outcomeOK && run.PromptTokens == 0 && run.OutputTokens == 0 {
+	// makes the condition observable in ops logs. A replayed turn (AI_GATEWAY_MODE=replay) is free by
+	// design, so it stays quiet.
+	if run.Outcome == outcomeOK && run.PromptTokens == 0 && run.OutputTokens == 0 && !replays(a.gateway) {
 		a.logger.Warn("ai: gateway returned no usage on a successful turn — daily budget not accruing for this run",
 			zap.String("tenant_id", run.TenantID),
 			zap.String("run_id", run.ID))

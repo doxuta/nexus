@@ -145,6 +145,13 @@ func (r *replayer) Complete(_ context.Context, req ChatRequest) (ChatResponse, e
 	return resp, nil
 }
 
+// replays reports whether c answers from a cassette. Its zero usage is by design, not a gateway that
+// stopped reporting usage, so the agents' zero-usage canary stays quiet for it.
+func replays(c Completer) bool {
+	_, ok := c.(*replayer)
+	return ok
+}
+
 // stale is the error for a cassette that no longer matches the calls, with the way to re-record it.
 func (r *replayer) stale(format string, args ...any) error {
 	return fmt.Errorf("ai.replayer.Complete: %w: cassette %s is stale: %s — re-record it: run the same steps against a live gateway with AI_GATEWAY_MODE=record AI_GATEWAY_CASSETTE=%s",

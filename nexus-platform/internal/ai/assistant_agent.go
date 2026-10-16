@@ -169,7 +169,7 @@ func (a *AssistantAgent) Ask(ctx context.Context, recordScope services.RecordSco
 // zero-usage canary) — duplicated rather than extracted so this slice touches none of the
 // builder's code paths. ponytail: fold both into one shared helper if a third agent ever appears.
 func (a *AssistantAgent) recordRun(ctx context.Context, run Run) {
-	if run.Outcome == outcomeOK && run.PromptTokens == 0 && run.OutputTokens == 0 {
+	if run.Outcome == outcomeOK && run.PromptTokens == 0 && run.OutputTokens == 0 && !replays(a.gateway) {
 		a.logger.Warn("ai: gateway returned no usage on a successful assistant turn — daily budget not accruing for this run",
 			zap.String("tenant_id", run.TenantID),
 			zap.String("run_id", run.ID))
