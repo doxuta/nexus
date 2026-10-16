@@ -6026,6 +6026,7 @@ const vi = {
   "studio.operate.mcp.open.row": "Mở cuộc trò chuyện",
   "studio.operate.mcp.open.rowOf": "Mở cuộc trò chuyện của khoá {prefix}",
   "studio.operate.mcp.open.error": "Không mở được cuộc trò chuyện của khoá này. Thử lại sau ít phút.",
+  "studio.operate.mcp.open.gone": "Cuộc trò chuyện của khoá này đã bị xoá, nên đề xuất mới của agent không còn chỗ để hiện. Thu hồi khoá này rồi tạo khoá mới.",
   "studio.operate.mcp.revoke.row": "Thu hồi",
   "studio.operate.mcp.revoke.rowOf": "Thu hồi khoá {prefix}",
   "studio.operate.mcp.revoke.ask": "Agent đang dùng khoá {prefix} sẽ bị từ chối ngay. Các thẻ nó đã đề xuất vẫn còn trong cuộc trò chuyện.",

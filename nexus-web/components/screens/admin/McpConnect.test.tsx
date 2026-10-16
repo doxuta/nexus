@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EmbeddedSurface } from "@/components/slds/EmbeddedSurface";
 import { logout } from "@/lib/api";
-import { claudeMcpAddCommand, type McpToken } from "@/lib/admin";
+import { ApiError, claudeMcpAddCommand, type McpToken } from "@/lib/admin";
 
 vi.mock("@/lib/studioContext", () => ({ useStudioIdentity: () => ({ matches: () => true }), activeProjectSlug: () => "northwind", projectSlugAt: () => "northwind", transitionPhase: () => "idle" }));
 vi.mock("next/navigation", () => ({ usePathname: () => "/studio/du-an/northwind/van-hanh/tu-dong/khoa-truy-cap" }));
@@ -119,6 +119,14 @@ describe("McpConnect", () => {
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Mở cuộc trò chuyện của khoá nxm_AbCdEfGhIjKl…" }));
     await waitFor(() => expect(openThread).toHaveBeenCalledWith("sess-1"));
+  });
+
+  it("a deleted conversation says to revoke the key and make a new one", async () => {
+    openThread.mockRejectedValueOnce(new ApiError(404, "SESSION_NOT_FOUND", "gone"));
+    global.fetch = routedFetch([LIVE]) as unknown as typeof fetch;
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Mở cuộc trò chuyện của khoá nxm_AbCdEfGhIjKl…" }));
+    expect(await screen.findByText(/đã bị xoá.*Thu hồi khoá này rồi tạo khoá mới/)).toBeInTheDocument();
   });
 
   it("where the assistant cannot open, there is no open button", async () => {

@@ -207,6 +207,7 @@ const en = {
   "studio.operate.mcp.open.row": "Open conversation",
   "studio.operate.mcp.open.rowOf": "Open the conversation of key {prefix}",
   "studio.operate.mcp.open.error": "Could not open this key's conversation. Try again in a few minutes.",
+  "studio.operate.mcp.open.gone": "This key's conversation was deleted, so the agent's new proposals have nowhere to land. Revoke this key and create a new one.",
   "studio.operate.mcp.revoke.row": "Revoke",
   "studio.operate.mcp.revoke.rowOf": "Revoke key {prefix}",
   "studio.operate.mcp.revoke.ask": "The agent using key {prefix} is refused at once. The cards it proposed stay in the conversation.",

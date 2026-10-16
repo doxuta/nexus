@@ -82,8 +82,9 @@ function McpConnectSection({ slug }: { slug: string }) {
         return;
       }
       await run();
-    } catch {
-      setRowErr((m) => ({ ...m, [k.id]: t(failKey) }));
+    } catch (ex) {
+      // The key's conversation was deleted: its new proposals have nowhere to land, so say what fixes it.
+      setRowErr((m) => ({ ...m, [k.id]: t(ex instanceof ApiError && ex.code === "SESSION_NOT_FOUND" ? "studio.operate.mcp.open.gone" : failKey) }));
     } finally {
       setBusy(null);
     }
