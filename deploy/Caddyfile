@@ -5,9 +5,9 @@
 #   docker run --rm -v "$PWD":/w caddy caddy validate --config /w/Caddyfile --adapter caddyfile
 
 {$DOMAIN} {
-	# Route API and health-check traffic to the Go backend; everything else goes to the Next.js FE.
+	# Route API, MCP and health-check traffic to the Go backend; everything else goes to the Next.js FE.
 	# handle blocks are mutually exclusive and evaluated in source order (api matcher runs first).
-	@api path /api/* /health /health/*
+	@api path /api/* /mcp /health /health/*
 	handle @api {
 		reverse_proxy nexus:8080
 	}

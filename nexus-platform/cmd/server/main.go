@@ -43,6 +43,7 @@ import (
 	"nexus/platform/internal/inboundhook"
 	"nexus/platform/internal/janitor"
 	"nexus/platform/internal/jobs"
+	"nexus/platform/internal/mcpserver"
 	"nexus/platform/internal/metadata"
 	"nexus/platform/internal/metaversion"
 	"nexus/platform/internal/metrics"
@@ -1499,6 +1500,9 @@ func main() {
 			"version": "1.0.0",
 		})
 	})
+	// MCP (issue #3): agents propose, humans dispose. Outside /api/v1: its own bearer (nxm_ tokens
+	// only, refused everywhere else) and the SDK's stateless streamable HTTP transport.
+	r.Any("/mcp", gin.WrapH(mcpserver.New(mcpTokenSvc, aiAgent, aiSessionStore, logger)))
 
 	// API v1 routes. RegisterAPIRoutes is the single wiring point shared with the integration
 	// tests: it mounts the PUBLIC /auth/* endpoints, then a PROTECTED sub-group fronted by

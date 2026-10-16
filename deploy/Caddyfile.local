@@ -1,7 +1,7 @@
 # Local one-command demo (docker-compose.yml): one origin for the web app and the API, no TLS.
 # The production variant with a domain, HSTS and access logs is deploy/Caddyfile.
 :80 {
-	@api path /api/* /health /health/*
+	@api path /api/* /mcp /health /health/*
 	handle @api {
 		reverse_proxy api:8080
 	}
