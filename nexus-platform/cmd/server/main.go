@@ -262,7 +262,11 @@ func main() {
 	if err != nil {
 		logger.Fatal("Failed to load AI config", zap.Error(err))
 	}
-	aiGateway := ai.NewGateway(aiCfg.BaseURL, time.Duration(aiCfg.TimeoutSec)*time.Second).WithAPIKey(aiCfg.APIKey)
+	// The live gateway, or record/replay through AI_GATEWAY_CASSETTE (demos, CI, evals without a model).
+	aiGateway, err := ai.NewCompleter(*aiCfg)
+	if err != nil {
+		logger.Fatal("Failed to set up the AI gateway", zap.Error(err))
+	}
 	aiRunRepo := ai.NewSQLRunRepository(sqlxDB)
 	// aiAgent itself is constructed LATER (before the ⌘K assistant block): explain_access needs
 	// AccessProbes over userRepo/roleRepo/aclSvc/fieldACLRepo/recordSvc, none of which exist yet.
@@ -277,7 +281,8 @@ func main() {
 	// ALWAYS wires this guard; a handler without one gates nothing (test-only shape).
 	aiBudgetGuard := ai.NewBudgetGuard(*aiCfg, aiRunRepo, logger)
 	if aiCfg.Enabled {
-		logger.Info("AI Builder enabled", zap.String("ai_model", aiCfg.Model), zap.String("ai_gateway", aiCfg.BaseURL))
+		logger.Info("AI Builder enabled", zap.String("ai_model", aiCfg.Model), zap.String("ai_gateway", aiCfg.BaseURL),
+			zap.String("ai_gateway_mode", aiCfg.GatewayMode))
 	} else {
 		logger.Info("AI Builder disabled (AI_ENABLED not \"true\") — route answers 503 AI_DISABLED")
 	}
