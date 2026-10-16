@@ -222,8 +222,9 @@ func TestLoadAIConfig_DefaultModelIsListedByGateway(t *testing.T) {
 	}
 }
 
-// AI_GATEWAY_MODE is the one AI_* knob that fails fast instead of degrading: a typo must not quietly
-// run live (network, key, cost) where a replay was meant. replay needs neither base URL nor key.
+// AI_GATEWAY_MODE and AI_GATEWAY_CASSETTE are the AI_* knobs that fail fast instead of degrading: a
+// typo or a forgotten mode must not quietly run live (network, key, cost) where a replay was meant.
+// replay needs neither base URL nor key.
 func TestLoadAIConfig_GatewayMode(t *testing.T) {
 	tests := []struct {
 		name, mode, cassette   string
@@ -237,6 +238,9 @@ func TestLoadAIConfig_GatewayMode(t *testing.T) {
 		{name: "unknown mode", mode: "replya", cassette: "demo.jsonl", wantErr: `AI_GATEWAY_MODE="replya"`},
 		{name: "record without cassette", mode: "record", wantErr: "AI_GATEWAY_CASSETTE"},
 		{name: "replay without cassette", mode: "replay", wantErr: "AI_GATEWAY_CASSETTE"},
+		// A cassette with no mode is a forgotten AI_GATEWAY_MODE=replay: silently live would call the network.
+		{name: "cassette without a mode", cassette: "demo.jsonl", wantErr: "AI_GATEWAY_CASSETTE is set but AI_GATEWAY_MODE is live"},
+		{name: "cassette with live", mode: "live", cassette: "demo.jsonl", wantErr: "AI_GATEWAY_CASSETTE is set but AI_GATEWAY_MODE is live"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

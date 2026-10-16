@@ -109,9 +109,9 @@ type AIConfig struct {
 // with the AI Builder inert (Enabled=false) when nothing is configured. A bad or absent knob falls
 // back to the documented default, mirroring the getEnv* helpers used across the config package. AI
 // is an optional accelerator — a misconfigured knob must degrade to honest-disabled, never fail the
-// whole server boot. The one exception is the gateway mode: an unknown AI_GATEWAY_MODE, or record/
-// replay without AI_GATEWAY_CASSETTE, is an error, because degrading there would quietly run live
-// (network, key, cost) where a replay was meant.
+// whole server boot. The one exception is the gateway mode: an unknown AI_GATEWAY_MODE, record/replay
+// without AI_GATEWAY_CASSETTE, or a cassette with live mode is an error, because degrading there would
+// quietly run live (network, key, cost) where a replay was meant.
 func LoadAIConfig() (*AIConfig, error) {
 	enabled := strings.EqualFold(strings.TrimSpace(getEnv("AI_ENABLED", "false")), "true")
 
@@ -123,6 +123,9 @@ func LoadAIConfig() (*AIConfig, error) {
 	cassette := strings.TrimSpace(os.Getenv("AI_GATEWAY_CASSETTE"))
 	switch mode {
 	case AIGatewayLive:
+		if cassette != "" {
+			return nil, fmt.Errorf("config.LoadAIConfig: AI_GATEWAY_CASSETTE is set but AI_GATEWAY_MODE is live: set AI_GATEWAY_MODE=record or replay, or unset AI_GATEWAY_CASSETTE")
+		}
 	case AIGatewayRecord, AIGatewayReplay:
 		if cassette == "" {
 			return nil, fmt.Errorf("config.LoadAIConfig: AI_GATEWAY_MODE=%s needs AI_GATEWAY_CASSETTE, the path of the cassette file", mode)
