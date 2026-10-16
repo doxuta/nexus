@@ -187,6 +187,9 @@ const en = {
   "page.studio.ai.apply.appGone": "The app being built no longer exists — the table was created but is not attached to an app, staff cannot see it.",
   "page.studio.ai.apply.navFailed": "Table created but could not be added to the {app} menu — open the app manager to add it by hand.",
   "page.studio.ai.context.invalid": "The context sent was not valid — context cleared, no AI turn was spent. Resend to try again.",
+
+  // ── Studio project header ───────────────────────────────────────────────
+  "studio.project.homeMetaDelivered": "Nexus workshop",
 } as const;
 
 export type I18nKeyEn = keyof typeof en;

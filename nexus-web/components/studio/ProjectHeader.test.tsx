@@ -152,6 +152,19 @@ describe("ProjectHeader", () => {
       expect(screen.getByRole("dialog", { name: "Xem lại và xuất bản" })).toBeInTheDocument();
     });
 
+    // Once delivered, customers DO see the workshop: its line must not say they do not, beside "Khách đang dùng phiên bản N".
+    it("the delivered workshop drops 'khách không thấy' from its line; undelivered, the line stays", () => {
+      const home = (publish: React.ComponentProps<typeof ProjectHeader>["publish"]) =>
+        render(<ProjectHeader slug="northwind" identity={{ name: "Xưởng Nexus" }} zone="dung" home publish={publish} />);
+      home({ delivered: false, pendingCount: 0, versionNo: null });
+      expect(screen.getByText("Xưởng Nexus · khách không thấy")).toBeInTheDocument();
+      cleanup();
+      const { getByTestId } = home({ delivered: true, pendingCount: 0, versionNo: 2 });
+      expect(screen.getByText("Khách đang dùng phiên bản 2")).toBeInTheDocument();
+      expect(getByTestId("project-header").textContent).not.toContain("khách không thấy");
+      expect(screen.getAllByTitle("Xưởng Nexus").filter((el) => el.classList.contains("slds-truncate"))).toHaveLength(1); // the line, beside the h1
+    });
+
     it("counts only when the token belongs to this project", () => {
       matches.mockReturnValue(false);
       head({ delivered: true, pendingCount: 3, versionNo: 4 });

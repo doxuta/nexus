@@ -112,7 +112,7 @@ export function ProjectFrame({ slug, children }: { slug: string; children: React
             home={home}
             openApp={() => router.push(appHref)}
             publish={publishState && { delivered: publishState.delivered, pendingCount: publishState.pendingCount, versionNo: publishState.headVersion?.versionNo, schemaRetry: !!publishState.schemaRetry }}
-            actions={home ? [] : [<DraftBar key="draft" slug={slug} />]} // the workshop has no delivery notion (FR-064: no badge there)
+            actions={home ? [] : [<DraftBar key="draft" slug={slug} />]} // no first-publish button in the workshop (FR-064); once delivered (the demo seed does it) ProjectHeader shows its publish status
           />
         ) : (
           <div className="slds-theme_default slds-border_bottom">

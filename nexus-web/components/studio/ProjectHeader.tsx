@@ -65,7 +65,8 @@ export function ProjectHeader({ slug, identity, zone, status, home, openApp, act
       {t(hasPending ? "studio.publish.open" : "studio.publish.retryOpen")}
     </Button>
   ) : null;
-  const facts = home ? t("studio.project.homeMeta") : [identity.industry, identity.stageLabel, identity.originLabel].filter(Boolean).join(" · ");
+  // Delivered, the workshop is seen by its customers: its line no longer claims they cannot see it.
+  const facts = home ? t(shown?.delivered ? "studio.project.homeMetaDelivered" : "studio.project.homeMeta") : [identity.industry, identity.stageLabel, identity.originLabel].filter(Boolean).join(" · ");
   const line = (
     <span className="slds-truncate" title={facts}>
       {facts}
