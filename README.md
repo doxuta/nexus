@@ -35,6 +35,7 @@ Open <http://localhost:8080> (set `NEXUS_PORT` to use another port).
 Workspace code: `northwind`. These credentials are for your laptop only; the compose file documents every
 override. AI features stay off until you point `AI_GATEWAY_BASE_URL` at an OpenAI-compatible gateway and set
 `AI_ENABLED=true`.
+Without a model or key, `AI_GATEWAY_MODE=replay` answers from a cassette (`AI_GATEWAY_CASSETTE`) recorded once with `AI_GATEWAY_MODE=record`.
 
 ## What's inside
 
