@@ -18,7 +18,8 @@ import (
 // MCP tokens (issue #3): a builder issues one so an outside agent can call the builder agent's read
 // and propose tools at /mcp. The token is valid on /mcp only (CompositeVerifier refuses it on the
 // API), lives at most MCPTokenMaxTTL, and every call runs as the issuing builder: a token whose
-// builder was disabled, demoted or lost the builder flag stops working at its next request.
+// builder was disabled, demoted or lost the builder flag, or whose workspace was retired or
+// suspended, stops working at its next request.
 const (
 	// MCPTokenPrefix is the token namespace, disjoint from JWTs ("eyJ…") and API keys (nxk_).
 	MCPTokenPrefix = "nxm_"
@@ -48,23 +49,26 @@ type mcpThreads interface {
 	AppendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage) (string, error)
 }
 
-// mcpBuilders reads the issuing builder's live row (auth.UserRepository).
-type mcpBuilders interface {
+// mcpLiveReader reads the issuing builder's live row and their workspace (auth.UserRepository:
+// GetTenantByID answers auth.ErrTenantNotFound for a retired or suspended workspace, as the refresh
+// flow relies on).
+type mcpLiveReader interface {
 	GetUserByID(ctx context.Context, tenantID, id string) (*auth.User, error)
+	GetTenantByID(ctx context.Context, id string) (*auth.Tenant, error)
 }
 
 // MCPTokenService issues, lists, revokes and verifies MCP tokens.
 type MCPTokenService struct {
 	repo    mcpTokenRepo
 	threads mcpThreads
-	users   mcpBuilders
+	users   mcpLiveReader
 	auditor audit.Auditor
 	logger  *zap.Logger
 	now     func() time.Time
 }
 
 // NewMCPTokenService wires the service; every dependency is required.
-func NewMCPTokenService(repo mcpTokenRepo, threads mcpThreads, users mcpBuilders) *MCPTokenService {
+func NewMCPTokenService(repo mcpTokenRepo, threads mcpThreads, users mcpLiveReader) *MCPTokenService {
 	return &MCPTokenService{repo: repo, threads: threads, users: users, auditor: audit.NewNoopAuditor(), logger: zap.NewNop(), now: time.Now}
 }
 
@@ -151,9 +155,10 @@ func (s *MCPTokenService) Revoke(ctx context.Context, tenantID, userID, id strin
 	return nil
 }
 
-// Verify resolves a presented raw token to its principal. Unknown, revoked, expired, or a builder who
-// is no longer an active admin with the builder flag: auth.ErrMCPTokenInvalid (the reason is logged,
-// never answered). Any other error is an infrastructure failure.
+// Verify resolves a presented raw token to its principal. Unknown, revoked, expired, a retired or
+// suspended workspace, or a builder who is no longer an active admin with the builder flag:
+// auth.ErrMCPTokenInvalid (the reason is logged, never answered). Any other error is an
+// infrastructure failure.
 func (s *MCPTokenService) Verify(ctx context.Context, raw string) (*MCPPrincipal, error) {
 	if !strings.HasPrefix(raw, MCPTokenPrefix) {
 		return nil, auth.ErrMCPTokenInvalid
@@ -166,22 +171,9 @@ func (s *MCPTokenService) Verify(ctx context.Context, raw string) (*MCPPrincipal
 		return nil, fmt.Errorf("services.MCPTokenService.Verify: %w", err)
 	}
 	now := s.now()
-	why := ""
-	switch {
-	case t.RevokedAt != nil:
-		why = "revoked"
-	case !t.ExpiresAt.After(now):
-		why = "expired"
-	default:
-		u, err := s.users.GetUserByID(ctx, t.TenantID, t.UserID)
-		switch {
-		case errors.Is(err, auth.ErrUserNotFound):
-			why = "builder gone"
-		case err != nil:
-			return nil, fmt.Errorf("services.MCPTokenService.Verify: builder: %w", err)
-		case u.Status != "active" || !u.IsAdmin || !u.IsPlatformOperator:
-			why = "no longer a builder"
-		}
+	why, err := s.refusal(ctx, t, now)
+	if err != nil {
+		return nil, err
 	}
 	if why != "" {
 		s.logger.Warn("services.MCPTokenService: mcp token refused", zap.String("reason", why),
@@ -195,4 +187,30 @@ func (s *MCPTokenService) Verify(ctx context.Context, raw string) (*MCPPrincipal
 			zap.String("tenant_id", t.TenantID), zap.String("mcp_token_id", t.ID), zap.Error(err))
 	}
 	return &MCPPrincipal{TokenID: t.ID, TenantID: t.TenantID, UserID: t.UserID, SessionID: t.SessionID}, nil
+}
+
+// refusal says why a stored token no longer works ("" = it does); an error is an infrastructure
+// failure, never a verdict.
+func (s *MCPTokenService) refusal(ctx context.Context, t *auth.MCPToken, now time.Time) (string, error) {
+	switch {
+	case t.RevokedAt != nil:
+		return "revoked", nil
+	case !t.ExpiresAt.After(now):
+		return "expired", nil
+	}
+	if _, err := s.users.GetTenantByID(ctx, t.TenantID); errors.Is(err, auth.ErrTenantNotFound) {
+		return "workspace retired or suspended", nil
+	} else if err != nil {
+		return "", fmt.Errorf("services.MCPTokenService.Verify: workspace: %w", err)
+	}
+	u, err := s.users.GetUserByID(ctx, t.TenantID, t.UserID)
+	switch {
+	case errors.Is(err, auth.ErrUserNotFound):
+		return "builder gone", nil
+	case err != nil:
+		return "", fmt.Errorf("services.MCPTokenService.Verify: builder: %w", err)
+	case u.Status != "active" || !u.IsAdmin || !u.IsPlatformOperator:
+		return "no longer a builder", nil
+	}
+	return "", nil
 }

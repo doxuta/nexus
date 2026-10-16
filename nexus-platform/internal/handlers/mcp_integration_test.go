@@ -439,3 +439,44 @@ func TestMCP_FrozenTenantReadsButDoesNotPropose(t *testing.T) {
 		t.Fatalf("thread rows = %d (%v); want only the 2 of the key's opening turn", rows, err)
 	}
 }
+
+// Retiring a workspace (DELETE /admin/tenants/:id soft-deletes its row) closes every door: its
+// agent keys stop at their next request, like its logins.
+func TestMCP_RetiredTenantKeysStop(t *testing.T) {
+	gdb, sx := a4SetupMigratedDB(t)
+	ctx := context.Background()
+	const tenant = "ten-mcp-retired"
+	builderID := mcpBuilder(t, gdb, tenant, "mcp-retired")
+	store := ai.NewSessionStore(sx)
+	mcpSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(gdb), store, auth.NewUserRepository(gdb))
+	_, secret, err := mcpSvc.Issue(ctx, auth.Subject{UserID: builderID, TenantID: tenant, IsAdmin: true}, nil)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	agent := ai.NewAIBuilderAgent(config.AIConfig{}, nil, metadata.NewRepository(gdb), nil, nil, zap.NewNop())
+	ts := httptest.NewServer(mcpserver.New(mcpSvc, agent, store, nil, zap.NewNop()))
+	defer ts.Close()
+	list := func() int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nexus_list_entities","arguments":{}}}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("Authorization", "Bearer "+secret)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := list(); got != http.StatusOK {
+		t.Fatalf("control: a live workspace's key: %d", got)
+	}
+	// What services.TenantProvisionService.RetireTenant does: a GORM soft delete of the tenant row.
+	if err := gdb.Where("id = ?", tenant).Delete(&auth.Tenant{}).Error; err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if got := list(); got != http.StatusUnauthorized {
+		t.Fatalf("a retired workspace's key: %d; want 401", got)
+	}
+}

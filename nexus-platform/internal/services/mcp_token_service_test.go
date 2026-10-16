@@ -79,14 +79,26 @@ func (f *fakeThreads) AppendTurn(_ context.Context, tenantID, userID, sessionID,
 	return "sess-1", nil
 }
 
-type fakeBuilders map[string]*auth.User // by user id
+// fakeBuilders holds the users (by id) and the tenants that are no longer active (retired or
+// suspended), as auth.UserRepository answers them.
+type fakeBuilders struct {
+	users   map[string]*auth.User
+	retired map[string]bool
+}
 
 func (f fakeBuilders) GetUserByID(_ context.Context, tenantID, id string) (*auth.User, error) {
-	if u, ok := f[id]; ok && u.TenantID == tenantID {
+	if u, ok := f.users[id]; ok && u.TenantID == tenantID {
 		cp := *u
 		return &cp, nil
 	}
 	return nil, auth.ErrUserNotFound
+}
+
+func (f fakeBuilders) GetTenantByID(_ context.Context, id string) (*auth.Tenant, error) {
+	if f.retired[id] {
+		return nil, auth.ErrTenantNotFound
+	}
+	return &auth.Tenant{ID: id, Status: "active"}, nil
 }
 
 var mcpNow = time.Date(2026, 10, 17, 3, 0, 0, 0, time.UTC)
@@ -98,7 +110,7 @@ func builder() *auth.User {
 func newTestMCPService() (*MCPTokenService, *fakeMCPRepo, *fakeThreads, fakeBuilders) {
 	repo := &fakeMCPRepo{rows: map[string]*auth.MCPToken{}}
 	threads := &fakeThreads{}
-	users := fakeBuilders{"u-builder": builder()}
+	users := fakeBuilders{users: map[string]*auth.User{"u-builder": builder()}, retired: map[string]bool{}}
 	s := NewMCPTokenService(repo, threads, users)
 	s.now = func() time.Time { return mcpNow }
 	return s, repo, threads, users
@@ -200,17 +212,24 @@ func TestMCPToken_Verify(t *testing.T) {
 		{"never issued", func(_ *fakeMCPRepo, _ fakeBuilders, _ string) string { return "nxm_" + strings.Repeat("A", 43) }, false},
 		{"an API key", func(_ *fakeMCPRepo, _ fakeBuilders, _ string) string { return "nxk_" + strings.Repeat("A", 43) }, false},
 		{"a JWT", func(_ *fakeMCPRepo, _ fakeBuilders, _ string) string { return "eyJhbGciOiJIUzI1NiJ9.e30.x" }, false},
-		{"builder deleted", func(_ *fakeMCPRepo, users fakeBuilders, raw string) string { delete(users, "u-builder"); return raw }, false},
+		{"builder deleted", func(_ *fakeMCPRepo, users fakeBuilders, raw string) string {
+			delete(users.users, "u-builder")
+			return raw
+		}, false},
 		{"builder disabled", func(_ *fakeMCPRepo, users fakeBuilders, raw string) string {
-			users["u-builder"].Status = "inactive"
+			users.users["u-builder"].Status = "inactive"
 			return raw
 		}, false},
 		{"builder no longer admin", func(_ *fakeMCPRepo, users fakeBuilders, raw string) string {
-			users["u-builder"].IsAdmin = false
+			users.users["u-builder"].IsAdmin = false
 			return raw
 		}, false},
 		{"builder flag removed", func(_ *fakeMCPRepo, users fakeBuilders, raw string) string {
-			users["u-builder"].IsPlatformOperator = false
+			users.users["u-builder"].IsPlatformOperator = false
+			return raw
+		}, false},
+		{"tenant retired (DELETE /admin/tenants/:id) or suspended", func(_ *fakeMCPRepo, users fakeBuilders, raw string) string {
+			users.retired["t1"] = true
 			return raw
 		}, false},
 	}
