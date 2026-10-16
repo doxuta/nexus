@@ -127,22 +127,30 @@ describe("proposalView — access", () => {
   };
   afterEach(() => localStorage.removeItem("nexus.prefs.v1"));
 
-  it("one line per table: <role> được xem tất cả · tạo · sửa của mình trên <table>", () => {
+  const LINES = ["add:Phiếu hỗ trợ: xem tất cả", "add:Phiếu hỗ trợ: tạo", "add:Phiếu hỗ trợ: sửa của mình"];
+
+  it("the title is the sentence: <role> được xem tất cả · tạo · sửa của mình trên <table>; one + line per grant", () => {
     const v = proposalView(ITEMS.access)!;
-    expect(v.title).toBe("Cho vai “Nhân viên kinh doanh” dùng Phiếu hỗ trợ");
-    expect(texts(v)).toEqual(["add:Nhân viên kinh doanh được xem tất cả · tạo · sửa của mình trên Phiếu hỗ trợ"]);
+    expect(v.title).toBe("Nhân viên kinh doanh được xem tất cả · tạo · sửa của mình trên Phiếu hỗ trợ");
+    expect(texts(v)).toEqual(LINES);
     expect(v.where).toBe("Người dùng & quyền");
   });
 
   it("in English: <Role label> can view all · create · edit their own <Table>", () => {
     localStorage.setItem("nexus.prefs.v1", JSON.stringify({ locale: "en" }));
-    expect(texts(proposalView(ITEMS.access))).toEqual(["add:Nhân viên kinh doanh can view all · create · edit their own Phiếu hỗ trợ"]);
+    expect(proposalView(ITEMS.access)!.title).toBe("Nhân viên kinh doanh can view all · create · edit their own Phiếu hỗ trợ");
   });
 
-  it("with the server's role change: Sửa, the sentence stays, Trước/Sau name the table's access", () => {
+  it("two tables: one clause each", () => {
+    const two: AiDraftItem = { kind: "access", access: { role: "r", roleLabel: "Lễ tân", labels: { a: "A", b: "B" },
+      grants: [{ entityName: "a", action: "view", accessLevel: "all" }, { entityName: "b", action: "edit", accessLevel: "owner" }] } };
+    expect(proposalView(two)!.title).toBe("Lễ tân được xem tất cả trên A; Lễ tân được sửa của mình trên B");
+  });
+
+  it("with the server's role change: Sửa, the lines stay, Trước/Sau name the table's access", () => {
     const v = proposalView(withChange)!;
     expect(v.op).toBe("update");
-    expect(texts(v)).toEqual(["add:Nhân viên kinh doanh được xem tất cả · tạo · sửa của mình trên Phiếu hỗ trợ"]);
+    expect(texts(v)).toEqual(LINES);
     expect(v.before).toEqual(["Phiếu hỗ trợ: không có quyền"]);
     expect(v.after).toEqual(["Phiếu hỗ trợ: xem tất cả · tạo · sửa của mình"]);
   });

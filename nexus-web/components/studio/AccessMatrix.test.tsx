@@ -244,6 +244,15 @@ describe("assistant preview (an access card)", () => {
     expect(document.querySelectorAll(".nx-proposed")).toHaveLength(1);
   });
 
+  it("brings the first ghost cell into view (a wide matrix scrolls sideways)", async () => {
+    const seen: Element[] = [];
+    const spy = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) { seen.push(this); });
+    renderWith(onVisit);
+    const td = (await screen.findByText("Xem và sửa · Đề xuất")).closest("td")!;
+    await waitFor(() => expect(seen).toContain(td));
+    spy.mockRestore();
+  });
+
   it("the builder can still set the ghosted cell by hand", async () => {
     renderWith(onVisit);
     await screen.findByText("Xem và sửa · Đề xuất");

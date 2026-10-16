@@ -80,8 +80,8 @@ describe("ProposalCard preview", () => {
         <ProposalCard item={ACCESS} asSample onAsSampleChange={() => {}} onApply={() => {}} onDiscard={() => {}} link={link} proposalKey="t:2" />
       </ProposalOverlayProvider>,
     );
-    expect(screen.getByRole("heading", { name: "Cho vai “Nhân viên kinh doanh” dùng Phiếu hỗ trợ" })).toBeInTheDocument();
-    expect(screen.getByText("Nhân viên kinh doanh được xem tất cả · sửa của mình trên Phiếu hỗ trợ")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Nhân viên kinh doanh được xem tất cả · sửa của mình trên Phiếu hỗ trợ" })).toBeInTheDocument();
+    expect(screen.getByText("Phiếu hỗ trợ: sửa của mình")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Xem trước" }));
     expect(push).toHaveBeenCalledWith("/studio/du-an/demo/dung/nguoi-dung-quyen", { scroll: false });
   });

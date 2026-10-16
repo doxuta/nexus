@@ -89,6 +89,12 @@ export function AccessMatrix({ roles, tables, roleHref, proposed, onSaved, viewA
   // Delivered project: a role grant has no draft, so the change is asked in place before it is queued (lát f2-direct-apply-access).
   const { guard, dialog, notice } = useDirectApply({ inline: true });
   const ghost = useProposedChanges("role")[0] ?? null;
+  // A previewed card's cells can sit far to the right of a wide matrix: bring the first one into view, once per preview.
+  const grid = useRef<HTMLDivElement>(null);
+  const ghostKey = proposed ? [...proposed].join(",") : "";
+  useEffect(() => {
+    if (ghostKey) grid.current?.querySelector<HTMLElement>("td.nx-proposed")?.scrollIntoView?.({ block: "nearest", inline: "center" });
+  }, [ghostKey]);
   const latest = useRef({ roles, onSaved });
   useEffect(() => { latest.current = { roles, onSaved }; });
 
@@ -176,7 +182,7 @@ export function AccessMatrix({ roles, tables, roleHref, proposed, onSaved, viewA
       <p role="status" aria-live="polite" className="slds-text-body_small slds-text-color_weak slds-p-horizontal_medium">
         {live}
       </p>
-      <div className="overflow-x-auto">
+      <div ref={grid} className="overflow-x-auto">
         <table className="slds-table slds-table_bordered" aria-label={t("studio.build.access.matrix.label")}>
           <thead>
             <tr className="slds-line-height_reset">

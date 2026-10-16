@@ -4825,7 +4825,6 @@ const vi = {
   "studio.assistant.view.dashboard.none": "Chưa có khối nào; thêm sau trong bảng điều khiển",
   "studio.assistant.view.dashboard.widget": "{title} ({type})",
   "studio.assistant.view.workqueue": "Tạo hàng đợi việc “{name}”",
-  "studio.assistant.view.access": "Cho vai “{role}” dùng {tables}",
   "studio.assistant.view.access.line": "{role} được {actions} trên {table}",
   "studio.assistant.access.verb.view": "xem",
   "studio.assistant.access.verb.create": "tạo",

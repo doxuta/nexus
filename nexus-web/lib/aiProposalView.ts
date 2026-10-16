@@ -217,14 +217,15 @@ export function proposalView(item: AiDraftItem, ctx: Ctx = {}): ProposalView | n
   }
   const ac = item.kind === "access" ? getAccessDraft(item) : undefined;
   if (ac) {
-    // "Nhân viên kinh doanh được xem tất cả · tạo · sửa của mình trên Phiếu hỗ trợ", one line per table.
+    // The title is the whole sentence, so it wraps instead of being cut: "Nhân viên kinh doanh được xem tất cả · tạo · sửa
+    // của mình trên Phiếu hỗ trợ" (one clause per table); the list has one short "+" line per grant.
     const role = ac.roleLabel || ac.role;
     const label = (n: string) => ac.labels?.[n] || n;
     const tables = [...new Set(ac.grants.map((g) => g.entityName))];
     return base({
-      title: V("access", { role, tables: tables.map(label).join(", ") }),
+      title: tables.map((n) => V("access.line", { role, actions: accessText(ac.grants, n), table: label(n) })).join("; "),
       where: where(t("studio.assistant.where.access")),
-      changes: tables.map((n) => ({ op: "add" as const, text: V("access.line", { role, actions: accessText(ac.grants, n), table: label(n) }) })),
+      changes: ac.grants.map((g) => ({ op: "add" as const, text: tf("studio.assistant.access.side", { table: label(g.entityName), actions: accessText([g], g.entityName) }) })),
     });
   }
   return null;

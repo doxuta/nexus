@@ -197,7 +197,6 @@ const en = {
   "studio.assistant.apply.accessTableMissing": "There is no table {list} yet: apply the table card first, then the access.",
   "studio.assistant.apply.accessNothing": "The role already had all of this — nothing changed.",
   "studio.assistant.where.access": "Users & access",
-  "studio.assistant.view.access": "Let “{role}” use {tables}",
   "studio.assistant.view.access.line": "{role} can {actions} {table}",
   "studio.assistant.access.verb.view": "view",
   "studio.assistant.access.verb.create": "create",
