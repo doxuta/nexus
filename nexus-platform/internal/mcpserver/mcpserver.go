@@ -127,11 +127,22 @@ const proposedNote = "Saved as a card in the builder's Studio thread. Nothing ha
 // call runs one tool as the token's builder. A propose_* call first reads the thread's earlier
 // proposals (so it may build on them, as within one chat turn), and a proposal that passed the
 // validators is appended to the thread; the agent is told it proposed only once that write landed.
-func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (res *mcp.CallToolResult, err error) {
 	p, ok := ctx.Value(principalKey{}).(services.MCPPrincipal)
 	if !ok {
 		return nil, errors.New("mcpserver: unauthenticated call") // unreachable behind authenticate
 	}
+	// go-sdk runs each tools/call in its own goroutine with no recover, outside gin's Recovery, so a
+	// panic below would take the whole API down. It becomes a logged tool error instead.
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("mcpserver: tool call panicked", zap.String("tenant_id", p.TenantID),
+				zap.String("mcp_token_id", p.TokenID), zap.String("tool", req.Params.Name), zap.Any("panic", r), zap.Stack("stack"))
+			res, err = &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{
+				Text: "INTERNAL: the tool failed on the server, so nothing was proposed. Try again; if it keeps failing, tell the builder.",
+			}}}, nil
+		}
+	}()
 	name := strings.TrimPrefix(req.Params.Name, toolPrefix)
 	args := string(req.Params.Arguments)
 	if strings.TrimSpace(args) == "" || args == "null" {
@@ -139,20 +150,19 @@ func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallT
 	}
 	var prior []ai.DraftItem
 	if isPropose(name) {
-		var err error
 		if prior, err = s.priorProposals(ctx, p); err != nil {
 			return s.threadError(p, err), nil
 		}
 	}
-	res, added := s.runner.RunTool(ctx, p.TenantID, p.SessionID, prior, name, args)
-	out := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: res}}, IsError: !result(res).OK}
+	answer, added := s.runner.RunTool(ctx, p.TenantID, p.SessionID, prior, name, args)
+	out := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: answer}}, IsError: !result(answer).OK}
 	if len(added) == 0 {
 		return out, nil
 	}
 	draft, err := json.Marshal(added)
 	if err == nil {
 		_, err = s.threads.AppendTurn(ctx, p.TenantID, p.UserID, p.SessionID, "",
-			"[MCP] Agent gọi "+req.Params.Name, "Agent đề xuất qua MCP: "+result(res).Result.Buffered+".", draft)
+			"[MCP] Agent gọi "+req.Params.Name, "Agent đề xuất qua MCP: "+result(answer).Result.Buffered+".", draft)
 	}
 	if err != nil {
 		return s.threadError(p, err), nil

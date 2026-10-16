@@ -329,3 +329,28 @@ func TestCall_ProposalWithoutItsThread(t *testing.T) {
 		})
 	}
 }
+
+// panicRunner panics on its first call, then answers like a read tool.
+type panicRunner struct{ calls int }
+
+func (p *panicRunner) RunTool(context.Context, string, string, []ai.DraftItem, string, string) (string, []ai.DraftItem) {
+	p.calls++
+	if p.calls == 1 {
+		panic("boom")
+	}
+	return `{"ok":true,"result":{"entities":[]}}`, nil
+}
+
+// go-sdk runs every tools/call in its own goroutine with no recover, out of gin's Recovery: a
+// panicking tool must become a tool error, not a dead API.
+func TestCall_APanicIsAToolErrorAndTheServerLives(t *testing.T) {
+	run := &panicRunner{}
+	ts := serve(t, &fakeVerifier{}, run, &fakeThreads{})
+	res := callTool(t, ts, "nexus_list_entities", nil)
+	if !res.IsError || !strings.HasPrefix(text(res), "INTERNAL:") {
+		t.Fatalf("result = %s (error %v); want an INTERNAL tool error", text(res), res.IsError)
+	}
+	if res = callTool(t, ts, "nexus_list_entities", nil); res.IsError || run.calls != 2 {
+		t.Fatalf("the next call: %s (error %v, calls %d); want the server still serving", text(res), res.IsError, run.calls)
+	}
+}
