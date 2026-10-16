@@ -76,7 +76,8 @@ jobs:
       - name: integration tests (real MySQL, real migrations; an all-SKIP run fails)
         env:
           TEST_DATABASE_URL: "root:root@tcp(127.0.0.1:3306)/nexus_platform?charset=utf8mb4&parseTime=true&multiStatements=true&loc=UTC&clientFoundRows=true"
-        run: bash scripts/run-integration.sh ./... -race -timeout 25m -p 2
+        # internal/services alone runs past 25 min under -race on a 4-vCPU hosted runner
+        run: bash scripts/run-integration.sh ./... -race -timeout 50m -p 2
 
   web:
     name: web (build · tsc · vitest · eslint)
