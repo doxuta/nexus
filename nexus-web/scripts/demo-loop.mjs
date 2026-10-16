@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The whole product loop in a real browser (issue #1): the builder asks the assistant for a helpdesk, previews the
-// proposal, applies it to drafts and publishes it; grants the sales rep's role access by hand (until #2); the rep
-// creates a ticket, sees it in the list and is refused an edit; the builder changes the list layout, publishes it and
-// rolls back, and the rep sees the previous layout again.
+// proposal, applies it to drafts and publishes it; gives the sales rep's role the access the assistant spelled out (by
+// hand, until #2); the rep creates a ticket, sees the builder's too, edits their own and is refused the builder's; the
+// builder changes the list layout, publishes it and rolls back, and the rep sees the previous layout again.
 //
 //   node scripts/demo-loop.mjs <out-dir>          (from nexus-web/, against a FRESH one-command demo)
 //
@@ -33,7 +33,9 @@ const PROMPT =
   "Build a simple helpdesk: tickets with a title, a priority (low/medium/high) and a status (open/closed). " +
   "Sales reps can see all tickets and edit their own.";
 const TABLE = "tickets"; // what the recorded proposal builds: a stack that already has it has run the loop before
-const TICKET = "Printer on floor 2 is jammed";
+const TICKET = "Printer on floor 2 is jammed"; // the rep's
+const TICKET_EDITED = `${TICKET} (toner replaced)`;
+const BUILDER_TICKET = "Projector in room 3 flickers"; // the builder's: the rep sees it and may not edit it
 const AI_TIMEOUT = 10 * 60_000; // a live model may take minutes; a replay answers at once
 
 const outDir = process.argv[2];
@@ -141,6 +143,7 @@ async function button(page, text, scope = "body") {
 }
 const waitText = (page, text, scope = "body") =>
   page.waitForFunction((scope, text) => document.querySelector(scope)?.innerText.includes(text), {}, scope, text);
+const waitPath = (page, p) => page.waitForFunction((p) => location.pathname === p, {}, p);
 
 /** Header → Xuất bản → the review lists the drafts → Xuất bản; returns the new version number. */
 async function publishFromHeader(page, route) {
@@ -159,6 +162,39 @@ async function submitPublish(page, want) {
   if (now !== want) throw new Error(`the server's head version is ${now}; want ${want}`);
 }
 
+/** "Tạo mới" on the list, as `page`'s user: every required text gets `title`, every required pick list its first value. */
+async function createTicket(page, title) {
+  await go(page, `/${entity.name}`);
+  await (await button(page, t("page.list.new"), "main")).click();
+  const form = '[role="dialog"]';
+  await page.waitForSelector(`${form} form`);
+  const texts = await page.$$(`${form} input[type="text"][required]:not([role="combobox"])`);
+  if (texts.length === 0) throw new Error("the create form has no required text field for the title");
+  for (const input of texts) await input.type(title);
+  const picks = await page.$$eval(`${form} [role="combobox"][aria-labelledby]`, (cs) =>
+    cs.map((c) => c.id).filter((id, i) => document.getElementById(cs[i].getAttribute("aria-labelledby"))?.textContent.trim().startsWith("*")));
+  for (const id of picks) {
+    await page.click(`[id=${attr(id)}]`);
+    const option = await page.waitForSelector('[role="option"]:not([aria-disabled="true"])', { visible: true });
+    await option.click();
+  }
+  await page.click(`${form} button[type="submit"]`);
+  await page.waitForFunction((name) => new RegExp(`^/${name}/[0-9a-f-]{36}$`).test(location.pathname), {}, entity.name);
+  return new URL(page.url()).pathname.split("/").pop();
+}
+
+/** A request on one record, sent from `page` with its user's own token: "<status>", or "<status> <error code>". */
+const requestAs = (page, method, id, body) =>
+  page.evaluate(async (method, url, body) => {
+    const r = await fetch(url, {
+      method,
+      headers: { Authorization: `Bearer ${localStorage.getItem("nexus_token")}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const code = r.ok ? "" : ((await r.json().catch(() => ({}))).code ?? "");
+    return code ? `${r.status} ${code}` : String(r.status);
+  }, method, `${API}/${entity.name}/${id}`, body ?? null);
+
 /** The column headers the rep's list shows. */
 const listColumns = (page) =>
   page.$$eval("main table thead th", (ths) => ths.map((th) => th.textContent.trim()).filter(Boolean));
@@ -169,7 +205,7 @@ async function repList(page) {
 }
 
 // ── the loop ──
-let builder, rep, entity, repRole, recordId, hidden, publishedV2;
+let builder, rep, entity, repRole, recordId, builderRecordId, titleField, hidden, publishedV2;
 let active; // the page the current step works in: the runner screenshots it
 const assistant = '[data-testid="assistant-dock"]';
 const steps = [
@@ -222,18 +258,18 @@ const steps = [
     for (const b of all) if ((await b.evaluate((x) => x.textContent.trim())).startsWith(applyAll)) bulk = b;
     if (bulk) await bulk.click();
     else await (await button(builder, eligible[0], assistant)).click();
-    const done = [t("studio.assistant.card.state.done"), t("studio.assistant.card.state.warn")];
-    const failed = t("studio.assistant.card.state.error");
+    // Fully applied only: "Áp dụng một phần" (partly applied) fails the step like "Chưa áp dụng được".
+    const done = t("studio.assistant.card.state.done");
     const state = await builder.waitForFunction(
-      (scope, targets, done, failed) => {
+      (scope, targets, done, open, applying) => {
         const arts = document.querySelectorAll(`${scope} article`);
         const labels = targets.map((i) => arts[i]?.getAttribute("aria-label") ?? "");
-        const bad = labels.find((l) => l.startsWith(`${failed}: `));
-        if (bad) return `failed: ${bad} ${arts[targets[labels.indexOf(bad)]].innerText.slice(-200)}`;
-        return labels.every((l) => done.some((d) => l.startsWith(`${d}: `))) ? "done" : false;
+        if (labels.some((l) => l.startsWith(`${open}: `) || l.startsWith(`${applying}: `))) return false;
+        const bad = labels.findIndex((l) => !l.startsWith(`${done}: `));
+        return bad < 0 ? "done" : `not applied: ${labels[bad]} — ${arts[targets[bad]].innerText.slice(-200)}`;
       },
       { timeout: 120_000, polling: 300 },
-      assistant, targets, done, failed,
+      assistant, targets, done, t("studio.assistant.card.state.open"), t("studio.assistant.card.state.applying"),
     );
     const got = await state.jsonValue();
     if (got !== "done") throw new Error(got);
@@ -255,74 +291,88 @@ const steps = [
     return `version ${publishedV2} is live`;
   }],
 
-  // until #2: the AI cannot propose access yet, so the builder grants the rep's role view + create on the new table by hand.
-  ["rep-granted-view-and-create", async () => {
+  // until #2: the assistant cannot propose access yet, so the builder sets what its reply spells out for the rep's role:
+  // see every ticket, edit only the ones they created (owner_id), no delete; and create, so that they have their own.
+  ["rep-granted-what-the-assistant-said", async () => {
     const users = (await api("/admin/users")).data.users;
     const roleId = users.find((u) => u.email === PERSONAS.rep.email)?.roleId;
     repRole = (await api("/admin/roles")).data.roles.find((r) => r.id === roleId);
     if (!repRole) throw new Error(`${PERSONAS.rep.email} has no role`);
     await go(builder, studio(`dung/nguoi-dung-quyen/vai/${repRole.id}`));
-    for (const action of ["view", "create"]) {
-      const cell = (level) => `button[aria-label=${attr(t("page.adminRoles.matrix.cell", { action: t(`page.adminRoles.action.${action}`), entity: entity.label, level: t(`page.adminRoles.level.${level}`) }))}]`;
+    const want = { view: "all", create: "all", edit: "owner" };
+    for (const [action, level] of Object.entries(want)) {
+      const cell = (lv) => `button[aria-label=${attr(t("page.adminRoles.matrix.cell", { action: t(`page.adminRoles.action.${action}`), entity: entity.label, level: t(`page.adminRoles.level.${lv}`) }))}]`;
       await (await builder.waitForSelector(cell("none"))).click();
-      const all = await builder.waitForFunction((label) => [...document.querySelectorAll('[role="menuitemcheckbox"]')].find((i) => i.textContent.trim() === label), {}, t("page.adminRoles.level.all"));
-      await all.asElement().click();
-      await builder.waitForSelector(cell("all"));
+      const item = await builder.waitForFunction((label) => [...document.querySelectorAll('[role="menuitemcheckbox"]')].find((i) => i.textContent.trim() === label), {}, t(`page.adminRoles.level.${level}`));
+      await item.asElement().click();
+      await builder.waitForSelector(cell(level));
     }
     await (await button(builder, t("action.save"), '[data-testid="unsaved-bar"]')).click();
     await (await button(builder, t("direct.confirm"))).click(); // a delivered project: roles apply at once, asked in place
     await builder.waitForFunction(() => !document.querySelector('[data-testid="unsaved-bar"] button'));
     const grants = (await api(`/admin/roles/${repRole.id}`)).data.role.actions.filter((a) => a.entityName === entity.name);
-    const has = (a) => grants.some((g) => g.action === a && g.accessLevel === "all");
-    if (!has("view") || !has("create") || grants.some((g) => ["edit", "delete"].includes(g.action) && g.accessLevel !== "none")) {
-      throw new Error(`role ${repRole.name} on ${entity.name}: ${JSON.stringify(grants)}; want exactly view + create`);
+    const got = Object.fromEntries(["view", "create", "edit", "delete"].map((a) => [a, grants.find((g) => g.action === a)?.accessLevel ?? "none"]));
+    if (JSON.stringify(got) !== JSON.stringify({ ...want, delete: "none" })) {
+      throw new Error(`role ${repRole.name} on ${entity.name}: ${JSON.stringify(got)}; want ${JSON.stringify({ ...want, delete: "none" })}`);
     }
-    return `${repRole.label ?? repRole.name} (${repRole.name}): view + create on ${entity.name}`;
+    return `${repRole.label ?? repRole.name} (${repRole.name}) on ${entity.name}: view all, create, edit own, no delete`;
+  }],
+
+  ["builder-creates-a-ticket", async () => {
+    // The builder's own ticket, filed from the app like anyone's: the rep will see it and must not be able to edit it.
+    builderRecordId = await createTicket(builder, BUILDER_TICKET);
+    return `created ${entity.name}/${builderRecordId} as ${PERSONAS.builder.email}`;
   }],
 
   ["rep-creates-a-ticket", async () => {
     active = rep = await signIn(PERSONAS.rep);
-    await go(rep, `/${entity.name}`);
-    await (await button(rep, t("page.list.new"), "main")).click();
-    const form = '[role="dialog"]';
-    await rep.waitForSelector(`${form} form`);
-    // Whatever fields the model chose: every required text gets the title, every required pick list its first value.
-    const texts = await rep.$$(`${form} input[type="text"][required]:not([role="combobox"])`);
-    if (texts.length === 0) throw new Error("the create form has no required text field for the title");
-    for (const input of texts) await input.type(TICKET);
-    const picks = await rep.$$eval(`${form} [role="combobox"][aria-labelledby]`, (cs) =>
-      cs.map((c) => c.id).filter((id, i) => document.getElementById(cs[i].getAttribute("aria-labelledby"))?.textContent.trim().startsWith("*")));
-    for (const id of picks) {
-      await rep.click(`[id=${attr(id)}]`);
-      const option = await rep.waitForSelector('[role="option"]:not([aria-disabled="true"])', { visible: true });
-      await option.click();
-    }
-    await rep.click(`${form} button[type="submit"]`);
-    await rep.waitForFunction((name) => new RegExp(`^/${name}/[0-9a-f-]{36}$`).test(location.pathname), {}, entity.name);
-    recordId = rep.url().split("/").pop();
+    recordId = await createTicket(rep, TICKET);
     return `created ${entity.name}/${recordId} as ${PERSONAS.rep.email}`;
   }],
 
-  ["rep-sees-it-in-the-list", async () => {
+  ["rep-sees-both-tickets", async () => {
     await go(rep, `/${entity.name}`);
-    await waitText(rep, TICKET, "main table tbody");
-    return `"${TICKET}" is listed`;
+    for (const title of [TICKET, BUILDER_TICKET]) await waitText(rep, title, "main table tbody");
+    return `"${TICKET}" (theirs) and "${BUILDER_TICKET}" (the builder's) are listed`;
   }],
 
-  ["rep-refused-an-edit", async () => {
-    // The role has no edit grant: the edit form says so, and the server answers 403 to the same edit sent anyway.
-    await go(rep, `/${entity.name}/${recordId}/edit`);
-    await waitText(rep, t("page.entity.guard.noEdit"), "main");
-    const status = await rep.evaluate(async (url) => {
-      const r = await fetch(url, {
-        method: "PUT",
-        headers: { Authorization: `Bearer ${localStorage.getItem("nexus_token")}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ title: "edited by the rep" }),
-      });
-      return r.status;
-    }, `${API}/${entity.name}/${recordId}`);
-    if (status !== 403) throw new Error(`PUT ${entity.name}/${recordId} as the rep answered ${status}; want 403`);
-    return `"${t("page.entity.guard.noEdit")}" and PUT → ${status}`;
+  ["rep-edits-their-own-ticket", async () => {
+    await go(rep, `/${entity.name}/${recordId}`);
+    await (await button(rep, t("page.record.action.edit"), "main")).click();
+    await waitPath(rep, `/${entity.name}/${recordId}/edit`);
+    const input = await rep.waitForFunction((title) => [...document.querySelectorAll('main input[type="text"]')].find((i) => i.value === title), {}, TICKET);
+    await input.asElement().evaluate((el) => el.select());
+    await input.asElement().type(TICKET_EDITED);
+    await rep.click('main button[type="submit"]');
+    await waitPath(rep, `/${entity.name}/${recordId}`);
+    await waitText(rep, TICKET_EDITED, "main");
+    // The save sticks: the server holds the new title, in the field the form showed it in.
+    const saved = (await api(`/${entity.name}/${recordId}`)).data;
+    titleField = Object.keys(saved.data ?? saved).find((k) => (saved.data ?? saved)[k] === TICKET_EDITED);
+    if (!titleField) throw new Error(`the server's record has no field holding "${TICKET_EDITED}": ${JSON.stringify(saved).slice(0, 300)}`);
+    return `"${TICKET}" → "${TICKET_EDITED}", saved in ${titleField}`;
+  }],
+
+  ["rep-refused-on-the-builders-ticket", async () => {
+    // Row level: the rep sees the builder's ticket, but its edit form says it belongs to someone else, and the server
+    // refuses the very PUT it accepts on the rep's own ticket. Outside the edit scope the server answers 404, as for a
+    // ticket that is not there (by design: LayoutDetail's outOfEditScope), so the GET beside it shows that the ticket
+    // is there and readable. And no delete at all, not even of their own ticket.
+    await go(rep, `/${entity.name}/${builderRecordId}/edit`);
+    await waitText(rep, t("page.record.editScope.readOnly"), "main");
+    const body = { [titleField]: TICKET_EDITED };
+    const got = {
+      "PUT own": await requestAs(rep, "PUT", recordId, body),
+      "GET the builder's": await requestAs(rep, "GET", builderRecordId),
+      "PUT the builder's": await requestAs(rep, "PUT", builderRecordId, body),
+      "DELETE own": await requestAs(rep, "DELETE", recordId),
+    };
+    const want = { "PUT own": "200", "GET the builder's": "200", "PUT the builder's": "404 RECORD_NOT_FOUND", "DELETE own": "403 FORBIDDEN" };
+    const said = Object.entries(got).map(([k, v]) => `${k} → ${v}`).join(", ");
+    if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`as the rep: ${said}; want ${JSON.stringify(want)}`);
+    const kept = (await api(`/${entity.name}/${builderRecordId}`)).data;
+    if (JSON.stringify(kept).includes(TICKET_EDITED)) throw new Error("the builder's ticket was changed by the rep");
+    return `"${t("page.record.editScope.readOnly")}"; ${said}`;
   }],
 
   ["builder-changes-the-list-layout", async () => {
