@@ -185,6 +185,10 @@ func TestReplay_AnswersInOrderWithoutNetwork(t *testing.T) {
 		if want := fmt.Sprintf("a%d", i+1); err != nil || replyOf(resp) != want {
 			t.Fatalf("call %d = %q, %v; want %q", i+1, replyOf(resp), err, want)
 		}
+		// No model ran, so nothing is spent: recorded usage would eat the tenant's daily budget.
+		if resp.Usage != (Usage{}) {
+			t.Fatalf("call %d usage = %+v; want zero on a replayed call", i+1, resp.Usage)
+		}
 	}
 }
 
@@ -381,9 +385,18 @@ func TestReplay_DrivesTheBuilderWithoutBaseURLOrKey(t *testing.T) {
 	}
 	freshDB := twoTenantReader()
 	freshDB.entities["tenant-A"][0].Label = "Bệnh nhân (fresh database)"
-	got, err := NewAIBuilderAgent(cfg, replay, freshDB, nil, nil, nil).Chat(ctx, Scope{UserID: "u1"}, "tenant-A", "", msgs)
+	ledger := &fakeRecorder{}
+	got, err := NewAIBuilderAgent(cfg, replay, freshDB, nil, ledger, nil).Chat(ctx, Scope{UserID: "u1"}, "tenant-A", "", msgs)
 	if err != nil {
 		t.Fatalf("replayed Chat: %v", err)
+	}
+	// The ledger row is what the daily token budget sums: a rehearsal must add nothing to it, while
+	// the cassette keeps what the recorded turn really cost.
+	if len(ledger.runs) != 1 || ledger.runs[0].PromptTokens != 0 || ledger.runs[0].OutputTokens != 0 || got.Usage != (Usage{}) {
+		t.Fatalf("replayed turn spent %+v (ledger %+v); want zero tokens", got.Usage, ledger.runs)
+	}
+	if lines := readCassette(t, path); lines[0].Response.Usage.PromptTokens != 10 {
+		t.Fatalf("cassette usage = %+v; want the recorded 10 prompt tokens kept", lines[0].Response.Usage)
 	}
 	if got.Outcome != outcomeOK || got.Reply != recorded.Reply || len(got.Draft) != 1 || got.Draft[0].Entity == nil || got.Draft[0].Entity.Name != "appointments" {
 		t.Fatalf("replayed turn = %q %q %+v; want the recorded reply and the appointments draft", got.Outcome, got.Reply, got.Draft)

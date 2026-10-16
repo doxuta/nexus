@@ -128,7 +128,11 @@ func (r *replayer) Complete(_ context.Context, req ChatRequest) (ChatResponse, e
 		return ChatResponse{}, r.stale("call %d %s", r.next+1, why)
 	}
 	r.next++
-	return e.Response, nil
+	// No model ran, so the call costs nothing: the recorded usage would go into sys_ai_runs and eat
+	// the tenant's daily token budget on every rehearsal. The cassette keeps the real figures.
+	resp := e.Response
+	resp.Usage = Usage{}
+	return resp, nil
 }
 
 // stale is the error for a cassette that no longer matches the calls, with the way to re-record it.
