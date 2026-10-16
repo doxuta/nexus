@@ -137,8 +137,12 @@ describe("applyProposal — errors", () => {
 describe("applyProposal — access", () => {
   const g = (entityName: string, action: "view" | "create" | "edit" | "delete", accessLevel: "all" | "owner" = "all") => ({ entityName, action, accessLevel });
   const CRM = [g("crm_accounts", "view"), g("crm_accounts", "edit", "owner"), g("crm_accounts", "delete", "owner")];
-  const ACCESS = item({ kind: "access", access: { role: "crm_sales_rep", roleLabel: "Nhân viên kinh doanh",
-    grants: [g("tickets", "view"), g("tickets", "create"), g("tickets", "edit", "owner")], labels: { tickets: "Phiếu hỗ trợ" } } });
+  const ADD = [g("tickets", "view"), g("tickets", "create"), g("tickets", "edit", "owner")];
+  // The card's before-image is what the server read when it proposed: the role's grants on the card's tables (+ "*" rows).
+  const card = (before: ReturnType<typeof g>[]) => item({ kind: "access", access: { role: "crm_sales_rep", roleLabel: "Nhân viên kinh doanh", grants: ADD, labels: { tickets: "Phiếu hỗ trợ" } },
+    change: { docType: "role", docKey: "r1", op: "update", label: "Vai", target: { name: "crm_sales_rep", entity: "tickets" },
+      before: { grants: before, labels: { tickets: "Phiếu hỗ trợ" } }, after: { grants: ADD, labels: { tickets: "Phiếu hỗ trợ" } } } });
+  const ACCESS = card([]);
   beforeEach(() => {
     vi.mocked(api.listRoles).mockResolvedValue([{ id: "r1", name: "crm_sales_rep", label: "Nhân viên kinh doanh" }]);
     vi.mocked(api.listEntities).mockResolvedValue([{ name: "crm_accounts" }, { name: "tickets" }] as never);
@@ -167,8 +171,31 @@ describe("applyProposal — access", () => {
   });
 
   it("nothing to add: done, says so, no write", async () => {
-    vi.mocked(api.getRole).mockResolvedValue({ id: "r1", name: "crm_sales_rep", tenantId: "t", actions: [g("*", "view"), g("*", "create"), g("*", "edit")] });
-    expect(await applyProposal(ACCESS, DEPS)).toMatchObject({ status: "done", message: expect.stringMatching(/đã có đủ/) });
+    const all = [g("*", "view"), g("*", "create"), g("*", "edit")];
+    vi.mocked(api.getRole).mockResolvedValue({ id: "r1", name: "crm_sales_rep", tenantId: "t", actions: all });
+    expect(await applyProposal(card(all), DEPS)).toMatchObject({ status: "done", message: expect.stringMatching(/đã có đủ/) });
+    expect(api.updateRolePermissions).not.toHaveBeenCalled();
+  });
+
+  // Verifier round 1, LOW: read-merge-PUT has no concurrency token, so a change made since the proposal would be lost
+  // and its Trước/Sau would lie. The role's grants on the card's tables are compared with the card's before-image first.
+  it("the role changed on the card's tables since the proposal: refused, nothing written", async () => {
+    vi.mocked(api.getRole).mockResolvedValue({ id: "r1", name: "crm_sales_rep", tenantId: "t", actions: [...CRM, g("tickets", "view", "owner")] });
+    const out = await applyProposal(ACCESS, DEPS);
+    expect(out).toMatchObject({ status: "error", message: expect.stringMatching(/đã đổi/) });
+    expect(api.updateRolePermissions).not.toHaveBeenCalled();
+  });
+
+  it("a change on the role's OTHER tables is not the card's business: written, kept", async () => {
+    const moved = [g("crm_accounts", "view"), g("crm_leads", "view")];
+    vi.mocked(api.getRole).mockResolvedValue({ id: "r1", name: "crm_sales_rep", tenantId: "t", actions: moved });
+    expect(await applyProposal(ACCESS, DEPS)).toMatchObject({ status: "done" });
+    expect(vi.mocked(api.updateRolePermissions).mock.calls[0][1].actions).toEqual([...moved, ...ADD]);
+  });
+
+  it("no before-image to compare with: refused (fail closed)", async () => {
+    const bare = item({ kind: "access", access: { role: "crm_sales_rep", grants: ADD, labels: { tickets: "Phiếu hỗ trợ" } } });
+    expect((await applyProposal(bare, DEPS)).status).toBe("error");
     expect(api.updateRolePermissions).not.toHaveBeenCalled();
   });
 

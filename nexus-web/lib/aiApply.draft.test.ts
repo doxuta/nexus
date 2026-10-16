@@ -65,7 +65,8 @@ describe("cardMode — label, confirm, apply-all, footer per class", () => {
     const access = item({ kind: "access", access: { role: "crm_sales_rep", grants: [{ entityName: "tickets", action: "view", accessLevel: "all" }] },
       change: { docType: "role", docKey: "r1", op: "update", label: "Vai", target: { name: "crm_sales_rep", entity: "tickets" } } });
     expect(cardMode(access, delivered())).toMatchObject({ label: "studio.assistant.draft.applyNow", confirm: true, inApplyAll: false, foot: "page.studio.ai.foot.live", canUndo: false });
-    expect(cardMode(access, { kind: "undelivered" })).toMatchObject({ label: "studio.assistant.card.apply", confirm: false, inApplyAll: true });
+    // Access applies at once to real users whether or not the project was ever published (verifier round 1, MEDIUM).
+    expect(cardMode(access, { kind: "undelivered" })).toMatchObject({ label: "studio.assistant.draft.applyNow", confirm: true, inApplyAll: false, canUndo: false });
   });
   it("untraced class adds 'không quay lại được'", () => {
     expect(cardMode(APPROVAL, delivered())).toMatchObject({ label: "studio.assistant.draft.applyNow", confirm: true, inApplyAll: false, foot: "studio.assistant.draft.footer.untraced", canUndo: false });

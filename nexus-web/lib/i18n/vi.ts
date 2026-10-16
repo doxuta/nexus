@@ -4674,6 +4674,7 @@ const vi = {
   "studio.assistant.apply.accessRoleMissing": "Không tìm thấy vai \"{role}\" nữa — hỏi lại trợ lý để đề xuất cho vai đang có.",
   "studio.assistant.apply.accessTableMissing": "Chưa có bảng {list}: áp dụng thẻ tạo bảng trước, rồi mới cấp quyền.",
   "studio.assistant.apply.accessNothing": "Vai này đã có đủ các quyền đó — không có gì thay đổi.",
+  "studio.assistant.apply.accessStale": "Quyền của vai trên bảng này đã đổi từ lúc đề xuất — xem lại đề xuất (hỏi lại trợ lý) rồi mới áp.",
   "studio.assistant.apply.incomplete": "Đề xuất thiếu thông tin để áp dụng.",
   "studio.assistant.apply.appExists": "App với tên này đã tồn tại — đổi tên trong khung chat rồi đề xuất lại.",
   "studio.assistant.apply.appNavFailed": "App đã tạo nhưng chưa gắn được điều hướng — mở Màn hình › App và menu để gắn thủ công.",
@@ -4836,6 +4837,8 @@ const vi = {
   "studio.assistant.access.scope.field": "{verb} của mình và được giao",
   "studio.assistant.access.none": "không có quyền",
   "studio.assistant.access.side": "{table}: {actions}",
+  "studio.assistant.access.confirm": "Quyền này áp ngay cho người dùng thật: {desc}.",
+  "studio.assistant.access.confirmHidden": "Quyền này áp ngay cho người dùng thật: {desc}. Bảng vẫn ẩn với khách cho tới khi anh Xuất bản.",
   "studio.assistant.done.access": "Đã cấp quyền cho vai.",
   "studio.assistant.done.accessLink": "Mở Người dùng & quyền",
   // ── specs/073 kh1a: route labels (also the page title and the screen-reader name of each page) ──

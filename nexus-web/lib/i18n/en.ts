@@ -196,6 +196,7 @@ const en = {
   "studio.assistant.apply.accessRoleMissing": "The role \"{role}\" is gone — ask the assistant again for a role that exists.",
   "studio.assistant.apply.accessTableMissing": "There is no table {list} yet: apply the table card first, then the access.",
   "studio.assistant.apply.accessNothing": "The role already had all of this — nothing changed.",
+  "studio.assistant.apply.accessStale": "The role's access to this table changed since the proposal — review it again (ask the assistant) before applying.",
   "studio.assistant.where.access": "Users & access",
   "studio.assistant.view.access.line": "{role} can {actions} {table}",
   "studio.assistant.access.verb.view": "view",
@@ -208,6 +209,8 @@ const en = {
   "studio.assistant.access.scope.field": "{verb} their own and assigned",
   "studio.assistant.access.none": "no access",
   "studio.assistant.access.side": "{table}: {actions}",
+  "studio.assistant.access.confirm": "This access applies at once to real users: {desc}.",
+  "studio.assistant.access.confirmHidden": "This access applies at once to real users: {desc}. The table stays hidden from customers until you publish.",
   "studio.assistant.done.access": "Access granted to the role.",
   "studio.assistant.done.accessLink": "Open Users & access",
 } as const;
