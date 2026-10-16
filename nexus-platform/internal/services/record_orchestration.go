@@ -15,6 +15,7 @@ import (
 	"nexus/platform/internal/ddl"
 	"nexus/platform/internal/dynrepo"
 	"nexus/platform/internal/metadata"
+	"nexus/platform/internal/metaversion"
 	"nexus/platform/internal/workflow"
 )
 
@@ -146,6 +147,9 @@ func (s *RecordService) WithInbox(w recordInboxWriter, logger *zap.Logger) *Reco
 type RecordService struct {
 	catalog EntityCatalog
 	store   RecordStore
+	// cutoff hides a table born after the last publish from the customer's reads and writes (S7-8, on
+	// the data path as in GET /metadata/entities). Optional: nil leaves every live table reachable.
+	cutoff  schemaCutoffer
 	fetcher LabelFetcher // optional; nil → ?expand is a no-op
 	// lookupFetcher backs ENG-COMPUTED #2 (read-time lookup fields). Optional: nil → any
 	// `lookup` field on the entity resolves to null (no fetch attempted) instead of an error,
@@ -461,6 +465,13 @@ func (s *RecordService) WithSequenceClaimer(c SequenceClaimer) *RecordService {
 	return s
 }
 
+// WithSchemaCutoff wires the S7-8 hiding of tables born after the last publish — the DraftGate, the
+// same decider GET /metadata/entities asks. Chainable.
+func (s *RecordService) WithSchemaCutoff(c schemaCutoffer) *RecordService {
+	s.cutoff = c
+	return s
+}
+
 // WithBulkInserter injects the ENG-BATCH #1 atomic multi-row insert primitive CreateBulk's
 // mode=atomic Phase 2 needs. Chainable; a nil inserter is ignored (keeps the nil default, which
 // fails closed with BULK_ATOMIC_UNAVAILABLE the moment an atomic bulk-create actually reaches
@@ -487,6 +498,11 @@ func (s *RecordService) resolve(ctx context.Context, tenantID, entityName string
 		}
 		return nil, nil, fmt.Errorf("services.resolve: %w", err)
 	}
+	if hidden, err := s.bornAfterPublish(ctx, tenantID, e); err != nil {
+		return nil, nil, fmt.Errorf("services.resolve: %w", err)
+	} else if hidden {
+		return nil, nil, ErrEntityNotFound
+	}
 	fields, err := s.catalog.ListFields(ctx, tenantID, e.ID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("services.resolve: %w", err)
@@ -496,6 +512,23 @@ func (s *RecordService) resolve(ctx context.Context, tenantID, entityName string
 		return nil, nil, err
 	}
 	return e, specs, nil
+}
+
+// bornAfterPublish reports whether e does not exist yet for the caller: a table created after the last
+// publish (S7-8), judged by the decision the metadata reads take (DraftGate.SchemaCutoff: the builder's
+// draft overlay and a workspace never delivered see everything) and the same comparison
+// (HideEntitiesNewerThan). Exempt: the builder, who fills a new table before publishing it, and a call
+// no request made (automations, imports). An unreadable cutoff is an error (fail closed).
+func (s *RecordService) bornAfterPublish(ctx context.Context, tenantID string, e *metadata.EntityDefinition) (bool, error) {
+	caller, ok := metaversion.CallerFrom(ctx)
+	if s.cutoff == nil || !ok || caller.IsBuilder {
+		return false, nil
+	}
+	at, apply, err := s.cutoff.SchemaCutoff(ctx, tenantID)
+	if err != nil || !apply {
+		return false, err
+	}
+	return len(HideEntitiesNewerThan([]metadata.EntityDefinition{*e}, at)) == 0, nil
 }
 
 // uniqueFieldSpecs projects the entity's field specs to the pivot's unique-field list threaded into

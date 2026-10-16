@@ -584,7 +584,10 @@ func main() {
 		WithBeforeHooks(workflowCache, beforeRunSink).
 		// specs/054: on create, a required field the edit form hides by a visibleWhen condition
 		// is not demanded. Read only when a required field is actually missing.
-		WithLayoutReader(layoutRepo)
+		WithLayoutReader(layoutRepo).
+		// S7-8 on the data path (issue #2): a table born after the last publish is absent for the
+		// customer's reads and writes too, not only from the metadata reads (same DraftGate decision).
+		WithSchemaCutoff(draftGate)
 	// specs/083: stored roll-up totals follow automation writes, and a new/"Tính lại" stored roll-up
 	// is backfilled over the rows that already exist. Both closures need recordSvc, built after them.
 	workflowMutator.WithAfterWrite(recordSvc.RefreshStoredRollups)
