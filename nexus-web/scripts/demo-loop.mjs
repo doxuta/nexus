@@ -1,0 +1,389 @@
+#!/usr/bin/env node
+// The whole product loop in a real browser (issue #1): the builder asks the assistant for a helpdesk, previews the
+// proposal, applies it to drafts and publishes it; grants the sales rep's role access by hand (until #2); the rep
+// creates a ticket, sees it in the list and is refused an edit; the builder changes the list layout, publishes it and
+// rolls back, and the rep sees the previous layout again.
+//
+//   node scripts/demo-loop.mjs <out-dir>          (from nexus-web/, against a FRESH one-command demo)
+//
+// One screenshot per step into <out-dir>; the first failing step prints its name and the script exits 1.
+// NEXUS_URL (default http://localhost:8080) · CHROME_PATH (default: the macOS system Chrome).
+//
+// Without a model or key the assistant answers from the committed cassette:
+//   AI_ENABLED=true AI_GATEWAY_MODE=replay AI_GATEWAY_CASSETTE=/cassettes/demo-loop.jsonl docker compose up --build
+// Re-record it on a fresh stack with AI_GATEWAY_MODE=record plus a live AI_GATEWAY_BASE_URL / AI_GATEWAY_API_KEY: replay
+// checks every call against the recording (tools offered, the prompt, the shape of the conversation), so a changed
+// prompt or tool list fails as a stale cassette instead of answering with another turn's reply.
+import fs from "node:fs";
+import path from "node:path";
+import puppeteer from "puppeteer-core";
+
+const BASE = (process.env.NEXUS_URL ?? "http://localhost:8080").replace(/\/$/, "");
+const API = `${BASE}/api/v1`;
+const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const TENANT = "northwind";
+const PERSONAS = {
+  builder: { email: "admin@example.com", password: "Demo-Admin-2026!" },
+  // A non-admin: is_admin bypasses every ACL, so only the rep proves the access rules.
+  rep: { email: "test@example.com", password: "Demo-Rep-2026!" },
+};
+// Fixed: the cassette is keyed on it.
+const PROMPT =
+  "Build a simple helpdesk: tickets with a title, a priority (low/medium/high) and a status (open/closed). " +
+  "Sales reps can see all tickets and edit their own.";
+const TICKET = "Printer on floor 2 is jammed";
+const AI_TIMEOUT = 10 * 60_000; // a live model may take minutes; a replay answers at once
+
+const outDir = process.argv[2];
+if (!outDir) {
+  console.error("usage: node scripts/demo-loop.mjs <out-dir>");
+  process.exit(2);
+}
+
+// Labels come from the UI's own catalog by key (the UI renders t(key) in its default locale, Vietnamese), so a reworded
+// label cannot silently break a selector.
+const VI = Object.fromEntries(
+  [...fs.readFileSync(new URL("../lib/i18n/vi.ts", import.meta.url), "utf8").matchAll(/^\s*"([\w.]+)":\s*("(?:[^"\\]|\\.)*"),?\s*$/gm)]
+    .map(([, k, v]) => [k, JSON.parse(v)]),
+);
+function t(key, vars = {}) {
+  if (!(key in VI)) throw new Error(`lib/i18n/vi.ts has no key ${key}`);
+  return VI[key].replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
+}
+const attr = (v) => JSON.stringify(v); // a CSS attribute value
+
+// ── API reads (to learn ids and names, and to check what the screen claims); every action goes through the browser ──
+async function login({ email, password }) {
+  const r = await fetch(`${API}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tenant: TENANT, email, password }),
+  });
+  const j = await r.json();
+  if (!j.data?.accessToken) throw new Error(`login ${email}: ${JSON.stringify(j)}`);
+  return j.data;
+}
+let adminToken;
+async function api(p, init = {}) {
+  const r = await fetch(`${API}${p}`, { ...init, headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json", ...init.headers } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`${init.method ?? "GET"} ${p}: ${r.status} ${JSON.stringify(j).slice(0, 300)}`);
+  return j;
+}
+const headVersion = async () => (await api("/admin/publish/state")).data.headVersion?.versionNo ?? 0;
+const drafts = async () => (await api("/admin/publish/changes")).data ?? [];
+
+// ── browser ──
+const browser = await puppeteer.launch({
+  executablePath: CHROME,
+  headless: true,
+  defaultViewport: { width: 1440, height: 900 },
+  args: process.env.CI ? ["--no-sandbox"] : [], // CI runners only: the sandbox needs user namespaces they may not grant
+});
+const errors = new Map(); // page → its page errors, printed when a step fails
+
+// Signs in through the real API and seeds the session the way lib/api.ts login() stores it (remember-me →
+// localStorage), in a browser context of its own, so the builder and the rep never share storage (same as ui-shots.mjs).
+async function signIn(persona) {
+  const s = await login(persona);
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  page.setDefaultTimeout(30_000);
+  errors.set(page, []);
+  page.on("pageerror", (err) => errors.get(page).push(String(err.message ?? err)));
+  await page.evaluateOnNewDocument((s, tenant) => {
+    localStorage.setItem("nexus_remember", "1");
+    localStorage.setItem("nexus_token", s.accessToken);
+    if (s.refreshToken) localStorage.setItem("nexus_refresh", s.refreshToken);
+    if (s.user) localStorage.setItem("nexus_user", JSON.stringify(s.user));
+    localStorage.setItem("nexus_tenant", tenant);
+  }, s, TENANT);
+  return page;
+}
+
+const go = (page, p) => page.goto(`${BASE}${p}`, { waitUntil: "networkidle2", timeout: 60_000 });
+const studio = (p) => `/studio/du-an/${TENANT}/${p}`;
+
+/** The first enabled button under `scope` whose text is exactly `text` (waits for it). */
+async function button(page, text, scope = "body") {
+  const h = await page.waitForFunction(
+    (scope, text) => [...document.querySelectorAll(`${scope} button`)].find((b) => b.textContent.trim() === text && !b.disabled && b.getAttribute("aria-disabled") !== "true"),
+    {},
+    scope,
+    text,
+  );
+  return h.asElement();
+}
+const waitText = (page, text, scope = "body") =>
+  page.waitForFunction((scope, text) => document.querySelector(scope)?.innerText.includes(text), {}, scope, text);
+
+/** Header → Xuất bản → the review lists the drafts → Xuất bản; returns the new version number. */
+async function publishFromHeader(page, route) {
+  const before = await headVersion();
+  if ((await drafts()).length === 0) throw new Error("nothing to publish: no drafts");
+  await go(page, route); // the header reads the publish state on load
+  await (await button(page, t("studio.publish.open"), '[data-testid="project-header"]')).click();
+  await page.waitForSelector('[data-testid="publish-submit"]:not([disabled])');
+  await waitText(page, t("studio.publish.count", { n: (await drafts()).length }), '[role="dialog"]');
+  return before + 1;
+}
+async function submitPublish(page, want) {
+  await page.click('[data-testid="publish-submit"]');
+  await waitText(page, t("studio.publish.status.live", { n: want }), '[data-testid="project-header"]');
+  const now = await headVersion();
+  if (now !== want) throw new Error(`the server's head version is ${now}; want ${want}`);
+}
+
+/** The column headers the rep's list shows. */
+const listColumns = (page) =>
+  page.$$eval("main table thead th", (ths) => ths.map((th) => th.textContent.trim()).filter(Boolean));
+async function repList(page) {
+  await go(page, `/${entity.name}`);
+  await page.waitForSelector("main table thead th");
+  return listColumns(page);
+}
+
+// ── the loop ──
+let builder, rep, entity, repRole, recordId, hidden, publishedV2;
+let active; // the page the current step works in: the runner screenshots it
+const assistant = '[data-testid="assistant-dock"]';
+const steps = [
+  ["builder-asks-the-assistant", async () => {
+    active = builder = await signIn(PERSONAS.builder);
+    await go(builder, studio("dung/du-lieu"));
+    const toggle = await builder.waitForSelector('[data-testid="assistant-toggle"]');
+    if ((await toggle.evaluate((b) => b.getAttribute("aria-pressed"))) !== "true") await toggle.click();
+    const box = await builder.waitForSelector(`${assistant} textarea:not([disabled])`, { visible: true });
+    await box.type(PROMPT);
+    await builder.keyboard.press("Enter");
+    // Done when a proposal card is open; a reply without one, or an error in its place, fails the step.
+    const outcome = await builder.waitForFunction(
+      (scope, open, cancel) => {
+        const dock = document.querySelector(scope);
+        if (dock.querySelector(`article[aria-label^="${open}: "]`)) return "cards";
+        const log = dock.querySelector('[role="log"]');
+        const sending = [...dock.querySelectorAll("button")].some((b) => b.textContent.trim() === cancel);
+        return !sending && log && log.children.length >= 2 ? `no proposal: ${log.innerText.slice(-400)}` : false;
+      },
+      { timeout: AI_TIMEOUT, polling: 500 },
+      assistant, t("studio.assistant.card.state.open"), t("studio.assistant.cancel"),
+    );
+    const got = await outcome.jsonValue();
+    if (got !== "cards") throw new Error(got);
+    const n = await builder.$$eval(`${assistant} article`, (a) => a.length);
+    return `${n} proposal card(s)`;
+  }],
+
+  ["proposal-previewed", async () => {
+    await (await button(builder, t("studio.assistant.preview.show"), assistant)).click();
+    // The ghost is drawn on the page itself, not in the assistant.
+    await builder.waitForFunction(
+      (scope) => [...document.querySelectorAll(".nx-proposed")].some((e) => !e.closest(scope)),
+      {},
+      assistant,
+    );
+    return "the proposed table is drawn as a ghost row on the page";
+  }],
+
+  ["proposal-applied-to-drafts", async () => {
+    const applyAll = t("studio.assistant.card.applyAll").split("{n}")[0];
+    const eligible = [t("studio.assistant.card.apply"), t("studio.assistant.draft.applyDraft")];
+    // Cards "Áp dụng tất cả" can fire, by index (a card that must be confirmed one by one is left as it is).
+    const targets = await builder.$$eval(`${assistant} article`, (arts, eligible) =>
+      arts.map((a, i) => ([...a.querySelectorAll("button")].some((b) => eligible.includes(b.textContent.trim())) ? i : -1)).filter((i) => i >= 0), eligible);
+    if (targets.length === 0) throw new Error("no proposal card can be applied");
+    const all = await builder.$$(`${assistant} button`);
+    let bulk = null;
+    for (const b of all) if ((await b.evaluate((x) => x.textContent.trim())).startsWith(applyAll)) bulk = b;
+    if (bulk) await bulk.click();
+    else await (await button(builder, eligible[0], assistant)).click();
+    const done = [t("studio.assistant.card.state.done"), t("studio.assistant.card.state.warn")];
+    const failed = t("studio.assistant.card.state.error");
+    const state = await builder.waitForFunction(
+      (scope, targets, done, failed) => {
+        const arts = document.querySelectorAll(`${scope} article`);
+        const labels = targets.map((i) => arts[i]?.getAttribute("aria-label") ?? "");
+        const bad = labels.find((l) => l.startsWith(`${failed}: `));
+        if (bad) return `failed: ${bad} ${arts[targets[labels.indexOf(bad)]].innerText.slice(-200)}`;
+        return labels.every((l) => done.some((d) => l.startsWith(`${d}: `))) ? "done" : false;
+      },
+      { timeout: 120_000, polling: 300 },
+      assistant, targets, done, failed,
+    );
+    const got = await state.jsonValue();
+    if (got !== "done") throw new Error(got);
+    // What landed: a new table, born hidden from the customer until Publish, among the drafts.
+    const pending = await drafts();
+    const created = pending.find((c) => c.docType === "entity" && c.op === "create");
+    if (!created?.entityName) throw new Error(`no new table among the drafts: ${JSON.stringify(pending.map((c) => `${c.op} ${c.docType} ${c.label}`))}`);
+    entity = { name: created.entityName, label: created.label };
+    return `${targets.length} applied; drafts: ${pending.map((c) => `${c.op} ${c.docType} "${c.label}"`).join(", ")}`;
+  }],
+
+  ["publish-review", async () => {
+    publishedV2 = await publishFromHeader(builder, studio("dung/du-lieu"));
+    return `${(await drafts()).length} change(s) listed`;
+  }],
+
+  ["published", async () => {
+    await submitPublish(builder, publishedV2);
+    return `version ${publishedV2} is live`;
+  }],
+
+  // until #2: the AI cannot propose access yet, so the builder grants the rep's role view + create on the new table by hand.
+  ["rep-granted-view-and-create", async () => {
+    const users = (await api("/admin/users")).data.users;
+    const roleId = users.find((u) => u.email === PERSONAS.rep.email)?.roleId;
+    repRole = (await api("/admin/roles")).data.roles.find((r) => r.id === roleId);
+    if (!repRole) throw new Error(`${PERSONAS.rep.email} has no role`);
+    await go(builder, studio(`dung/nguoi-dung-quyen/vai/${repRole.id}`));
+    for (const action of ["view", "create"]) {
+      const cell = (level) => `button[aria-label=${attr(t("page.adminRoles.matrix.cell", { action: t(`page.adminRoles.action.${action}`), entity: entity.label, level: t(`page.adminRoles.level.${level}`) }))}]`;
+      await (await builder.waitForSelector(cell("none"))).click();
+      const all = await builder.waitForFunction((label) => [...document.querySelectorAll('[role="menuitemcheckbox"]')].find((i) => i.textContent.trim() === label), {}, t("page.adminRoles.level.all"));
+      await all.asElement().click();
+      await builder.waitForSelector(cell("all"));
+    }
+    await (await button(builder, t("action.save"), '[data-testid="unsaved-bar"]')).click();
+    await (await button(builder, t("direct.confirm"))).click(); // a delivered project: roles apply at once, asked in place
+    await builder.waitForFunction(() => !document.querySelector('[data-testid="unsaved-bar"] button'));
+    const grants = (await api(`/admin/roles/${repRole.id}`)).data.role.actions.filter((a) => a.entityName === entity.name);
+    const has = (a) => grants.some((g) => g.action === a && g.accessLevel === "all");
+    if (!has("view") || !has("create") || grants.some((g) => ["edit", "delete"].includes(g.action) && g.accessLevel !== "none")) {
+      throw new Error(`role ${repRole.name} on ${entity.name}: ${JSON.stringify(grants)}; want exactly view + create`);
+    }
+    return `${repRole.label ?? repRole.name} (${repRole.name}): view + create on ${entity.name}`;
+  }],
+
+  ["rep-creates-a-ticket", async () => {
+    active = rep = await signIn(PERSONAS.rep);
+    await go(rep, `/${entity.name}`);
+    await (await button(rep, t("page.list.new"), "main")).click();
+    const form = '[role="dialog"]';
+    await rep.waitForSelector(`${form} form`);
+    // Whatever fields the model chose: every required text gets the title, every required pick list its first value.
+    const texts = await rep.$$(`${form} input[type="text"][required]:not([role="combobox"])`);
+    if (texts.length === 0) throw new Error("the create form has no required text field for the title");
+    for (const input of texts) await input.type(TICKET);
+    const picks = await rep.$$eval(`${form} [role="combobox"][aria-labelledby]`, (cs) =>
+      cs.map((c) => c.id).filter((id, i) => document.getElementById(cs[i].getAttribute("aria-labelledby"))?.textContent.trim().startsWith("*")));
+    for (const id of picks) {
+      await rep.click(`[id=${attr(id)}]`);
+      const option = await rep.waitForSelector('[role="option"]:not([aria-disabled="true"])', { visible: true });
+      await option.click();
+    }
+    await rep.click(`${form} button[type="submit"]`);
+    await rep.waitForFunction((name) => new RegExp(`^/${name}/[0-9a-f-]{36}$`).test(location.pathname), {}, entity.name);
+    recordId = rep.url().split("/").pop();
+    return `created ${entity.name}/${recordId} as ${PERSONAS.rep.email}`;
+  }],
+
+  ["rep-sees-it-in-the-list", async () => {
+    await go(rep, `/${entity.name}`);
+    await waitText(rep, TICKET, "main table tbody");
+    return `"${TICKET}" is listed`;
+  }],
+
+  ["rep-refused-an-edit", async () => {
+    // The role has no edit grant: the edit form says so, and the server answers 403 to the same edit sent anyway.
+    await go(rep, `/${entity.name}/${recordId}/edit`);
+    await waitText(rep, t("page.entity.guard.noEdit"), "main");
+    const status = await rep.evaluate(async (url) => {
+      const r = await fetch(url, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${localStorage.getItem("nexus_token")}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "edited by the rep" }),
+      });
+      return r.status;
+    }, `${API}/${entity.name}/${recordId}`);
+    if (status !== 403) throw new Error(`PUT ${entity.name}/${recordId} as the rep answered ${status}; want 403`);
+    return `"${t("page.entity.guard.noEdit")}" and PUT → ${status}`;
+  }],
+
+  ["builder-changes-the-list-layout", async () => {
+    active = builder;
+    // The small change: the list stops showing the priority column.
+    const fields = (await api(`/metadata/fields/${entity.name}`)).data;
+    const priority = fields.find((f) => /priorit/i.test(f.name) || /priorit|ưu tiên/i.test(f.label ?? ""));
+    if (!priority) throw new Error(`${entity.name} has no priority field: ${fields.map((f) => f.name)}`);
+    hidden = priority.label || priority.name;
+    await go(builder, studio(`dung/man-hinh/${entity.name}?man=danh-sach`));
+    const box = `input[aria-label=${attr(t("studio.build.screens.list.cols.show", { name: hidden }))}]`;
+    const input = await builder.waitForSelector(`${box}:checked`);
+    // The SLDS checkbox draws its own box over a hidden input: click its label, as a person does.
+    await (await input.evaluateHandle((e) => e.labels[0])).asElement().click();
+    await builder.waitForSelector(`${box}:not(:checked)`);
+    await (await button(builder, t("studio.build.screens.bar.save"))).click();
+    for (let i = 0; !(await drafts()).some((c) => c.docType === "layout"); i++) {
+      if (i > 40) throw new Error("the saved list layout never reached the drafts");
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return `column "${hidden}" hidden; drafts: ${(await drafts()).map((c) => `${c.op} ${c.docType} "${c.label}"`).join(", ")}`;
+  }],
+
+  ["layout-published", async () => {
+    const want = await publishFromHeader(builder, studio(`dung/man-hinh/${entity.name}?man=danh-sach`));
+    await submitPublish(builder, want);
+    return `version ${want} is live`;
+  }],
+
+  ["rep-sees-the-new-layout", async () => {
+    active = rep;
+    const cols = await repList(rep);
+    if (cols.some((c) => c.includes(hidden))) throw new Error(`the rep's list still shows "${hidden}": ${cols}`);
+    return `columns: ${cols.join(" | ")}`;
+  }],
+
+  ["builder-rolls-back", async () => {
+    active = builder;
+    const before = await headVersion();
+    await go(builder, studio("bao-tri/lich-su"));
+    await builder.click(`button[aria-label=${attr(t("studio.maintain.rollback.submitFor", { n: publishedV2 }))}]`);
+    // The plan names what goes back; the confirm unlocks once it is read.
+    const confirm = await builder.waitForFunction(
+      (label) => [...document.querySelectorAll("main button[aria-describedby]")].find((b) => b.textContent.trim() === label && !b.disabled),
+      {},
+      t("studio.maintain.rollback.submit"),
+    );
+    await confirm.asElement().click();
+    await waitText(builder, t("studio.maintain.rollback.done", { n: publishedV2, m: before + 1 }));
+    const state = (await api("/admin/publish/state")).data.headVersion;
+    if (state?.versionNo !== before + 1 || state?.kind !== "rollback") throw new Error(`head is ${JSON.stringify(state)}; want rollback version ${before + 1}`);
+    return `back to version ${publishedV2}, published as version ${before + 1}`;
+  }],
+
+  ["rep-sees-the-previous-layout", async () => {
+    active = rep;
+    const cols = await repList(rep);
+    if (!cols.some((c) => c.includes(hidden))) throw new Error(`the rep's list lacks "${hidden}" after the rollback: ${cols}`);
+    return `columns: ${cols.join(" | ")}`;
+  }],
+];
+
+fs.mkdirSync(outDir, { recursive: true });
+let failed = null;
+try {
+  adminToken = (await login(PERSONAS.builder)).accessToken;
+  for (const [i, [name, run]] of steps.entries()) {
+    const file = path.join(outDir, `${String(i + 1).padStart(2, "0")}-${name}.png`);
+    const t0 = Date.now();
+    try {
+      const note = await run();
+      await active.screenshot({ path: file });
+      console.log(`ok   ${String(i + 1).padStart(2)} ${name} (${((Date.now() - t0) / 1000).toFixed(1)}s) — ${note}`);
+    } catch (err) {
+      failed = name;
+      await active?.screenshot({ path: file.replace(/\.png$/, "-FAILED.png") }).catch(() => {});
+      console.error(`FAIL ${String(i + 1).padStart(2)} ${name}: ${err.message}`);
+      for (const e of (active && errors.get(active)) ?? []) console.error(`     page error: ${e}`);
+      break;
+    }
+  }
+} catch (err) {
+  failed = "setup";
+  console.error(`FAIL setup: ${err.message}`);
+} finally {
+  await browser.close();
+}
+if (failed) process.exit(1);
+console.log(`demo loop passed: ${steps.length} steps, screenshots in ${outDir}`);
