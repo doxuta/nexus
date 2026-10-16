@@ -2,8 +2,8 @@
 // The MCP loop in a real browser (issue #3): agents propose, humans dispose. The builder creates an agent key in the
 // Studio ("Kết nối agent (MCP)"), a headless Claude Code session connects with the exact `claude mcp add` line the
 // Studio shows and is asked for a Suppliers table; the proposal shows up as a card in the key's conversation, the
-// builder applies it to drafts and it is published; the sales rep can use the table only once access is granted; the
-// builder revokes the key and /mcp refuses it.
+// builder applies it to drafts and publishes it from the header; the sales rep can use the table only once access is
+// granted; the builder revokes the key and /mcp refuses it.
 //
 //   node scripts/mcp-loop.mjs <out-dir>          (from nexus-web/, against a FRESH one-command demo)
 //
@@ -229,17 +229,21 @@ const steps = [
   }],
 
   ["published", async () => {
-    active = null; // API-only steps: nothing new on screen to show
-    // until #16: the workshop's header has no Publish button on main yet (PR #16 adds it), so this step calls the same
-    // POST /admin/publish the button calls, with the change set the builder just reviewed.
+    // From the Studio header, as a builder does: Xuất bản → the review lists the drafts → Xuất bản.
     const before = await headVersion();
-    const changes = await api("/admin/publish/changes");
-    await api("/admin/publish", { method: "POST", body: JSON.stringify({ changesetHash: changes.meta.changesetHash, note: "MCP: Suppliers table" }) });
-    if ((await headVersion()) !== before + 1) throw new Error("no new version");
-    return `version ${before + 1} is live (${changes.data.length} change(s))`;
+    const pending = (await drafts()).length;
+    await go(builder, KEYS_PAGE); // the header reads the publish state on load
+    await (await button(builder, t("studio.publish.open"), '[data-testid="project-header"]')).click();
+    await builder.waitForSelector('[data-testid="publish-submit"]:not([disabled])');
+    await waitText(builder, t("studio.publish.count", { n: pending }), '[role="dialog"]');
+    await builder.click('[data-testid="publish-submit"]');
+    await waitText(builder, t("studio.publish.status.live", { n: before + 1 }), '[data-testid="project-header"]');
+    if ((await headVersion()) !== before + 1) throw new Error(`the server's head version is not ${before + 1}`);
+    return `version ${before + 1} is live (${pending} change(s)), published from the Studio header`;
   }],
 
   ["rep-refused-before-access", async () => {
+    active = null; // API-only steps: nothing new on screen to show
     repToken = (await login(PERSONAS.rep)).accessToken;
     const { status, body } = await call(repToken, `/${entity.name}`);
     if (status !== 403) throw new Error(`the rep reads ${entity.name} before any grant: ${status} ${body.code ?? ""}`);
