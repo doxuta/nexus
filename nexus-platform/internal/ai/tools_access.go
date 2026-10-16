@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -238,8 +239,8 @@ func resolveAccessRole(roles []auth.Role, ref string, n int) (auth.Role, string)
 	return auth.Role{}, toolErr("ACCESS_ROLE_NOT_FOUND: grant %d: không có vai %q trong tổ chức — gọi list_roles để lấy đúng tên vai đang có", n, ref)
 }
 
-// privilegedHolder names who makes the role an admin's role ("" = nobody): an admin or a platform
-// operator holding it. They bypass access control anyway; the trợ lý stays off their roles.
+// privilegedHolder says who makes the role privileged ("" = nobody): an admin or a platform operator
+// holding it. They bypass access control anyway, and the assistant stays off their roles.
 func privilegedHolder(users []auth.User, roleID string) string {
 	for _, u := range users {
 		if u.RoleID == nil || *u.RoleID != roleID {
@@ -337,12 +338,7 @@ func grantsText(gs []services.RoleActionView) string {
 
 // unknownKey is the first key of m outside allowed ("" = none), in sorted order so the answer is stable.
 func unknownKey(m map[string]json.RawMessage, allowed []string) string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(m)) {
 		if !slices.Contains(allowed, k) {
 			return k
 		}
