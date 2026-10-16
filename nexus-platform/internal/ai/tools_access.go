@@ -17,7 +17,7 @@ import (
 // propose_access (issue #2): the agent says who may use what it has just built. A user holds ONE role
 // (users.role_id), so moving the rep onto an app role would strip their CRM role: the agent grants on
 // roles that already exist instead (list_roles), and only on what it built — a table proposed in this
-// conversation, or one the customer does not have yet. It never grants delete, a field-level or team
+// same turn, or a live one born after the last publish. It never grants delete, a field-level or team
 // scope or a record share, and never touches a reserved role or one an admin or a platform operator
 // holds. The grant is additive (mergeAccessGrants). Nothing is written here: the builder applies the
 // card through PUT /admin/roles/:id, which leaves a traced "role" version entry.
@@ -108,7 +108,6 @@ func (e *toolExecutor) proposeAccess(ctx context.Context, argsJSON string) strin
 		return toolErr("ACCESS_PROPOSE_FAILED: %v", err)
 	}
 	drafted := e.draftedEntities()
-	published := e.publishedCheck(ctx, probes)
 
 	type pending struct {
 		role   auth.Role
@@ -144,7 +143,7 @@ func (e *toolExecutor) proposeAccess(ctx context.Context, argsJSON string) strin
 			return toolErr("ACCESS_ROLE_ADMIN: grant %d: vai %q đang được %s giữ — không cấp quyền cho vai của quản trị viên qua trợ lý", n, role.Name, who)
 		}
 
-		entity, label, msg := e.resolveAccessEntity(ctx, drafted, published, in.Entity, n)
+		entity, label, msg := e.resolveAccessEntity(ctx, probes, drafted, in.Entity, n)
 		if msg != "" {
 			return msg
 		}
@@ -256,48 +255,52 @@ func privilegedHolder(users []auth.User, roleID string) string {
 	return ""
 }
 
-// publishedCheck answers "is this live table already the customer's?": created at or before the last
-// publish (a table born after it is still hidden, publish_hidden_new.go). A workspace never delivered has
-// published nothing; without a cutoff reader every live table counts as published (fail closed).
-func (e *toolExecutor) publishedCheck(ctx context.Context, probes *AccessProbes) func(*metadata.EntityDefinition) (bool, error) {
-	return func(ent *metadata.EntityDefinition) (bool, error) {
-		if probes.Published == nil {
-			return true, nil
+// resolveAccessEntity: the registry first — a live table is judged by its own created_at against the
+// last publish and named by its own label, never by a draft of the same name (verifier round 1 of #2:
+// propose_entity{name: crm_contracts, label: "Phiếu hỗ trợ"} then propose_access on crm_contracts);
+// only a name the registry does not know may be a table proposed in this same turn. Returns its
+// canonical name and label, or the tool error.
+func (e *toolExecutor) resolveAccessEntity(ctx context.Context, probes *AccessProbes, drafted map[string]*DraftEntity, raw string, n int) (string, string, string) {
+	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, strings.TrimSpace(raw))
+	switch {
+	case err == nil:
+		if msg := e.liveTableRefusal(ctx, probes, ent, n); msg != "" {
+			return "", "", msg
 		}
-		at, err := probes.Published.HeadCutoff(ctx, e.tenantID) // cached per tenant by the DraftGate
-		if err != nil {
-			return false, fmt.Errorf("ai.toolExecutor.publishedCheck: %w", err)
+		label := ent.Label
+		if strings.TrimSpace(label) == "" {
+			label = ent.Name
 		}
-		return at != nil && !ent.CreatedAt.After(*at), nil
+		return ent.Name, label, ""
+	case !errors.Is(err, metadata.ErrEntityNotFound):
+		return "", "", toolErr("ACCESS_PROPOSE_FAILED: grant %d: %v", n, err)
 	}
-}
-
-// resolveAccessEntity: a table proposed in this conversation (the draft buffer), or a live one the
-// customer does not have yet. Returns its canonical name and label, or the tool error.
-func (e *toolExecutor) resolveAccessEntity(ctx context.Context, drafted map[string]*DraftEntity, published func(*metadata.EntityDefinition) (bool, error), raw string, n int) (string, string, string) {
-	name := strings.TrimSpace(raw)
-	if d, ok := drafted[strings.ToLower(name)]; ok {
+	if d, ok := drafted[strings.ToLower(strings.TrimSpace(raw))]; ok {
 		return d.Name, d.Label, ""
 	}
-	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, name)
+	return "", "", toolErr("ENTITY_NOT_FOUND: grant %d: bảng %q không có và cũng chưa được propose_entity trong CÙNG lượt này", n, raw)
+}
+
+// liveTableRefusal: a live table takes a grant only while the customer cannot see it yet — born after
+// the last publish (still hidden, publish_hidden_new.go). Never delivered (no cutoff): staff may already
+// use every live table (the demo's rep exists before the first publish), so none qualifies and the
+// builder ticks it by hand. No cutoff reader wired: fail closed. "" = the grant may go ahead.
+func (e *toolExecutor) liveTableRefusal(ctx context.Context, probes *AccessProbes, ent *metadata.EntityDefinition, n int) string {
+	published := toolErr("ACCESS_ENTITY_PUBLISHED: grant %d: bảng %q khách đã dùng — trợ lý chỉ cấp quyền trên bảng vừa dựng; quyền trên bảng này người duyệt chỉnh ở màn Người dùng & quyền", n, ent.Name)
+	if probes.Published == nil {
+		return published
+	}
+	at, err := probes.Published.HeadCutoff(ctx, e.tenantID) // cached per tenant by the DraftGate
 	if err != nil {
-		if errors.Is(err, metadata.ErrEntityNotFound) {
-			return "", "", toolErr("ENTITY_NOT_FOUND: grant %d: bảng %q không có và cũng chưa được propose_entity trong cuộc trò chuyện này", n, raw)
-		}
-		return "", "", toolErr("ACCESS_PROPOSE_FAILED: grant %d: %v", n, err)
+		return toolErr("ACCESS_PROPOSE_FAILED: grant %d: %v", n, err)
 	}
-	pub, err := published(ent)
-	if err != nil {
-		return "", "", toolErr("ACCESS_PROPOSE_FAILED: grant %d: %v", n, err)
+	if at == nil {
+		return toolErr("ACCESS_ENTITY_EXISTS: grant %d: bảng %q đã có sẵn và dự án chưa xuất bản lần nào — nhân viên có thể đang dùng nó; trợ lý chỉ cấp quyền trên bảng propose_entity trong CÙNG lượt này, quyền trên bảng có sẵn người duyệt tự chọn ở màn Người dùng & quyền", n, ent.Name)
 	}
-	if pub {
-		return "", "", toolErr("ACCESS_ENTITY_PUBLISHED: grant %d: bảng %q khách đã dùng — trợ lý chỉ cấp quyền trên bảng vừa dựng; quyền trên bảng này người duyệt chỉnh ở màn Người dùng & quyền", n, ent.Name)
+	if !ent.CreatedAt.After(*at) {
+		return published
 	}
-	label := ent.Label
-	if strings.TrimSpace(label) == "" {
-		label = ent.Name
-	}
-	return ent.Name, label, ""
+	return ""
 }
 
 // accessChange is the propose_access envelope: a "role" document (the version doc the apply leaves),

@@ -490,7 +490,7 @@ func toolDefinitionsBase() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "propose_access",
-				Description: "Đề xuất NGƯỜI NÀO được dùng thứ bạn đang dựng: vai nào được xem / tạo / sửa bảng nào. GỌI KHI người dùng nói ai sẽ dùng thứ đang dựng (the user says who will use what you are building — vd 'nhân viên kinh doanh xem mọi ticket, tạo ticket, sửa ticket của mình'), ngay trong CÙNG lượt với propose_entity / propose_app, để người đó mở được bảng mới thay vì bị chặn. role = TÊN một vai ĐÃ CÓ (gọi list_roles trước; mỗi người chỉ giữ MỘT vai, nên cấp thêm cho đúng vai họ đang giữ — KHÔNG tạo vai mới, KHÔNG đổi vai của ai). entity = bảng vừa propose_entity trong cuộc trò chuyện này, hoặc bảng chưa xuất bản — KHÔNG phải bảng khách đã dùng. actions ⊂ {view, create, edit}; scope 'all' (mọi bản ghi) hoặc 'owner' (chỉ bản ghi của chính họ) — mỗi grant MỘT scope, cần hai mức thì tách hai grant (vd view+create 'all', edit 'owner'). Chỉ CỘNG THÊM: không bao giờ bớt hay hạ quyền đang có của vai. Công cụ này KHÔNG BAO GIỜ cấp quyền quản trị: không xoá (delete), không quyền theo trường, không chia sẻ bản ghi, không vai dành riêng hay vai của quản trị viên — những thứ đó (vd 'chỉ quản lý được xoá') người duyệt tự cấp ở màn Người dùng & quyền, nói rõ trong tóm tắt. Chỉ đưa vào draft — người duyệt Áp dụng mới thành thật.",
+				Description: "Đề xuất NGƯỜI NÀO được dùng thứ bạn đang dựng: vai nào được xem / tạo / sửa bảng nào. GỌI KHI người dùng nói ai sẽ dùng thứ đang dựng (the user says who will use what you are building — vd 'nhân viên kinh doanh xem mọi ticket, tạo ticket, sửa ticket của mình'), ngay trong CÙNG lượt với propose_entity / propose_app, để người đó mở được bảng mới thay vì bị chặn. role = TÊN một vai ĐÃ CÓ (gọi list_roles trước; mỗi người chỉ giữ MỘT vai, nên cấp thêm cho đúng vai họ đang giữ — KHÔNG tạo vai mới, KHÔNG đổi vai của ai). entity = bảng propose_entity trong CÙNG lượt này (in this same turn), hoặc bảng đã dựng mà khách chưa thấy vì sinh sau lần Xuất bản gần nhất — KHÔNG BAO GIỜ bảng khách đã dùng; dự án chưa Xuất bản lần nào thì CHỈ bảng của CÙNG lượt này (bảng có sẵn: người duyệt tự chọn quyền). actions ⊂ {view, create, edit}; scope 'all' (mọi bản ghi) hoặc 'owner' (chỉ bản ghi của chính họ) — mỗi grant MỘT scope, cần hai mức thì tách hai grant (vd view+create 'all', edit 'owner'). Chỉ CỘNG THÊM: không bao giờ bớt hay hạ quyền đang có của vai. Công cụ này KHÔNG BAO GIỜ cấp quyền quản trị: không xoá (delete), không quyền theo trường, không chia sẻ bản ghi, không vai dành riêng hay vai của quản trị viên — những thứ đó (vd 'chỉ quản lý được xoá') người duyệt tự cấp ở màn Người dùng & quyền, nói rõ trong tóm tắt. Chỉ đưa vào draft — người duyệt Áp dụng mới thành thật.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -785,7 +785,7 @@ func (e *toolExecutor) dispatch(ctx context.Context, name, argsJSON string) stri
 	case "snapshot_model":
 		return e.snapshotModel(ctx)
 	case "propose_entity":
-		return e.proposeEntity(argsJSON)
+		return e.proposeEntity(ctx, argsJSON)
 	case "propose_field":
 		return e.proposeField(argsJSON)
 	case "propose_relationship":
@@ -1028,13 +1028,15 @@ func (e *toolExecutor) listRelationships(ctx context.Context, argsJSON string) s
 }
 
 // proposeEntity validates a proposed entity through the SAME config-time STRUCTURAL validator the
-// manual builder uses (services.ValidateCreateEntity) — name/label/fieldType/options shape. This is
-// config-time parity ONLY: the DB-dependent rejects the real apply-path adds (duplicate entity name
-// → 409 ENTITY_ALREADY_EXISTS, relation-target existence, cross-tenant shared-unique) still surface
-// at APPLY, not here — so a buffered draft is structurally sound but NOT apply-guaranteed (HITL +
-// the gated apply-path are the backstop). On any ValidationError it returns the code to the model;
-// only a structurally valid entity is buffered.
-func (e *toolExecutor) proposeEntity(argsJSON string) string {
+// manual builder uses (services.ValidateCreateEntity) — name/label/fieldType/options shape. A name
+// that is taken — a live table of this tenant, or one already proposed this turn — is refused here
+// with the apply path's own code (ENTITY_ALREADY_EXISTS): a draft must never stand in for a live table
+// (propose_access read a re-proposed published table as "built this turn", verifier round 1 of #2).
+// The other DB-dependent rejects of the apply path (relation-target existence, cross-tenant
+// shared-unique) still surface at APPLY — a buffered draft is structurally sound but NOT
+// apply-guaranteed (HITL + the gated apply-path are the backstop). On any ValidationError it returns
+// the code to the model; only a structurally valid entity is buffered.
+func (e *toolExecutor) proposeEntity(ctx context.Context, argsJSON string) string {
 	var a struct {
 		Name   string          `json:"name"`
 		Label  string          `json:"label"`
@@ -1054,6 +1056,15 @@ func (e *toolExecutor) proposeEntity(argsJSON string) string {
 	}
 	if code, msg, ok := validationOf(services.ValidateCreateEntity(in)); !ok {
 		return toolErr("%s: %s", code, msg)
+	}
+	name := strings.ToLower(strings.TrimSpace(a.Name))
+	if _, ok := e.draftedEntities()[name]; ok {
+		return toolErr("ENTITY_ALREADY_EXISTS: bảng %q đã được propose_entity trong lượt này — mỗi bảng đề xuất một lần", name)
+	}
+	if _, err := e.reader.GetEntityByName(ctx, e.tenantID, name); err == nil {
+		return toolErr("ENTITY_ALREADY_EXISTS: bảng %q đã có — sửa nó bằng propose_field / propose_edit_field, hoặc đặt tên khác cho bảng mới", name)
+	} else if !errors.Is(err, metadata.ErrEntityNotFound) {
+		return toolErr("PROPOSE_ENTITY_FAILED: %v", err)
 	}
 
 	df := make([]DraftField, 0, len(a.Fields))

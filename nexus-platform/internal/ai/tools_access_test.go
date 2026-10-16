@@ -160,11 +160,16 @@ func TestProposeAccess_RoleByLabelAndTablesNotYetPublished(t *testing.T) {
 		t.Fatalf("access = %+v; want the role resolved by its label to crm_sales_rep, visits labelled", a)
 	}
 
-	// Never delivered: nothing is the customer's yet, so a live table is fine.
-	e = accessExecutor(fakeCutoff{})
-	mustBuffer(t, e, "propose_access", grantArgs(grant("crm_sales_rep", "edge_table", "all", "view")))
+	// Never delivered (verifier round 1, MEDIUM): staff may already use every live table (in the demo seed
+	// the rep exists before the first publish), so only a table proposed in this same turn qualifies; an
+	// existing one is ticked by hand on the access page.
+	e = withTickets(t, accessExecutor(fakeCutoff{}))
+	for _, live := range []string{"edge_table", "visits", "crm_accounts"} {
+		mustReject(t, e, "propose_access", grantArgs(grant("crm_sales_rep", live, "all", "view")), "ACCESS_ENTITY_EXISTS")
+	}
+	mustBuffer(t, e, "propose_access", grantArgs(grant("crm_sales_rep", "tickets", "all", "view")))
 
-	// No cutoff reader wired: every live table counts as published, only this conversation's tables pass.
+	// No cutoff reader wired: every live table counts as published, only this turn's tables pass.
 	e = withTickets(t, accessExecutor(nil))
 	mustReject(t, e, "propose_access", grantArgs(grant("crm_sales_rep", "visits", "all", "view")), "ACCESS_ENTITY_PUBLISHED")
 	mustBuffer(t, e, "propose_access", grantArgs(grant("crm_sales_rep", "tickets", "all", "view")))
@@ -226,5 +231,46 @@ func TestMergeAccessGrants_SharedCases(t *testing.T) {
 				t.Fatalf("the role's grants were changed in place: %v", c.Current)
 			}
 		})
+	}
+}
+
+// Verifier round 1, HIGH: propose_entity re-using the name of a live table (with a harmless label) let
+// propose_access treat a published table as "proposed in this turn". propose_entity refuses a name that
+// exists — live in this tenant, or already proposed this turn — like the apply path does (409).
+func TestProposeEntity_RefusesANameThatAlreadyExists(t *testing.T) {
+	e := accessExecutor(fakeCutoff{at: &accCutoff})
+	mustReject(t, e, "propose_entity", `{"name":"crm_accounts","label":"Phiếu hỗ trợ","fields":[{"name":"title","label":"Tiêu đề","fieldType":"text"}]}`, "ENTITY_ALREADY_EXISTS")
+	mustReject(t, e, "propose_entity", `{"name":"visits","label":"Lượt khám","fields":[]}`, "ENTITY_ALREADY_EXISTS") // live, even if not yet published
+	withTickets(t, e)
+	mustReject(t, e, "propose_entity", `{"name":"tickets","label":"Khách hàng","fields":[]}`, "ENTITY_ALREADY_EXISTS") // twice in one turn
+	mustBuffer(t, e, "propose_entity", `{"name":"invoices","label":"Hoá đơn","fields":[]}`)                            // another tenant's name is free here
+}
+
+// The exact attack, end to end on the executor: the re-proposed published table is refused, and the
+// grant on it is refused too — even when a draft of that name sits in the buffer (an MCP thread's older
+// proposal): a live table is judged by the registry, never by the buffer.
+func TestProposeAccess_PublishedTableBehindAHarmlessLabelIsRefused(t *testing.T) {
+	e := accessExecutor(fakeCutoff{at: &accCutoff})
+	mustReject(t, e, "propose_entity", `{"name":"crm_accounts","label":"Phiếu hỗ trợ","fields":[{"name":"title","label":"Tiêu đề","fieldType":"text"}]}`, "ENTITY_ALREADY_EXISTS")
+	mustReject(t, e, "propose_access", grantArgs(grant("crm_sales_rep", "crm_accounts", "all", "view", "create", "edit")), "ACCESS_ENTITY_PUBLISHED")
+
+	e.draft = append(e.draft, DraftItem{Kind: "entity", Entity: &DraftEntity{Name: "crm_accounts", Label: "Phiếu hỗ trợ"}})
+	mustReject(t, e, "propose_access", grantArgs(grant("crm_sales_rep", "crm_accounts", "all", "view", "create", "edit")), "ACCESS_ENTITY_PUBLISHED")
+}
+
+// The card names a live table by the registry's label, never by a label the model wrote.
+func TestProposeAccess_LiveTableIsLabelledFromTheRegistry(t *testing.T) {
+	e := accessExecutor(fakeCutoff{at: &accCutoff})
+	e.draft = append(e.draft, DraftItem{Kind: "entity", Entity: &DraftEntity{Name: "visits", Label: "Phiếu hỗ trợ"}})
+	mustBuffer(t, e, "propose_access", grantArgs(grant("crm_sales_rep", "visits", "all", "view")))
+	a := e.draft[len(e.draft)-1].Access
+	var after struct {
+		Labels map[string]string `json:"labels"`
+	}
+	if err := json.Unmarshal(e.draft[len(e.draft)-1].Change.After, &after); err != nil {
+		t.Fatal(err)
+	}
+	if a.Labels["visits"] != "Lượt khám" || after.Labels["visits"] != "Lượt khám" {
+		t.Fatalf("labels = %v / %v; want the registry's \"Lượt khám\", not the model's \"Phiếu hỗ trợ\"", a.Labels, after.Labels)
 	}
 }
