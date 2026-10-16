@@ -1,0 +1,98 @@
+# Nexus — one-command local demo.
+#
+#   docker compose up --build        then open http://localhost:8080  (NEXUS_PORT=… to use another port)
+#
+# Builder (Studio):  admin@example.com / Demo-Admin-2026!
+# Sales rep (app):   test@example.com  / Demo-Rep-2026!     — a non-admin, so access control is real
+#
+# Local demo only: MySQL has no root password, the JWT secret below is public. Override every value in a
+# .env file (or the shell) for anything that is not your own laptop. AI is off until you point
+# AI_GATEWAY_BASE_URL at an OpenAI-compatible gateway and set AI_ENABLED=true.
+name: nexus
+
+x-db: &db "root:@tcp(mysql:3306)/nexus?charset=utf8mb4&parseTime=True&loc=UTC"
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: nexus
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  migrate:
+    image: migrate/migrate:v4.17.1
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./nexus-platform/migrations:/migrations:ro
+    command: ["-path", "/migrations", "-database", "mysql://root:@tcp(mysql:3306)/nexus?multiStatements=true", "up"]
+
+  api:
+    build: ./nexus-platform
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # bootstrap-admin is idempotent: the first start creates the workspace and its builder, later starts reuse them.
+    entrypoint: ["/bin/sh", "-c", "/app/bootstrap-admin && exec /app/server"]
+    environment:
+      DATABASE_URL: *db
+      JWT_SECRET: ${JWT_SECRET:-nexus-local-demo-only-jwt-secret-0123456789}
+      PORT: "8080"
+      CORS_ALLOWED_ORIGINS: http://localhost:${NEXUS_PORT:-8080}
+      BOOTSTRAP_TENANT: ${NEXUS_TENANT:-northwind}
+      BOOTSTRAP_ADMIN_EMAIL: ${NEXUS_ADMIN_EMAIL:-admin@example.com}
+      BOOTSTRAP_ADMIN_PASSWORD: ${NEXUS_ADMIN_PASS:-Demo-Admin-2026!}
+      BOOTSTRAP_ADMIN_NAME: Demo Builder
+      BOOTSTRAP_PLATFORM_OPERATOR: "true"
+      AI_ENABLED: ${AI_ENABLED:-false}
+      AI_GATEWAY_BASE_URL: ${AI_GATEWAY_BASE_URL:-}
+      AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-claude-opus-5-5}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+
+  seed:
+    image: python:3.12-alpine
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./nexus-platform/scripts/seed-demo.py:/seed-demo.py:ro
+    environment:
+      NEXUS_TENANT: ${NEXUS_TENANT:-northwind}
+      NEXUS_ADMIN_EMAIL: ${NEXUS_ADMIN_EMAIL:-admin@example.com}
+      NEXUS_ADMIN_PASS: ${NEXUS_ADMIN_PASS:-Demo-Admin-2026!}
+      NEXUS_STAFF_EMAIL: ${NEXUS_STAFF_EMAIL:-test@example.com}
+      NEXUS_STAFF_PASS: ${NEXUS_STAFF_PASS:-Demo-Rep-2026!}
+    command: ["python3", "/seed-demo.py", "--base", "http://api:8080/api/v1"]
+
+  web:
+    build:
+      context: ./nexus-web
+      args:
+        NEXT_PUBLIC_API_BASE: /api/v1
+
+  caddy:
+    image: caddy:2.8-alpine
+    depends_on:
+      - api
+      - web
+    ports:
+      - "${NEXUS_PORT:-8080}:80"
+    volumes:
+      - ./deploy/Caddyfile.local:/etc/caddy/Caddyfile:ro
+
+volumes:
+  mysql-data:

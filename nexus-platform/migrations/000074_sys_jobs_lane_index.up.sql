@@ -1,0 +1,25 @@
+-- SYS-JOBS-LANE-INDEX (adversarial review of DAILY-QUEUE #26): the claim seek of a DEDICATED
+-- worker lane.
+--
+-- outbound_webhook jobs used to share one FIFO worker pool (JOBS_WORKERS, default 2) with
+-- email_alert and workflow_timer. One attempt against a receiver that swallows packets holds a
+-- worker for the whole HTTP timeout (10s), ten attempts ~100s per event: ~72 such events an hour
+-- filled the pool and delayed every tenant's mail and SLA timers. The manager now gives
+-- outbound_webhook workers of its own (JOBS_WEBHOOK_WORKERS); the shared pool claims every type
+-- EXCEPT it:
+--
+--   dedicated  WHERE status = 'queued' AND job_type = ? AND run_at <= ? ORDER BY run_at, id
+--   shared     WHERE status = 'queued' AND job_type NOT IN (?) AND run_at <= ? ORDER BY run_at, id
+--
+-- Riding idx_sys_jobs_claim (status, run_at), the dedicated claim would walk — and, being a
+-- FOR UPDATE read under REPEATABLE READ, row-lock — every due row of the other types ahead of its
+-- first webhook row, and a SKIP LOCKED claim of the shared pool racing it would skip those rows and
+-- find nothing. This index lets it seek straight to its own due rows: (status, job_type) equal,
+-- run_at ranged, and the implicit PK suffix gives ORDER BY run_at, id without a sort. The shared
+-- claim keeps idx_sys_jobs_claim, whose order is its ORDER BY (both plans pinned by
+-- jobs.TestJobsLaneClaimsSeek_Integration). No query names the index, so a binary on a schema
+-- without this migration still claims correctly — it just scans there, as before.
+--
+-- In-place build (ALGORITHM=INPLACE, LOCK=NONE): the queue stays writable while it builds.
+ALTER TABLE sys_jobs
+    ADD KEY idx_sys_jobs_lane (status, job_type, run_at);

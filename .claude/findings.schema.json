@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Nexus verifier findings",
+  "description": "What the verifier agent returns for one change. Also usable as the `schema` of a Workflow agent() call.",
+  "type": "object",
+  "required": ["verdict", "checked", "findings"],
+  "properties": {
+    "verdict": { "enum": ["pass", "fail"], "description": "pass only when no confirmed HIGH or MEDIUM finding" },
+    "checked": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Each command or trace actually run, with its decisive last line of output"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "status", "file", "claim", "evidence"],
+        "properties": {
+          "severity": { "enum": ["HIGH", "MEDIUM", "LOW"] },
+          "status": {
+            "enum": ["confirmed", "needs_validation", "rejected"],
+            "description": "confirmed needs reproducible evidence; without it use needs_validation"
+          },
+          "file": { "type": "string" },
+          "line": { "type": "integer" },
+          "claim": { "type": "string" },
+          "evidence": { "type": "string", "description": "command + output, or a file:line trace" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+-- Reverse of 000066: deliberately a NO-OP.
+--
+-- The forward migration removed an admin account whose password is published in this repository.
+-- "Reversing" it would mean re-creating that account — re-opening issue #95 on a live, public
+-- deployment, at the exact moment (a down-migration) when nobody is watching the users table.
+-- A down migration exists so a schema change can be backed out; this migration changes no schema,
+-- only deletes one known-bad row, and there is no version of "back out" that is safe.
+--
+-- If you genuinely need an admin in the demo tenant, create one with a password that was never
+-- committed:
+--   docker compose -f deploy/nexus/compose.prod.yml --env-file deploy/nexus/.env.prod run --rm \
+--     -e BOOTSTRAP_TENANT=demo -e BOOTSTRAP_ADMIN_EMAIL=<you> \
+--     -e BOOTSTRAP_ADMIN_PASSWORD=<a strong password> --entrypoint /app/bootstrap-admin nexus
+--
+-- SELECT 1 keeps the file a valid, non-empty statement for golang-migrate.
+SELECT 1;

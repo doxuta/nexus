@@ -1,0 +1,237 @@
+{
+  "about": "Golden cases for layout visibleWhen evaluation (specs/054-layout-visible-when FR-7). The Go evaluator (services.fieldVisible) and the FE port (nexus-web lib/visibleWhen.ts, Phase 2) MUST both pass every case in this file — it is the parity contract, so change it only together with both evaluators. cases: the evaluator alone. conditions: target field -> visibleWhen as stored in a layout cell. values: the image being judged. visible: expected visibility per listed field. createCases: the create-time image (FR-7 'one image'): fields = the entity's fields (FE FieldMeta keys; defaultValue is the raw sys_fields string), payload = the POST body exactly as buildPayload sends it (wire form, NOT the widget values: a blank required number is 0 on the wire). The image is that payload plus, for every field it omits or sends blank, the field's defaultValue coerced to the field's type (Go: services.createImage via ValidateRecord; FE: the same rule over the form's fields) — visibility is judged on the image, never on what the widgets show.",
+  "cases": [
+    {
+      "name": "eq holds",
+      "conditions": {"tax_code": {"field": "customer_type", "op": "eq", "value": "business"}},
+      "values": {"customer_type": "business"},
+      "visible": {"tax_code": true, "customer_type": true}
+    },
+    {
+      "name": "eq fails on another value",
+      "conditions": {"tax_code": {"field": "customer_type", "op": "eq", "value": "business"}},
+      "values": {"customer_type": "individual"},
+      "visible": {"tax_code": false}
+    },
+    {
+      "name": "eq fails on an absent controller",
+      "conditions": {"tax_code": {"field": "customer_type", "op": "eq", "value": "business"}},
+      "values": {},
+      "visible": {"tax_code": false}
+    },
+    {
+      "name": "eq is strict about JSON type: the string 5 is not the number 5",
+      "conditions": {"bonus": {"field": "score", "op": "eq", "value": 5}},
+      "values": {"score": "5"},
+      "visible": {"bonus": false}
+    },
+    {
+      "name": "eq on a number",
+      "conditions": {"bonus": {"field": "score", "op": "eq", "value": 5}},
+      "values": {"score": 5},
+      "visible": {"bonus": true}
+    },
+    {
+      "name": "eq on a boolean",
+      "conditions": {"insurer": {"field": "has_insurance", "op": "eq", "value": true}},
+      "values": {"has_insurance": true},
+      "visible": {"insurer": true}
+    },
+    {
+      "name": "eq on a boolean false is not empty",
+      "conditions": {"reason": {"field": "has_insurance", "op": "eq", "value": false}},
+      "values": {"has_insurance": false},
+      "visible": {"reason": true}
+    },
+    {
+      "name": "eq is case-sensitive",
+      "conditions": {"tax_code": {"field": "customer_type", "op": "eq", "value": "business"}},
+      "values": {"customer_type": "Business"},
+      "visible": {"tax_code": false}
+    },
+    {
+      "name": "neq holds on another value",
+      "conditions": {"tax_code": {"field": "customer_type", "op": "neq", "value": "individual"}},
+      "values": {"customer_type": "business"},
+      "visible": {"tax_code": true}
+    },
+    {
+      "name": "neq holds on an empty controller",
+      "conditions": {"tax_code": {"field": "customer_type", "op": "neq", "value": "individual"}},
+      "values": {"customer_type": ""},
+      "visible": {"tax_code": true}
+    },
+    {
+      "name": "neq fails on the same value",
+      "conditions": {"tax_code": {"field": "customer_type", "op": "neq", "value": "individual"}},
+      "values": {"customer_type": "individual"},
+      "visible": {"tax_code": false}
+    },
+    {
+      "name": "in holds on a member",
+      "conditions": {"rider": {"field": "plan", "op": "in", "value": ["gold", "platinum"]}},
+      "values": {"plan": "platinum"},
+      "visible": {"rider": true}
+    },
+    {
+      "name": "in fails on a non-member",
+      "conditions": {"rider": {"field": "plan", "op": "in", "value": ["gold", "platinum"]}},
+      "values": {"plan": "basic"},
+      "visible": {"rider": false}
+    },
+    {
+      "name": "in fails on an empty controller",
+      "conditions": {"rider": {"field": "plan", "op": "in", "value": ["gold", "platinum"]}},
+      "values": {"plan": null},
+      "visible": {"rider": false}
+    },
+    {
+      "name": "notIn holds on a non-member and on empty",
+      "conditions": {
+        "upsell": {"field": "plan", "op": "notIn", "value": ["gold", "platinum"]},
+        "upsell_note": {"field": "plan2", "op": "notIn", "value": ["gold"]}
+      },
+      "values": {"plan": "basic"},
+      "visible": {"upsell": true, "upsell_note": true}
+    },
+    {
+      "name": "notIn fails on a member",
+      "conditions": {"upsell": {"field": "plan", "op": "notIn", "value": ["gold", "platinum"]}},
+      "values": {"plan": "gold"},
+      "visible": {"upsell": false}
+    },
+    {
+      "name": "empty: absent, null, blank string all count as empty",
+      "conditions": {
+        "a": {"field": "x", "op": "empty"},
+        "b": {"field": "y", "op": "empty"},
+        "c": {"field": "z", "op": "empty"}
+      },
+      "values": {"y": null, "z": "   "},
+      "visible": {"a": true, "b": true, "c": true}
+    },
+    {
+      "name": "empty fails and notEmpty holds on a value, zero included",
+      "conditions": {
+        "a": {"field": "x", "op": "empty"},
+        "b": {"field": "x", "op": "notEmpty"},
+        "c": {"field": "n", "op": "notEmpty"}
+      },
+      "values": {"x": "hello", "n": 0},
+      "visible": {"a": false, "b": true, "c": true}
+    },
+    {
+      "name": "transitive: a dependent of a hidden field is hidden even when its own condition holds",
+      "conditions": {
+        "beneficiary_type": {"field": "product", "op": "eq", "value": "life"},
+        "beneficiary_note": {"field": "beneficiary_type", "op": "eq", "value": "other"}
+      },
+      "values": {"product": "health", "beneficiary_type": "other"},
+      "visible": {"beneficiary_type": false, "beneficiary_note": false}
+    },
+    {
+      "name": "transitive: the whole chain shows when every link holds",
+      "conditions": {
+        "beneficiary_type": {"field": "product", "op": "eq", "value": "life"},
+        "beneficiary_note": {"field": "beneficiary_type", "op": "eq", "value": "other"}
+      },
+      "values": {"product": "life", "beneficiary_type": "other"},
+      "visible": {"beneficiary_type": true, "beneficiary_note": true}
+    },
+    {
+      "name": "a cycle (only reachable through data written straight to the DB) counts as visible",
+      "conditions": {
+        "a": {"field": "b", "op": "eq", "value": "x"},
+        "b": {"field": "a", "op": "eq", "value": "x"}
+      },
+      "values": {"a": "x", "b": "x"},
+      "visible": {"a": true, "b": true}
+    }
+  ],
+  "createCases": [
+    {
+      "name": "a controller default the payload omits counts: the server stores it, so the field shows",
+      "fields": [
+        {"name": "customer_type", "fieldType": "picklist", "defaultValue": "business", "options": {"values": ["individual", "business"]}},
+        {"name": "tax_code", "fieldType": "text", "isRequired": true}
+      ],
+      "conditions": {"tax_code": {"field": "customer_type", "op": "eq", "value": "business"}},
+      "payload": {},
+      "visible": {"tax_code": true}
+    },
+    {
+      "name": "a controller sent blank takes its default too",
+      "fields": [
+        {"name": "customer_type", "fieldType": "picklist", "defaultValue": "business", "isRequired": true, "options": {"values": ["individual", "business"]}},
+        {"name": "tax_code", "fieldType": "text"}
+      ],
+      "conditions": {"tax_code": {"field": "customer_type", "op": "eq", "value": "business"}},
+      "payload": {"customer_type": ""},
+      "visible": {"tax_code": true}
+    },
+    {
+      "name": "a sent controller value beats its default",
+      "fields": [
+        {"name": "customer_type", "fieldType": "picklist", "defaultValue": "business", "options": {"values": ["individual", "business"]}},
+        {"name": "tax_code", "fieldType": "text", "isRequired": true}
+      ],
+      "conditions": {"tax_code": {"field": "customer_type", "op": "eq", "value": "business"}},
+      "payload": {"customer_type": "individual"},
+      "visible": {"tax_code": false}
+    },
+    {
+      "name": "no default: an omitted controller stays empty",
+      "fields": [
+        {"name": "customer_type", "fieldType": "picklist", "options": {"values": ["individual", "business"]}},
+        {"name": "tax_code", "fieldType": "text"},
+        {"name": "note", "fieldType": "text"}
+      ],
+      "conditions": {
+        "tax_code": {"field": "customer_type", "op": "eq", "value": "business"},
+        "note": {"field": "customer_type", "op": "empty"}
+      },
+      "payload": {},
+      "visible": {"tax_code": false, "note": true}
+    },
+    {
+      "name": "a number default is the number, not its string",
+      "fields": [
+        {"name": "score", "fieldType": "number", "defaultValue": "5"},
+        {"name": "bonus", "fieldType": "text"}
+      ],
+      "conditions": {"bonus": {"field": "score", "op": "eq", "value": 5}},
+      "payload": {},
+      "visible": {"bonus": true}
+    },
+    {
+      "name": "a boolean default is the boolean, not its string",
+      "fields": [
+        {"name": "has_insurance", "fieldType": "boolean", "defaultValue": "true"},
+        {"name": "insurer", "fieldType": "text"}
+      ],
+      "conditions": {"insurer": {"field": "has_insurance", "op": "eq", "value": true}},
+      "payload": {},
+      "visible": {"insurer": true}
+    },
+    {
+      "name": "a sent false beats a true default (false is a value, not empty)",
+      "fields": [
+        {"name": "has_insurance", "fieldType": "boolean", "defaultValue": "true"},
+        {"name": "insurer", "fieldType": "text"}
+      ],
+      "conditions": {"insurer": {"field": "has_insurance", "op": "eq", "value": true}},
+      "payload": {"has_insurance": false},
+      "visible": {"insurer": false}
+    },
+    {
+      "name": "a blank required number travels as 0, and 0 is not empty",
+      "fields": [
+        {"name": "score", "fieldType": "number", "isRequired": true},
+        {"name": "why_zero", "fieldType": "text"}
+      ],
+      "conditions": {"why_zero": {"field": "score", "op": "notEmpty"}},
+      "payload": {"score": 0},
+      "visible": {"why_zero": true}
+    }
+  ]
+}

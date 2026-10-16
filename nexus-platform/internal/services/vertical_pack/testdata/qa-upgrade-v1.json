@@ -1,0 +1,71 @@
+{
+  "manifest": {
+    "name": "QA nâng cấp",
+    "slug": "qa-upgrade",
+    "version": "1.0.0",
+    "description": "Gói thử nghiệm nâng cấp vai và quyền (specs/069 L3)"
+  },
+  "entities": [
+    {
+      "name": "qa_contracts",
+      "label": "Hợp đồng",
+      "fields": [
+        {
+          "name": "title",
+          "label": "Tiêu đề",
+          "fieldType": "text",
+          "isRequired": true
+        },
+        {
+          "name": "amount",
+          "label": "Giá trị",
+          "fieldType": "number"
+        }
+      ]
+    },
+    {
+      "name": "qa_devices",
+      "label": "Thiết bị",
+      "fields": [
+        {
+          "name": "name",
+          "label": "Tên",
+          "fieldType": "text",
+          "isRequired": true
+        },
+        {
+          "name": "cost_price",
+          "label": "Giá vốn",
+          "fieldType": "number"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "name": "qa_staff",
+      "label": "Nhân viên QA",
+      "actions": [
+        {
+          "entityName": "qa_devices",
+          "action": "view",
+          "accessLevel": "all"
+        },
+        {
+          "entityName": "qa_devices",
+          "action": "edit",
+          "accessLevel": "owner"
+        }
+      ]
+    }
+  ],
+  "fieldAcls": [
+    {
+      "roleName": "qa_staff",
+      "entityName": "qa_devices",
+      "fieldName": "cost_price",
+      "canView": false,
+      "canEdit": false
+    }
+  ]
+}

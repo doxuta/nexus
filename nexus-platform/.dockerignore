@@ -1,0 +1,8 @@
+# Keep the Docker build context small.
+bin/
+.env
+.DS_Store
+docs/
+*.md
+tenant-backups/
+storage/

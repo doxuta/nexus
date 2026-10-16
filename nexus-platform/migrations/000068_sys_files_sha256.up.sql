@@ -1,0 +1,13 @@
+-- DAILY-QUEUE #54 blob-backup-restore-drill-c (specs/036 §2.5): content digest per blob, so
+-- deploy/nexus/scripts/restore-drill.sh can prove a restored attachment is byte-for-byte the
+-- uploaded one instead of only the same LENGTH (one flipped byte in a backup tar kept the drill green).
+--
+-- sha256 = lowercase hex of the stored bytes, computed while the upload streams to the backend
+-- (files.Service.Upload). NULLABLE on purpose, and it must stay that way:
+--   * rows uploaded before this migration start NULL; the server backfills them from the blob on
+--     startup (files.Service.BackfillHashes) — until then the drill checks them by size only;
+--   * deploy.sh rolls the CODE back without ever migrating down, so an older image can run against
+--     this schema and keep inserting rows it knows nothing about — those land NULL too, and the next
+--     start of a new image backfills them.
+-- Appended last (no AFTER): ADD COLUMN at the end is an INSTANT change on MySQL 8, no table rebuild.
+ALTER TABLE sys_files ADD COLUMN sha256 CHAR(64) NULL DEFAULT NULL;

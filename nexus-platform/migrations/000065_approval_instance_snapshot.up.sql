@@ -1,0 +1,26 @@
+-- APPROVAL-PINS-DEFINITION (DAILY-QUEUE #8): an instance finishes the process it STARTED under.
+--
+-- Until now the decision path (bpm.Decider.Decide) loaded the LIVE sys_approval_processes row on
+-- every approve/reject and indexed its steps array by the instance's own current_step. So while
+-- a record sat at step 2 of a 3-step process, an admin shortening that process to 2 steps made the
+-- next approval satisfy `next >= len(steps)` and terminate the instance as 'approved' — one step
+-- skipped, the outcome written onto the record, no warning anywhere. During a handover, when the
+-- processes are still being tuned, that is the normal case, not the edge case; for a finance /
+-- healthcare / tendering customer it is a compliance failure, not an inconvenience.
+--
+-- `process_snapshot` pins what the engine EXECUTES at arm time, on both arming paths (the
+-- after-commit engine and the manual "Gửi duyệt" Requester.Submit):
+--   {"steps":[{"name":"…","approverType":"user"|"role","approverId":"<uuid>","slaSeconds":N}, …],
+--    "outcome":{"statusField":"status","approvedValue":"…","rejectedValue":"…"}}   -- outcome optional
+-- The Decider walks the pinned steps and writes the pinned outcome; GET /approvals/:id serves the
+-- pinned steps as `process.steps` so the timeline and the engine cannot disagree. name / entity /
+-- trigger / is_active are NOT pinned — display context, read live. A pin also freezes references
+-- that can later vanish (a deleted approver role, a renamed outcome field): CanDecide simply never
+-- matches the deleted role (an admin can still decide or delegate that step) and applyOutcome
+-- already degrades fail-open on a refused write (logged, the decision stands).
+--
+-- NULL = the instance was armed before this column existed. No backfill on purpose: such rows keep
+-- deciding through the live process exactly as before, until they finish. New instances always
+-- carry a snapshot. Adding a nullable JSON column rewrites no existing row.
+ALTER TABLE sys_approval_instances
+    ADD COLUMN process_snapshot JSON DEFAULT NULL AFTER process_id;

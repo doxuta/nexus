@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <!-- Nexus favicon — glyph "N-node" trần (E2-IA-DESIGN-SYSTEM.md §10.2), toạ độ khớp
+       components/brand/NexusLogo.tsx::NexusMark. Màu teal accent cố định (#00807b —
+       hex của --ac light mode) vì favicon là file tĩnh, không có currentColor context. -->
+  <path d="M6 4 V20 M18 4 V20 M6 4 L18 20" stroke="#00807b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="6" cy="4" r="2.1" fill="#00807b"/>
+  <circle cx="6" cy="20" r="2.1" fill="#00807b"/>
+  <circle cx="18" cy="4" r="2.1" fill="#00807b"/>
+  <circle cx="18" cy="20" r="2.1" fill="#00807b"/>
+</svg>

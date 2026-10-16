@@ -1,0 +1,818 @@
+/* ============================================================================
+   NEXUS — Salesforce Lightning Design System (SLDS 2.264.1, BSD-3) nền giao diện.
+   Hiến pháp v1.2.0 · specs/038-slds-design-system · loop/campaign/RESEARCH-2026-09.md §1/§4.
+
+   Thứ tự layer: biến theme Tailwind < preflight (TẠM) < SLDS < base của ta < tiện ích Tailwind.
+   Preflight nằm DƯỚI SLDS: mọi thứ SLDS định nghĩa thắng nó; nó chỉ lấp chỗ SLDS để trống
+   (vd viền/nền mặc định của <button> gốc) cho màn CHƯA di trú. Gỡ dòng import preflight cùng
+   lớp ánh xạ tạm ở cổng thoát Phase 2 (specs/038 FR-013) — lúc đó SLDS là reset duy nhất.
+   Tailwind còn lại cho BỐ CỤC; màu/chữ/bo góc/đổ bóng đi qua SLDS.
+   Màu brand của SLDS chảy theo branding tenant qua postcss-slds-brand.cjs.
+   ========================================================================== */
+@layer theme, preflight, slds, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(preflight);
+@import "@salesforce-ux/design-system/assets/styles/salesforce-lightning-design-system.min.css" layer(slds);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+:root {
+  /* Font: Inter (OFL, có tnum) — RESEARCH §6.2. SLDS đọc font qua hook này. */
+  --slds-g-font-family-base: var(--font-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* ── LỚP ÁNH XẠ TẠM (specs/038 FR-013) ─────────────────────────────────────────────
+     Token "Nexus Be" cũ trỏ sang giá trị SLDS để màn CHƯA di trú vẫn dùng được trong lúc
+     chuyển tiếp. Xoá cả khối này (và mọi class bg-ac/text-fg/bg-panel/border-bd…) là CỔNG
+     THOÁT Phase 2 — SC-002: grep không còn chỗ dùng. ĐỪNG dùng các biến này ở màn mới. */
+  --ac: var(--slds-g-color-brand-base-50);
+  --ac2: var(--slds-g-color-brand-base-40);
+  --ac-on: #fff;
+  --acf: var(--ac-on);
+  --ac-hi: var(--slds-g-color-brand-base-40);
+  --acd: color-mix(in srgb, var(--slds-g-color-brand-base-50) 10%, transparent);
+  --acb: color-mix(in srgb, var(--slds-g-color-brand-base-50) 30%, transparent);
+
+  --bg: var(--slds-g-color-neutral-base-95);
+  --panel: var(--slds-g-color-neutral-base-100);
+  --panel2: var(--slds-g-color-neutral-base-95);
+  --bd: var(--slds-g-color-neutral-base-90);
+  --bd2: var(--slds-g-color-neutral-base-95);
+  --bd3: var(--slds-g-color-border-base-1);
+
+  --fg: var(--slds-g-color-neutral-base-10);
+  --mut: var(--slds-g-color-neutral-base-30);
+  --fnt: var(--slds-g-color-neutral-base-50);
+
+  --ok: var(--slds-g-color-success-base-50);
+  --okf: var(--slds-g-color-success-base-30);
+  --okd: color-mix(in srgb, var(--slds-g-color-success-base-50) 12%, transparent);
+  --okb: color-mix(in srgb, var(--slds-g-color-success-base-50) 30%, transparent);
+  --cy: var(--slds-g-color-brand-base-50);
+  --cyd: color-mix(in srgb, var(--slds-g-color-brand-base-50) 12%, transparent);
+  --wn: var(--slds-g-color-warning-base-60);
+  --wnf: var(--slds-g-color-warning-base-30);
+  --wnd: color-mix(in srgb, var(--slds-g-color-warning-base-60) 14%, transparent);
+  --dg: var(--slds-g-color-error-base-40);
+  --dgf: var(--slds-g-color-error-base-30);
+  --dgd: color-mix(in srgb, var(--slds-g-color-error-base-40) 10%, transparent);
+  --dgb: color-mix(in srgb, var(--slds-g-color-error-base-40) 30%, transparent);
+  --neu: var(--slds-g-color-neutral-base-60);
+  --neud: color-mix(in srgb, var(--slds-g-color-neutral-base-60) 13%, transparent);
+  --star: var(--slds-g-color-warning-base-70);
+  --sk: var(--slds-g-color-neutral-base-90);
+
+  --panel-studio: var(--slds-g-color-neutral-base-95);
+  --panel2-studio: var(--slds-g-color-neutral-base-100);
+
+  /* Biểu đồ: không có blueprint chart (RESEARCH §5.0) — bảng màu lấy từ palette hook SLDS. */
+  --chart-1: var(--slds-g-color-palette-blue-50, #0176d3);
+  --chart-2: var(--slds-g-color-palette-teal-60, #0b827c);
+  --chart-3: var(--slds-g-color-palette-orange-60, #dd7a01);
+  --chart-4: var(--slds-g-color-palette-violet-50, #9050e9);
+  --chart-5: var(--slds-g-color-palette-green-60, #2e844a);
+  --chart-6: var(--slds-g-color-palette-pink-50, #d83a79);
+  --chart-7: var(--slds-g-color-palette-cloud-blue-50, #0d9dda);
+  --chart-8: var(--slds-g-color-palette-red-50, #ea001e);
+  --chart-grid: var(--slds-g-color-neutral-base-90);
+  --chart-axis: var(--slds-g-color-neutral-base-50);
+  --chart-ref: var(--slds-g-color-neutral-base-60);
+
+  --dur-1: 120ms;
+  --dur-2: 180ms;
+  --dur-3: 240ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+
+  --row-compact: 32px;
+  --row-cozy: 40px;
+  --row-comfy: 48px;
+
+  --r-input: var(--slds-g-radius-border-2);
+  --r-card: var(--slds-g-radius-border-2);
+  --r-pill: 15rem;
+  --r-badge: var(--slds-g-radius-border-2);
+
+  --sh-card: var(--slds-g-shadow-1);
+  --sh-pop: var(--slds-g-shadow-2);
+  --sh-drawer: var(--slds-g-shadow-4);
+  --sh-dialog: var(--slds-g-shadow-4);
+}
+
+/* — Map token → Tailwind v4 utilities (inline → utility resolve biến lúc runtime nên
+     class .theme-* đổi được toàn hệ). Cho ra bg-bg / bg-panel / text-fg / border-bd … — */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel2: var(--panel2);
+  --color-bd: var(--bd);
+  --color-bd2: var(--bd2);
+  --color-bd3: var(--bd3);
+  --color-fg: var(--fg);
+  --color-mut: var(--mut);
+  --color-fnt: var(--fnt);
+
+  --color-ac: var(--ac);
+  --color-ac2: var(--ac2);
+  --color-acf: var(--acf);
+  --color-ac-on: var(--ac-on);
+  --color-ac-hi: var(--ac-hi);
+  --color-acd: var(--acd);
+  --color-acb: var(--acb);
+
+  --color-ok: var(--ok);
+  --color-okf: var(--okf);
+  --color-okd: var(--okd);
+  --color-okb: var(--okb);
+  --color-cy: var(--cy);
+  --color-cyd: var(--cyd);
+  --color-wn: var(--wn);
+  --color-wnf: var(--wnf);
+  --color-wnd: var(--wnd);
+  --color-dg: var(--dg);
+  --color-dgf: var(--dgf);
+  --color-dgd: var(--dgd);
+  --color-dgb: var(--dgb);
+  --color-neu: var(--neu);
+  --color-neud: var(--neud);
+  --color-star: var(--star);
+  --color-sk: var(--sk);
+
+  /* W1a dataviz — cho ra bg-chart-1 / text-chart-axis / stroke qua var(--chart-*) */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-7: var(--chart-7);
+  --color-chart-8: var(--chart-8);
+  --color-chart-grid: var(--chart-grid);
+  --color-chart-axis: var(--chart-axis);
+  --color-chart-ref: var(--chart-ref);
+
+  /* W1a motion — GHI ĐÈ ease-out mặc định của Tailwind bằng curve Nexus (mũ, không bounce).
+     Literal (không var(--ease-out)) để né self-reference với raw token cùng tên ở :root —
+     GIỮ ĐỒNG BỘ tay với --ease-out phía trên nếu đổi curve.
+     duration-* named: duration-nx1/nx2/nx3 (né trùng bare-value duration-<ms>) */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --transition-duration-nx1: var(--dur-1);
+  --transition-duration-nx2: var(--dur-2);
+  --transition-duration-nx3: var(--dur-3);
+
+  /* W1a density — h-row-compact / h-row-cozy / h-row-comfy (spacing namespace) */
+  --spacing-row-compact: var(--row-compact);
+  --spacing-row-cozy: var(--row-cozy);
+  --spacing-row-comfy: var(--row-comfy);
+
+  --radius-input: var(--r-input);
+  --radius-card: var(--r-card);
+  --radius-pill: var(--r-pill);
+  --radius-badge: var(--r-badge);
+
+  --shadow-card: var(--sh-card);
+  --shadow-pop: var(--sh-pop);
+  --shadow-drawer: var(--sh-drawer);
+  --shadow-dialog: var(--sh-dialog);
+
+  --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: Consolas, Menlo, Monaco, Courier, monospace;
+  --font-serif: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+
+  /* — Type-scale (E2 §4.1 — codemod nợ Phase-5 specs/010 §7, 2026-09-01) —
+     Scale SEMANTIC (spec): cỡ chữ MỚI chỉ được dùng 6 token này. Cố ý KHÔNG khai
+     companion --text-*--line-height: utility chỉ emit font-size, leading kế thừa/
+     leading-* như trước — codemod đổi cách viết, không đổi render. — */
+  --text-display: 30px;
+  --text-h1: 22px;
+  --text-title: 15px;
+  --text-body: 13px;
+  --text-sub: 12px;
+  --text-caption: 11px;
+
+  /* — Interim px-token: codify 21 cỡ de-facto còn lại của codemod text-[Npx]
+     (nửa-pixel là chính — ép về scale semantic sẽ ĐỔI RENDER nên để một design-pass
+     riêng quyết; nợ hội tụ ghi tại specs/010-app-container/spec.md §7).
+     KHÔNG thêm token mới vào danh sách này — test/type-scale-gate.test.ts pin đúng
+     tập token + cấm text-[Npx] arbitrary trong source. — */
+  --text-9px: 9px; /* dưới min 10px của spec — hội tụ lên caption trong design-pass */
+  --text-9-5px: 9.5px;
+  --text-10px: 10px;
+  --text-10-5px: 10.5px;
+  --text-11-5px: 11.5px;
+  --text-12-5px: 12.5px;
+  --text-13-5px: 13.5px;
+  --text-14px: 14px;
+  --text-14-5px: 14.5px;
+  --text-16px: 16px;
+  --text-17px: 17px;
+  --text-18px: 18px;
+  --text-19px: 19px;
+  --text-20px: 20px;
+  --text-21px: 21px;
+  --text-24px: 24px;
+  --text-26px: 26px;
+  --text-28px: 28px;
+  --text-32px: 32px;
+  --text-34px: 34px;
+  --text-48px: 48px;
+}
+
+/* — W3 two-face modifier (plan §2.1): gắn .face-studio lên ROOT của chrome Studio
+   (sidebar) — remap --panel/--panel2 trong subtree đó sang cặp *-studio. Token-only,
+   KHÔNG fork component: mọi bg-panel/bg-panel2 bên trong resolve var tại chỗ dùng nên
+   tự đổi tông; acd / bd / chữ giữ nguyên semantics. — */
+.face-studio {
+  --panel: var(--panel-studio);
+  --panel2: var(--panel2-studio);
+}
+
+/* — Utility: focus-visible ring shortcut — maps to Tailwind ring classes used in components — */
+@layer utilities {
+  .ring-focus {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--acd), 0 0 0 1px var(--ac);
+  }
+}
+
+/* — Base — SLDS đã đặt màu/chữ cho body; ta chỉ nối nền trang và cỡ chữ gốc của Lightning. */
+body {
+  background: var(--slds-g-color-neutral-base-95);
+  color: var(--slds-g-color-neutral-base-10);
+  font-family: var(--slds-g-font-family-base);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Focus ring chuẩn (teal accent ring, token --ac/--acd) — a11y. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--acd), 0 0 0 1px var(--ac);
+  border-color: var(--ac);
+}
+
+::selection {
+  background: var(--acd);
+}
+
+/* Scrollbar mảnh, tông trung tính. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bd3) transparent;
+}
+
+/* HelpHint tooltip — fade-in nhẹ (E2-IA-DESIGN-SYSTEM.md §11.3). Không cần lặp lại rule
+   reduced-motion ở đây — block @media bên dưới đã ép animation-duration:0.001ms toàn cục.
+   W1a: retime qua motion token (--dur-1/--ease-out) thay số cứng. */
+@keyframes nx-tooltip-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.nx-tooltip-in {
+  animation: nx-tooltip-in var(--dur-1) var(--ease-out);
+}
+
+/* — W1a Nexus Kit overlay motion (plan §4.3): overlay 180ms fade + rise 2px; entrance-only
+   (exit tức thì — tiết chế, không đợi animation khi đóng). Reduced-motion: block @media cuối
+   file đã ép duration ~0 toàn cục. Keyframe dùng `transform` — KHÔNG đụng `translate`
+   (Tailwind v4 center bằng translate property riêng nên hai thứ compose sạch). — */
+@keyframes nx-rise-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.nx-pop-in {
+  animation: nx-rise-in var(--dur-2) var(--ease-out);
+}
+.nx-overlay-in {
+  animation: nx-tooltip-in var(--dur-2) var(--ease-out);
+}
+
+/* Motion tiết chế — tôn trọng prefers-reduced-motion (luật anti-slop). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* — Lucide glyphs inside SLDS icon containers (components/slds/Icon.tsx) —
+   SLDS paints `.slds-icon` with `fill`; Lucide is stroke-drawn, so fill would turn it into a blob.
+   Tiles (standard/custom/action colour squares) carry a white glyph with breathing room, the way
+   the SLDS object icons sit inside their squares. */
+.nx-lucide {
+  fill: none;
+  stroke: currentColor;
+}
+.nx-lucide_tile {
+  color: var(--slds-g-color-neutral-base-100, #fff);
+  padding: 18%;
+}
+
+/* — slds glue: overlays — */
+/* === components/slds overlays (Menu/Popover/Tooltip/Modal/Toast/Panel) — glue for app/globals.css ===
+   Append this block, as is, to the END of app/globals.css in the merge commit:
+   - UNLAYERED (outside any @layer), otherwise `revert-layer` stops working;
+   - AFTER `:where(button, a, input, select, textarea, [tabindex]):focus-visible` and AFTER the
+     `.nx-lucide` / `.nx-lucide_tile` rules (same specificity, so source order decides).
+   Then re-shoot the /dev/kit menus (#kit-menu) to confirm. */
+
+/* 1. Tailwind preflight `svg { display: block }` pushes a Lucide glyph inside a menu item
+      (icon and label share one span[title]) onto its own line. The blueprint keeps the svg inline. */
+.slds-dropdown__item svg.nx-lucide { display: inline-block; }
+
+/* 2. The unlayered Nexus focus ring (:where(button, a, …):focus-visible) beats layer(slds), which hides
+      SLDS's own focus styles (the white+blue inset on menu items, the focus ring on SLDS buttons) and
+      rings containers Radix focuses by script (.slds-dropdown[role=menu], .slds-modal, .slds-popover
+      are tabindex=-1; Chrome matches :focus-visible there even on a mouse open — the blueprints show
+      no ring). Hand focus back to SLDS on SLDS parts only. :where() keeps the original rule's specificity;
+      coming later in the file makes it win. Do NOT widen this to [tabindex="-1"] or drop `outline`:
+      non-SLDS screens keep the Nexus ring. */
+:where(.slds-dropdown, .slds-dropdown__item > a, .slds-button, .slds-popover, .slds-modal, .slds-modal__content):focus-visible {
+  box-shadow: revert-layer;
+  border-color: revert-layer;
+}
+
+/* 3. SLDS colours icons with `fill: var(--slds-c-icon-color-foreground)`: grey for text-default,
+      orange/red/green for the warning/error/success tones, currentColor under .slds-current-color.
+      Lucide draws with stroke:currentColor, so without this every utility glyph takes the text colour.
+      Mirror the same variable into `color`. Tiles keep their white glyph via .nx-lucide_tile.
+      The two context rules copy the other places SLDS sets fill directly on icons:
+      `.slds-popover_dark .slds-icon-text-default` (white) and
+      `.slds-dropdown__item>a[aria-disabled=true] .slds-icon` (Radix marks disabled items with
+      aria-disabled, never .slds-is-disabled). */
+.nx-lucide.slds-icon:not(.nx-lucide_tile) { color: var(--slds-c-icon-color-foreground, currentColor); }
+.slds-popover_dark .nx-lucide.slds-icon-text-default { color: var(--slds-g-color-neutral-base-100, #fff); }
+.slds-dropdown__item > a[aria-disabled="true"] .nx-lucide.slds-icon { color: var(--slds-g-color-neutral-base-80, #c9c9c9); }
+
+/* A button that is aria-disabled (stays focusable so it can explain itself) must look unavailable too; SLDS only styles [disabled]. */
+.slds-button[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+
+/* 4. The overlays are not portaled (they must stay above an open Modal), so a bubble inherits the text
+      settings of wherever its trigger sits. `.slds-table td { white-space: nowrap }` kept a tooltip in
+      a table cell on one line, past its 20rem max-width and off the screen (the /admin/jobs "Không gửi
+      lại tay được" reason). SLDS renders these on <body>, where white-space is normal: restore that. */
+.slds-popover { white-space: normal; }
+
+/* 5. Same cause: SLDS gives `.slds-table_fixed-layout tbody` a `transform: translateZ(0)`, which makes the
+      tbody the containing block of Radix's `position: fixed` popper. A tooltip or menu in a DataTable
+      row was then clipped by whatever scroller wraps the table (/admin/jobs' slds-scrollable_x cut the
+      first row's tooltip in half) instead of floating over the page. Drop the compositing hint so
+      fixed means the viewport again, as it does for SLDS's own <body>-level overlays. */
+.slds-table_fixed-layout tbody { transform: none; }
+
+/* — slds glue: form-inputs — */
+/* === components/slds form inputs (FormElement/Input/Textarea/Select/Checkbox/Toggle/RadioGroup) ===
+   UNLAYERED except (1); keep this block AFTER the overlays glue above (source order decides ties). */
+
+/* 1. Tailwind preflight (layer below SLDS) sets svg{display:block}. SLDS assumes the UA default
+      (inline), so an icon inside a text run — radio-button-group "with icons" (.slds-radio_faux),
+      and likewise buttons with icon + label — drops onto its own line. Inside .slds-button
+      (inline-flex) it is harmless. */
+@layer base {
+  svg.slds-button__icon { display: inline; }
+}
+
+/* 2. The legacy UNLAYERED rule `:where(button, a, input, select, textarea, [tabindex]):focus-visible
+      { outline:none; box-shadow:…; border-color:… }` beats every LAYERED SLDS :focus rule, so SLDS
+      form controls show the old Nexus ring instead of SLDS focus. Hand focus styling back to the slds
+      layer (an .slds-input and the input clear .slds-button then get exactly the pure-SLDS focus,
+      box-shadow 0 0 0 2px rgb(11,92,171)). Delete together with the legacy rule at the Phase 2 exit. */
+.slds-input:focus-visible,
+.slds-textarea:focus-visible,
+.slds-select:focus-visible,
+.slds-button:focus-visible {
+  outline: revert-layer;
+  box-shadow: revert-layer;
+  border-color: revert-layer;
+}
+
+/* 3. ADAPTED AT MERGE — do not "restore" the slice's original text. The slice (built before the
+      overlays glue existed) changed `.nx-lucide { stroke: var(--slds-c-icon-color-foreground,
+      currentColor) }`. On this tree that would (a) disable the overlays context rules above, which
+      colour glyphs through `color` (dark popover white, disabled menu item grey), and (b) leave the
+      errored input icon grey, because overlays rule 3 already sets `color: hook` on every
+      `.nx-lucide.slds-icon`. So keep stroke:currentColor and extend the overlays `color` mirror:
+      - `.slds-button__icon` glyphs (input clear button, record-detail pencil) take the SLDS icon
+        hook exactly as SLDS's `.slds-button__icon { fill: var(--slds-c-icon-color-foreground,
+        currentColor) }` does;
+      - an errored field's input icon falls back to SLDS's own `.slds-has-error .slds-input__icon
+        { color }` (revert-layer). Same specificity as overlays rule 3, so it must stay after it. */
+.nx-lucide.slds-button__icon { color: var(--slds-c-icon-color-foreground, currentColor); }
+.slds-has-error .slds-input__icon.nx-lucide { color: revert-layer; }
+
+/* — slds glue: buttons — */
+/* === components/slds buttons (Button/ButtonIcon/ButtonGroup/Badge/Avatar/Pill/Spinner/ProgressBar) ===
+   UNLAYERED; keep this block AFTER the overlays and form-inputs glue above (source order decides ties).
+
+   ADAPTED AT MERGE — do not "restore" the slice's dropped rule. The slice also shipped
+   `.nx-lucide.slds-icon { stroke: var(--slds-c-icon-color-foreground, currentColor) }` to colour Icon
+   tones (Pill error glyph, /dev/kit warning/error/success). On this tree overlays rule 3 already mirrors
+   that hook into `color` on `.nx-lucide.slds-icon:not(.nx-lucide_tile)` and stroke stays currentColor,
+   so the tones are already right; reading the hook into `stroke` directly would bypass the overlays
+   context rules that colour through `color` (dark popover white, disabled menu item grey) — the same
+   regression the form-inputs glue (rule 3) warns about. Only the hint rules below were kept, verbatim. */
+
+/* Button-icon hint glyphs (ButtonIcon `hint`): SLDS dims them with `fill` on .slds-button__icon_hint /
+   _inverse-hint and restores on .slds-hint-parent hover/focus. These are the SLDS 2.264.1 rules copied
+   verbatim with fill changed to stroke, in SLDS source order (button state restore, then hint-parent).
+   Inject-tested against the blueprint: rest #747474, parent hover rgb(92,92,92), same as the reference. */
+.nx-lucide.slds-button__icon_hint {
+  stroke: var(--slds-g-color-neutral-base-50, #aeaeae);
+}
+.nx-lucide.slds-button__icon_inverse-hint {
+  stroke: var(--slds-g-color-neutral-100-opacity-50, rgba(255, 255, 255, 0.5));
+}
+.slds-button:is(:hover, :focus, :active, :disabled) .nx-lucide:is(.slds-button__icon_hint, .slds-button__icon_inverse-hint) {
+  stroke: currentColor;
+}
+.slds-hint-parent:is(:hover, :focus) .nx-lucide.slds-button__icon_hint {
+  stroke: var(--slds-g-color-neutral-base-40, #747474);
+}
+.slds-hint-parent:is(:hover, :focus) .nx-lucide.slds-button__icon_inverse-hint {
+  stroke: var(--slds-g-color-neutral-100-opacity-75, rgba(255, 255, 255, 0.75));
+}
+.slds-hint-parent:is(:hover, :focus) .slds-button:disabled .nx-lucide.slds-button__icon_hint {
+  stroke: currentColor;
+}
+
+/* — slds glue: feedback-content — */
+/* === components/slds feedback & content (Alert/ScopedNotification/EmptyState/ProgressIndicator) ===
+   Append AFTER the buttons glue (end of app/globals.css). Rules 2 and 3 are UNLAYERED; rule 2 ties
+   overlays rule 3 (`.nx-lucide.slds-icon:not(.nx-lucide_tile)`, specificity 0,3,0), so it must come
+   after it. After merging, re-shoot #kit-scoped-notification, #kit-empty-state, #kit-alert and
+   #kit-progress-indicator-vertical on /dev/kit. */
+
+/* 1. Tailwind preflight svg{display:block} again. The blueprints keep these svgs inline:
+      - .slds-scoped-notification: with a block svg, the inline-block icon container sits on the
+        text baseline and the figure grows to 30px instead of 24px. The row becomes 54px against the
+        blueprint's 48px (measured on the rendered blueprint).
+      - .slds-illustration__svg: SLDS centres it with text-align:center, which needs inline. As a
+        block (width 100%, max 300px) the EmptyState glyph sat off-centre.
+      This is scoped on purpose. A global `svg.slds-icon{display:inline}` shifted 30 other kit icons
+      (page-structure card header, vertical tabs, path link container 16->20), and those belong to
+      other owners. */
+@layer base {
+  .slds-scoped-notification svg.slds-icon,
+  svg.slds-illustration__svg { display: inline; }
+}
+
+/* 2. SLDS paints icons on a warning background with a direct `fill: neutral-30`
+      (`.slds-theme_warning .slds-icon/.slds-button__icon`, `.slds-alert_warning …`). The fill
+      bypasses the icon hook, so the overlays `color` mirror never sees it: Lucide glyphs came out
+      near-black (the icon) and grey-50 (the close X). This mirrors the SLDS rule into `color`. It
+      also fixes the already-merged Toast warning glyph. */
+:is(.slds-alert_warning, .slds-theme_warning) .nx-lucide:is(.slds-icon, .slds-button__icon) {
+  color: var(--slds-g-color-neutral-base-30, rgb(81, 79, 77));
+}
+
+/* 3. Vertical progress indicator: SLDS colours completed checks with `fill` on the svg (brand-60)
+      and green for `.slds-progress__marker_icon-success`. Without this the "green success check"
+      variant stays blue. Error markers need nothing, because currentColor is already error red. */
+.slds-progress_vertical .slds-progress__item.slds-is-completed .slds-progress__marker_icon .nx-lucide {
+  color: var(--slds-g-color-brand-base-60, rgb(26, 185, 255));
+}
+.slds-progress_vertical .slds-progress__item.slds-is-completed .slds-progress__marker_icon-success .nx-lucide {
+  color: var(--slds-g-color-success-base-50, rgb(46, 132, 74));
+}
+
+/* — slds glue: shell-customer — */
+/* — slds glue: global header — */
+/* Pinned favourites star (components/slds/shell/GlobalHeader.tsx). SLDS fills its sprite star white
+   (`.slds-button_icon-border.slds-is-selected .slds-button__icon { fill: #fff }`), but
+   `.slds-global-actions__item .slds-button_icon` (grey, same specificity, later in the file) wins `color`
+   over the selected state and `.nx-lucide` forces `fill: none`, so the Lucide star stays a grey outline on
+   the dark-blue selected button (only turning white on hover/focus). Paint it white and filled.
+   Unlayered, AFTER the `.nx-lucide` rule. Re-shoot #kit-global-header-admin to confirm. */
+.slds-global-actions__favorites-action.slds-is-selected .nx-lucide { color: var(--slds-g-color-neutral-base-100, #fff); fill: currentColor; }
+
+/* — slds glue: data-table — */
+/* === components/slds DataTable / TreeGrid — UNLAYERED; append after the buttons glue. === */
+
+/* 1. The legacy unlayered `:where(button, a, input, select, textarea, [tabindex]):focus-visible` ring beats
+      layer(slds): it paints the Nexus ring on grid cells (th/td[tabindex]; tree-grid tr[tabindex]),
+      header sort links and in-cell links, hiding SLDS's own grid focus (.slds-table th:focus /
+      [role=gridcell]:focus inset glow, .slds-th__action:focus, .slds-cell-edit.slds-has-focus a:focus).
+      Hand focus styling back to SLDS inside tables only. Higher specificity than the legacy rule, so
+      source order does not matter. */
+:where(.slds-table) :is(th, td, tr, a):focus-visible {
+  outline: revert-layer;
+  box-shadow: revert-layer;
+  border-color: revert-layer;
+}
+
+/* 2. SLDS colours the sort arrow with `fill` on hover/focus (and grey when sorted); Lucide strokes with
+      currentColor, which overlays glue rule 3 maps to the icon hook (grey). Mirror the hover/focus
+      blue exactly as SLDS 2.264.1 writes it. */
+.slds-is-sortable .slds-th__action:is(:hover, :focus) .nx-lucide.slds-is-sortable__icon,
+.slds-is-sortable.slds-has-focus .slds-th__action .nx-lucide.slds-is-sortable__icon {
+  color: rgb(1, 118, 211);
+}
+
+/* 3. Inline edit: SLDS paints the pencil of the focused cell near-black with `fill`
+      (.slds-hint-parent .slds-cell-edit.slds-has-focus .slds-button__icon_edit). The buttons glue
+      leaves a Lucide pencil in the grey hint stroke there (the focused element is the td, not the
+      tr, so .slds-hint-parent:focus never matches). Same colour, as stroke; outranks the buttons
+      glue hint rules (0,4,0) the way SLDS's rule outranks its own hint fills. */
+.slds-hint-parent .slds-cell-edit.slds-has-focus .nx-lucide.slds-button__icon_edit {
+  stroke: var(--slds-g-color-neutral-base-10, rgb(24, 24, 24));
+}
+
+/* — slds glue: pickers — */
+/* The legacy UNLAYERED `:where(button, a, input, select, textarea, [tabindex]):focus-visible` ring lands
+   on the two picker parts that SLDS focuses and styles itself: the select-only combobox trigger
+   (div.slds-input_faux[tabindex=0] — SLDS: .slds-combobox__input:focus glow) and the datepicker day
+   cell (td[tabindex] — SLDS: td:focus { outline:0 } + td:focus > .slds-day inset ring). Hand both back
+   to the slds layer, like the form-inputs glue does for .slds-input. Keep AFTER that legacy rule
+   (and after the form-inputs glue block); UNLAYERED so revert-layer works.
+   Verified by injecting it into the live /dev/kit page: without it the faux trigger and the focused
+   day get the square Nexus ring; with it they show the pure-SLDS glow / circle ring. */
+.slds-input_faux:focus-visible,
+.slds-datepicker__month td:focus-visible {
+  outline: revert-layer;
+  box-shadow: revert-layer;
+  border-color: revert-layer;
+}
+
+/* — slds glue: c10-auth — */
+/* specs/038 T033 (c10-auth), BLOCKING for merge: must land in the SAME merge/push as branch
+   worktree-wf_76784bcd-29e-1 (components/screens/AuthShell.tsx names this dependency).
+   The SLDS brand band WITHOUT its banner image.
+   `.slds-brand-band:before` stacks SLDS's banner-brand-default.png (assets/images, CC BY-ND 4.0,
+   THIRD_PARTY_NOTICES.md "Not used", campaign D3) over its gradient. Keep only the gradient. Its
+   #014486 goes through postcss-slds-brand.cjs, so the band follows tenant branding. This rule is
+   global on purpose: unlayered, it also beats the layered _group/_user image rules, so no banner
+   image is DISPLAYED wherever a band is used. (The PNGs are still EMITTED into .next/static/media
+   by the global SLDS CSS import. That is pre-existing and independent of this glue.) */
+.slds-brand-band:before {
+  background-image: linear-gradient(to top, rgba(1, 68, 134, 0) 0, #014486);
+}
+/* Auth frame page surface = the brand-band blueprint wrapper's #eef4ff (brand-95, tenant-following
+   through the same PostCSS pass), which the band's ::after fade blends into. */
+.nx-auth-band {
+  background-color: #eef4ff;
+}
+
+/* — slds glue: builders — */
+/* — slds glue: builders (visual picker) — UNLAYERED, next to the overlays glue rule 3 (after the .nx-lucide / .nx-lucide_tile rules). Selector specificity (0,5,2) beats `.nx-lucide.slds-icon:not(.nx-lucide_tile)` and `.nx-lucide_tile` regardless of order. Keep in sync with the GREY selector in components/slds/VisualPicker.test.tsx. */
+/* SLDS greys a disabled visual-picker option's glyph with `.slds-visual-picker input[disabled] ~ label .slds-visual-picker__figure .slds-icon { fill: neutral-base-80 }`. Lucide draws with stroke:currentColor and fill:none, so mirror it into `color` — utility glyphs, object tiles and the selected check alike, as SLDS does for sprite icons. */
+.slds-visual-picker input[disabled] ~ label .slds-visual-picker__figure .nx-lucide.slds-icon { color: var(--slds-g-color-neutral-base-80, #c9c9c9); }
+
+/* — slds glue: s1-studio-shell — */
+/* Studio giữ dải brand SLDS gốc, không nhuộm màu tenant (contracts/shell.md "Studio KHÔNG nhuộm màu tenant").
+   Lý do: lib/branding.ts ghi dải brand của tenant INLINE lên <html> (--slds-r-color-brand-N), nên dải này áp lên cả Studio.
+   Khối dưới khai báo lại từng hook -r- đúng bằng literal gốc của SLDS 2.264.1 (cùng bảng BRAND trong postcss-slds-brand.cjs; plugin bỏ qua prop --slds-r-color-brand-* nên literal giữ nguyên).
+   Rule đặt trên chính <html>, là nơi SLDS khai --slds-g-color-brand-base-* (:where(html)), nên các hook g cũng tính lại về giá trị gốc.
+   Không dùng `initial`: g-base-45/55 = var(--slds-r-color-brand-45/55) không có fallback, gặp `initial` là chết.
+   !important thắng khai báo inline. :has() phủ cả overlay được portal ra ngoài (modal, toast) của trang Studio. Rời Studio thì :has() hết khớp, màu tenant quay lại.
+   app/studio/layout.tsx gắn .nx-face-studio lên root.
+   Đã chứng minh bằng puppeteer, tenant accent #c80000: builder header rgb(3,45,96), nút brand rgb(1,118,211), --ac rgb(1,118,211), cả 14 hook g khớp gốc.
+   Không phải keo UNLAYERED đặc biệt; để cuối globals.css. */
+html:has(.nx-face-studio) {
+  --slds-r-color-brand-5: #000310 !important;
+  --slds-r-color-brand-10: #001639 !important;
+  --slds-r-color-brand-15: #03234d !important;
+  --slds-r-color-brand-20: #032d60 !important;
+  --slds-r-color-brand-30: #014486 !important;
+  --slds-r-color-brand-35: #044f98 !important;
+  --slds-r-color-brand-40: #0b5cab !important;
+  --slds-r-color-brand-45: #0469c1 !important;
+  --slds-r-color-brand-50: #0176d3 !important;
+  --slds-r-color-brand-55: #0684ef !important;
+  --slds-r-color-brand-60: #1b96ff !important;
+  --slds-r-color-brand-65: #57a3fd !important;
+  --slds-r-color-brand-70: #78b0fd !important;
+  --slds-r-color-brand-80: #aacbff !important;
+  --slds-r-color-brand-85: #c2d8ff !important;
+  --slds-r-color-brand-90: #d8e6fe !important;
+  --slds-r-color-brand-95: #eef4ff !important;
+}
+
+/* — slds glue: u0-studio-tokens — */
+/* specs/073 FR-001..FR-003 (lát u0-nen-token), loop/campaign/STUDIO-UI-ARCHITECTURE-2026-09-30.md §4.1/4.2.
+   MỘT khối keo duy nhất cho giao diện Studio; chỉ GÁN GIÁ TRỊ cho hook SLDS (không mã màu viết tay).
+   Danh mục selector là danh sách ĐÓNG (test/studio-token-layer.test.ts): html:has(.nx-face-studio), .nx-face-studio,
+   .nx-tabs-zone, .nx-path-steps, .nx-proposed, .nx-status*, .nx-dot*, .nx-lede, .nx-face-customer. Thêm class keo
+   mới thì sửa kiến trúc UI trước.
+   Hook khai ở html:has(.nx-face-studio) (không ở .nx-face-studio): hook là custom property, kế thừa xuống mọi con
+   của <html>, kể cả Modal/Prompt/toast portal ra <body> ngoài vỏ Studio. KHÔNG khai font-size trên <html> (đổi gốc rem);
+   cỡ thân khai ở "html:has(...) body".
+   Khối unlayered, nằm SAU khối s1-studio-shell: !important ngang nhau thì khối sau thắng (brand 40-95 sang electric-blue,
+   bậc 5-35 giữ navy gốc: thanh builder header navy không đổi).
+   .nx-face-customer (khung xem màn khách) trả mọi thứ về gốc: hook c = initial (rơi về fallback của SLDS), hook g khai
+   lại giá trị gốc, tiêu đề dùng revert-layer (khối này unlayered nên revert-layer lùi về layer slds/base đúng giá trị gốc).
+   Dải brand của khách do style inline brandScopeStyle() của CustomerPreviewFrame đặt, không phải khối này.
+   Verified: scripts/studio-token-parity.mjs (Chrome thật) + /dev/kit mục Studio (kể cả probe Path mode="steps" cho .nx-path-steps). */
+html:has(.nx-face-studio) {
+  --slds-r-color-brand-40: var(--slds-g-color-palette-electric-blue-40) !important;
+  --slds-r-color-brand-45: var(--slds-g-color-palette-electric-blue-40) !important;
+  --slds-r-color-brand-50: var(--slds-g-color-palette-electric-blue-50) !important;
+  --slds-r-color-brand-55: var(--slds-g-color-palette-electric-blue-60) !important;
+  --slds-r-color-brand-60: var(--slds-g-color-palette-electric-blue-60) !important;
+  --slds-r-color-brand-65: var(--slds-g-color-palette-electric-blue-65) !important;
+  --slds-r-color-brand-70: var(--slds-g-color-palette-electric-blue-70) !important;
+  --slds-r-color-brand-80: var(--slds-g-color-palette-electric-blue-80) !important;
+  --slds-r-color-brand-85: var(--slds-g-color-palette-electric-blue-80) !important;
+  --slds-r-color-brand-90: var(--slds-g-color-palette-electric-blue-90) !important;
+  --slds-r-color-brand-95: var(--slds-g-color-palette-electric-blue-95) !important;
+
+  --slds-g-color-border-base-1: var(--slds-g-color-neutral-base-90);
+  --slds-c-card-color-border: var(--slds-g-color-neutral-base-90);
+  --slds-c-card-radius-border: var(--slds-g-radius-border-3);
+  --slds-c-modal-radius-border: var(--slds-g-radius-border-3);
+  --slds-c-input-radius-border: var(--slds-g-radius-border-3);
+  --slds-c-button-radius-border: var(--slds-g-radius-border-pill);
+  --slds-c-button-line-height: var(--slds-g-sizing-9);
+  --slds-c-tabs-item-color-border-active: var(--slds-g-color-brand-base-50);
+  --slds-c-tabs-list-color-border: var(--slds-g-color-neutral-base-90);
+  /* FR-019d: sticky header + strips set --nx-sticky-stack (T057); 0 until then. Measured 2026-10-14: no sticky top strip exists (header in flow, ProjectFrame not sticky), so 0 is correct; wire the var when one lands. */
+  scroll-padding-top: var(--nx-sticky-stack, 0px);
+}
+html:has(.nx-face-studio) body {
+  font-size: var(--slds-g-font-scale-1);
+}
+html:has(.nx-face-studio) .slds-text-heading_large {
+  font-weight: var(--slds-g-font-weight-7);
+}
+html:has(.nx-face-studio) .slds-text-heading_medium,
+html:has(.nx-face-studio) .slds-text-heading_small {
+  font-weight: var(--slds-g-font-weight-6);
+}
+
+/* Tab cao 48px chỉ ở ba khu và tab con của khung dự án (không phải mọi Tabs trong Studio). */
+.nx-tabs-zone {
+  --slds-c-tabs-item-sizing-height: var(--slds-g-sizing-10);
+  --slds-c-tabs-item-line-height: var(--slds-g-sizing-10);
+}
+
+/* Thanh bước: bước đủ = nền xanh nhạt, không phải khối #3ba755 viết cứng của SLDS. Bước đang mở giữ slds-is-current/active (navy). */
+.nx-path-steps .slds-is-complete,
+.nx-path-steps .slds-is-complete:before,
+.nx-path-steps .slds-is-complete:after {
+  background: var(--slds-g-color-palette-green-95);
+}
+.nx-path-steps .slds-is-complete:hover,
+.nx-path-steps .slds-is-complete:hover:before,
+.nx-path-steps .slds-is-complete:hover:after {
+  background: var(--slds-g-color-palette-green-90);
+}
+.nx-path-steps .slds-is-complete .slds-path__link {
+  color: var(--slds-g-color-neutral-base-10);
+}
+.nx-path-steps .slds-is-complete .slds-path__stage {
+  color: var(--slds-g-color-success-base-50);
+}
+
+/* Đề xuất của trợ lý: nền tím nhạt, viền trong 2px. */
+.nx-proposed {
+  background: var(--slds-g-color-palette-purple-95);
+  box-shadow: inset 0 0 0 2px var(--slds-g-color-palette-purple-40);
+  border-radius: var(--slds-g-radius-border-3);
+}
+
+/* Nhãn trạng thái dạng chữ (không Badge/Pill). Mọi tông >= 4,5:1 trên neutral-base-95 và nền thẻ; _success dùng -40
+   (success-base-50 chỉ 4,19:1 trên neutral-base-95: kiến trúc UI 4.1 cũ trượt, spec FR-006). */
+.nx-status {
+  font-weight: var(--slds-g-font-weight-6);
+}
+.nx-status_success {
+  color: var(--slds-g-color-success-base-40);
+}
+.nx-status_error {
+  color: var(--slds-g-color-error-base-40);
+}
+.nx-status_warn {
+  color: var(--slds-g-color-warning-base-40);
+}
+.nx-status_weak {
+  color: var(--slds-g-color-neutral-base-40);
+}
+.nx-status_proposed {
+  color: var(--slds-g-color-palette-purple-40);
+}
+
+/* Chấm mức độ trên nền navy. */
+.nx-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--slds-g-radius-border-pill);
+}
+.nx-dot_error {
+  background: var(--slds-g-color-palette-red-70);
+}
+.nx-dot_warning {
+  background: var(--slds-g-color-palette-yellow-80);
+}
+.nx-dot_info {
+  background: var(--slds-g-color-palette-electric-blue-80);
+}
+
+/* Câu dẫn đầu trang: một cỡ 16px/400. Số đậm trong câu dùng <b> + tabular-nums. */
+.nx-lede {
+  font-size: var(--slds-g-font-scale-2);
+  font-weight: var(--slds-g-font-weight-4);
+  color: var(--slds-g-color-neutral-base-30);
+}
+
+/* Khung xem màn khách: huỷ lớp Studio trong cây con (kiến trúc UI 4.2). */
+.nx-face-customer {
+  font-size: var(--slds-g-font-scale-base);
+  --slds-g-color-border-base-1: var(--slds-g-color-neutral-base-80);
+  --slds-c-card-color-border: initial;
+  --slds-c-card-radius-border: initial;
+  --slds-c-modal-radius-border: initial;
+  --slds-c-input-radius-border: initial;
+  --slds-c-button-radius-border: initial;
+  --slds-c-button-line-height: initial;
+  --slds-c-tabs-item-color-border-active: initial;
+  --slds-c-tabs-list-color-border: initial;
+}
+html:has(.nx-face-studio) .nx-face-customer .slds-text-heading_large,
+html:has(.nx-face-studio) .nx-face-customer .slds-text-heading_medium,
+html:has(.nx-face-studio) .nx-face-customer .slds-text-heading_small {
+  font-weight: revert-layer;
+}
+
+/* — slds glue: c1-object-home — */
+/* Object-home header on narrow viewports. SLDS 2.264.1's page-header row and its controls are a
+   no-wrap flex (Lightning desktop), so at phone width the list controls (list settings, export,
+   recycle bin, filter toggle) run off the right edge of the object-home card and cannot be reached
+   (seen on /crm_accounts at 390px). Let the row and the controls wrap below the SLDS medium
+   breakpoint; desktop layout is untouched. Verified by injecting it into the live page at 390x844:
+   every control reachable, header unchanged at 1440px. Also helps every other ObjectHomePage /
+   PageHeader user (/notifications …). */
+@media (max-width: 47.99em) {
+  .slds-page-header__row { flex-wrap: wrap; }
+  .slds-page-header__col-controls { flex: 1 1 100%; }
+  .slds-page-header__controls { flex-wrap: wrap; row-gap: 0.25rem; }
+}
+
+/* — slds glue: c4-data-utilities — */
+/* c4-data-utilities: SLDS gives .slds-app-launcher__tile `cursor: move` because the blueprint tile is draggable. Nexus never drags tiles (/entities tiles are links; the kit AppLauncher has no reorder), so the move cursor is wrong. `auto` keeps the pointer on links. */
+.slds-app-launcher__tile:not(.slds-is-draggable) {
+  cursor: auto;
+}
+
+/* — slds glue: c6-dashboards — */
+/* c6-dashboards: the old "W4 react-day-picker v10" block is deleted (DateRangePicker now uses the SLDS
+   range datepicker in components/slds/DatePicker.tsx, whose Root is a pass-through, so no .rdp-root
+   renders). The "W4 react-grid-layout v2" block moved here, repainted on SLDS hooks. */
+/* — react-grid-layout v2 (/dashboards/[id] grid) — placeholder + resize handle on SLDS hooks.
+   The lib's styles.css ships a RED placeholder, so the override is required. — */
+.react-grid-item.react-grid-placeholder {
+  background: var(--slds-g-color-brand-base-50);
+  opacity: 0.14;
+  border-radius: var(--slds-g-radius-border-2);
+}
+.react-grid-item > .react-resizable-handle::after {
+  border-color: var(--slds-g-color-border-base-1);
+}
+.nx-grid-editing .react-grid-item {
+  cursor: grab;
+}
+.nx-grid-editing .react-grid-item:active {
+  cursor: grabbing;
+}
+/* Layout edit mode outlines each widget card so the draggable areas show. */
+.nx-grid-editing .react-grid-item > * {
+  outline: 1px dashed var(--slds-g-color-brand-base-50);
+  outline-offset: -1px;
+}
+
+/* — slds glue: studio navigation (specs/073 u0-dieu-huong; STUDIO-UI-ARCHITECTURE §4 closed list: .nx-tabs-zone, .nx-path-steps) — */
+/* .nx-tabs-zone: zone/sub tabs of the Studio frame — 48px tall, accent underline, neutral-90 rule. Only the tabs hooks SLDS exposes; sets nothing on other tabs. */
+.nx-tabs-zone {
+  --slds-c-tabs-item-sizing-height: var(--slds-g-sizing-10);
+  --slds-c-tabs-item-line-height: var(--slds-g-sizing-10);
+  --slds-c-tabs-item-color-border-active: var(--slds-g-color-brand-base-50);
+  --slds-c-tabs-list-color-border: var(--slds-g-color-neutral-base-90);
+}
+/* .nx-path-steps: SLDS paints a complete path segment #3ba755 (hard-coded, white text) and flips its title away for the tick.
+   The build-steps bar wants a pale segment with the tick beside an always-visible title, and one navy segment (slds-is-active) for the open step.
+   The track scrolls inside itself when narrow (the nav is SLDS overflow:hidden, so it is widened to its content instead of clipped). */
+.nx-path-steps .slds-path__nav { overflow: visible; width: max-content; min-width: 100%; }
+.nx-path-steps .slds-path__item { flex: 1 0 auto; }
+.nx-path-steps .slds-path__nav .slds-is-complete,
+.nx-path-steps .slds-path__nav .slds-is-complete:before,
+.nx-path-steps .slds-path__nav .slds-is-complete:after { background: var(--slds-g-color-palette-green-95, #ebf7e6); }
+.nx-path-steps .slds-path__nav .slds-is-complete:hover,
+.nx-path-steps .slds-path__nav .slds-is-complete:hover:before,
+.nx-path-steps .slds-path__nav .slds-is-complete:hover:after { background: var(--slds-g-color-palette-green-90, #cdefc4); }
+.nx-path-steps .slds-path__nav .slds-is-complete .slds-path__link { color: var(--slds-g-color-neutral-base-10, #181818); }
+.nx-path-steps .slds-path__nav .slds-is-complete .slds-path__stage,
+.nx-path-steps .slds-path__nav .slds-is-complete:hover .slds-path__stage {
+  position: static;
+  transform: none;
+  margin-right: 0.25rem;
+  color: var(--slds-g-color-success-base-50, #2e844a);
+}
+.nx-path-steps .slds-path__nav .slds-is-complete .slds-path__title,
+.nx-path-steps .slds-path__nav .slds-is-complete:hover .slds-path__title { transform: none; }
+.nx-path-steps .slds-path__stage:empty { display: none; }

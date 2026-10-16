@@ -1,0 +1,46 @@
+# dependencies and build output
+node_modules/
+vendor/
+.venv/
+venv/
+__pycache__/
+*.pyc
+bin/
+dist/
+build/
+!nexus-web/components/studio/build/
+*.exe
+*.dll
+*.so
+*.o
+*.out
+nexus-platform/server
+nexus-platform/bootstrap-admin
+nexus-platform/aieval
+
+# local state and secrets
+.env
+.env.local
+.env.*.local
+nexus-platform/storage/
+nexus-platform/tenant-backups/
+nexus-platform/backups/
+nexus-platform/demo-backup-*.sql
+*.log
+logs/
+coverage/
+*.tmp
+
+# editors and OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# agent harness: personal overrides stay local
+.claude/settings.local.json
+.claude/worktrees/
+CLAUDE.local.md

@@ -1,0 +1,30 @@
+-- specs/066 L1a: the tenant's email log. One row per mail a workflow rule sent (or failed to send).
+-- Never the address, subject or body that was rendered: only the masked recipient ("l***@gmail.com"),
+-- the rule's subject TEMPLATE and a masked error (queue #95/#85) — sys_jobs payloads stay scrubbed.
+CREATE TABLE IF NOT EXISTS sys_email_log (
+    id               CHAR(36)      NOT NULL PRIMARY KEY,
+    tenant_id        CHAR(36)      NOT NULL,
+    source           VARCHAR(24)   NOT NULL,
+    status           VARCHAR(16)   NOT NULL,
+    recipient_masked VARCHAR(255)  NOT NULL DEFAULT '',
+    subject_template VARCHAR(255)  DEFAULT NULL,
+    workflow_id      CHAR(36)      DEFAULT NULL,
+    run_id           CHAR(36)      DEFAULT NULL,
+    action_index     INT           DEFAULT NULL,
+    action_hash      CHAR(64)      DEFAULT NULL,
+    entity_name      VARCHAR(100)  DEFAULT NULL,
+    record_id        CHAR(36)      DEFAULT NULL,
+    user_id          CHAR(36)      DEFAULT NULL,
+    job_id           CHAR(36)      DEFAULT NULL,
+    attempts         INT           NOT NULL DEFAULT 0,
+    last_error       VARCHAR(2000) DEFAULT NULL,
+    resend_of        CHAR(36)      DEFAULT NULL,
+    resent_at        TIMESTAMP(3)  NULL DEFAULT NULL,
+    created_by       CHAR(36)      DEFAULT NULL,
+    created_at       TIMESTAMP(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at       TIMESTAMP(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    finished_at      TIMESTAMP(3)  NULL DEFAULT NULL,
+    KEY idx_email_log_list   (tenant_id, created_at DESC, id DESC, status, source),
+    KEY idx_email_log_job    (tenant_id, job_id),
+    KEY idx_email_log_record (tenant_id, entity_name, record_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

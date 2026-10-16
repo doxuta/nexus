@@ -1,0 +1,18 @@
+-- DOWN of 000038: intentional NO-OP.
+--
+-- The up was a one-way data repair: it tombstone-renamed (name / join_table_name) and
+-- soft-deleted phantom sys_relationships rows whose parent or child entity no longer exists.
+-- Reversing it is neither possible nor desirable:
+--   * NOT POSSIBLE: the tombstone rename truncates long names to fit the "__deleted_<id8>"
+--     suffix (LEFT(name, 132) / LEFT(join_table_name, 82)), so the original value is not
+--     always recoverable from the stored row.
+--   * NOT DESIRABLE: un-deleting the rows would re-occupy the UNIQUE slots
+--     (uq_sysrel_tenant_name / uq_sysrel_tenant_join_table) — potentially colliding 1062
+--     with relationships legitimately re-registered since the up ran — and would resurrect
+--     the exact ghost-ERD-edge bug the up removed.
+-- This mirrors the codebase-wide soft-delete stance: tombstones are terminal; recovery of a
+-- wrongly-deleted relationship is a re-register, not a rollback.
+--
+-- The harmless statement below exists only because the MySQL migrate driver rejects an
+-- empty/comment-only migration ("Query was empty").
+SELECT 1;

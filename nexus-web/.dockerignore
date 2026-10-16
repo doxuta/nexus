@@ -1,0 +1,32 @@
+# Build context exclusions for nexus-web Docker image.
+# node_modules and .next are rebuilt inside the container — exclude them from the build context
+# to keep context small and avoid stale/platform-mismatched artefacts being copied in.
+
+node_modules
+.next
+
+# Version control
+.git
+.gitignore
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.swo
+.vscode
+.idea
+
+# Local env / secrets (never goes into the image)
+.env
+.env.local
+.env.*.local
+
+# Tests / docs (not needed at runtime)
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+coverage
+
+# Tooling artifacts
+*.tsbuildinfo

@@ -1,0 +1,44 @@
+# Caddy reverse proxy for Nexus (Hệ A) — auto-HTTPS via Let's Encrypt.
+# {$DOMAIN} is injected from .env.prod (e.g. app.example.com).
+#
+# Validate offline:
+#   docker run --rm -v "$PWD":/w caddy caddy validate --config /w/Caddyfile --adapter caddyfile
+
+{$DOMAIN} {
+	# Route API and health-check traffic to the Go backend; everything else goes to the Next.js FE.
+	# handle blocks are mutually exclusive and evaluated in source order (api matcher runs first).
+	@api path /api/* /health /health/*
+	handle @api {
+		reverse_proxy nexus:8080
+	}
+	handle {
+		# Catch-all: Next.js standalone server (all UI routes, _next/static assets, etc.).
+		reverse_proxy web:3000
+	}
+
+	# Security headers (defense-in-depth for a public app).
+	header {
+		# HSTS — force HTTPS for 1 year incl. subdomains.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Block MIME sniffing / clickjacking / referrer leakage.
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Hide upstream/server fingerprint.
+		-Server
+	}
+
+	# Structured access logs (JSON) for the night routine to scan.
+	log {
+		output file /data/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+		format json
+	}
+
+	# Cap request body at the edge (app also enforces MAX_REQUEST_BODY_BYTES).
+	request_body {
+		max_size 2MB
+	}
+}

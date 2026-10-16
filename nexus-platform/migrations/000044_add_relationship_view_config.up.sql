@@ -1,0 +1,22 @@
+-- ENG-RELVIEW — per-relationship related-list (subpanel) view config.
+--
+-- view_config is an OPTIONAL JSON document on a sys_relationships row describing how the
+-- relationship renders as a related list ("subpanel") on a record detail view:
+--
+--   {label?, order?, columns?: ["<childField>", ...], sort?: {field, dir}, allowCreate?, allowLink?}
+--
+-- NULL — the default, and the value on every pre-existing row — means the FE keeps today's
+-- auto-derived rendering. The column is purely additive: no behavior changes anywhere until
+-- an admin sets a config via PUT /admin/relationships/:id/view-config.
+--
+-- Validation is entirely service-side (services.RelationLifecycleService.SetViewConfig):
+-- columns / sort.field must name fields of the CHILD entity, and sort.field must be
+-- physically sortable (unique/relation/indexed generated column or a system column) so a
+-- stored config can never 422 at render time against the record-list sort allowlist (RM-09).
+-- No index is added: view_config is only ever read through a row already resolved by the
+-- existing tenant-scoped lookups (never filtered on).
+--
+-- MySQL 8 / InnoDB / utf8mb4. Mirrors 000028's plain (non-guarded) ALTER style — no
+-- stored-procedure IF-NOT-EXISTS wrapper, relying on golang-migrate's own version tracking.
+ALTER TABLE sys_relationships
+    ADD COLUMN view_config JSON DEFAULT NULL;

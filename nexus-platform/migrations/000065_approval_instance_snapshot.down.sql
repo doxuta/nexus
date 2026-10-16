@@ -1,0 +1,16 @@
+-- Reverse APPROVAL-PINS-DEFINITION. Dropping the column un-pins every in-flight instance: they go
+-- back to deciding through the LIVE process (the pre-000065 behaviour, where a mid-flight process
+-- edit re-wires them). No user-entered data is lost — the snapshot was copied from the process at
+-- arm time — so this is not guarded like 000063/000064; but know that a pending instance whose
+-- process was edited after arming may skip or repeat a step once un-pinned.
+--
+-- What IS lost, and is not "no data": the only record of which chain each PAST approval actually
+-- executed. A step index in the audit trail is not self-describing — index 2 means different
+-- approvers before and after a process edit — and process_snapshot is what disambiguates it. For a
+-- finance / healthcare / tendering tenant that is compliance evidence, so treat this reversal as
+-- destructive even though no user-entered value disappears.
+--
+-- Also: rolling the schema back WITHOUT rolling the binary back stops approvals being armed at all.
+-- CreateInstance writes process_snapshot, and on the after-commit engine path that failure is
+-- swallowed fail-open (logged, no instance created), so records would silently never enter approval.
+ALTER TABLE sys_approval_instances DROP COLUMN process_snapshot;

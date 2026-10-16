@@ -1,0 +1,48 @@
+{
+  "badge": {
+    "components/studio/AclBackfillControl.tsx::badgeOrPill": 2,
+    "components/studio/ApprovalBuilder.tsx::badgeOrPill": 2,
+    "components/studio/AppsManager.tsx::badgeOrPill": 2,
+    "components/studio/EntityFieldEditor.tsx::badgeOrPill": 7,
+    "components/studio/HandoverWizard.tsx::badgeOrPill": 6,
+    "components/studio/InboundHookScreen.tsx::badgeOrPill": 5,
+    "components/studio/PackUpgradePanel.tsx::badgeOrPill": 3,
+    "components/studio/TenantBackupPanel.tsx::badgeOrPill": 2,
+    "components/studio/VerticalLibrary.tsx::badgeOrPill": 16,
+    "components/studio/WorkflowBuilder.tsx::badgeOrPill": 2,
+    "components/studio/WorkflowRunHistory.tsx::badgeOrPill": 2,
+    "components/studio/WorkflowTestDialog.tsx::badgeOrPill": 4,
+    "components/studio/WorkQueueBuilder.tsx::badgeOrPill": 3,
+    "components/studio/workspaceShared.tsx::badgeOrPill": 3
+  },
+  "blankTarget": {
+    "components/studio/HandoverWizard.tsx": 1
+  },
+  "embeddedExempt": {
+    "ApprovalBuilder::iconTile": 1,
+    "WorkflowBuilder::h1": 1,
+    "WorkflowBuilder::iconTile": 1
+  },
+  "nativeDialog": {},
+  "strings": {
+    "components/studio/assistant/useAssistantChat.ts": 3,
+    "components/studio/EntityFieldEditor.tsx": 1,
+    "components/studio/LayoutBuilder.tsx": 90,
+    "components/studio/WorkflowBuilder.tsx": 1
+  },
+  "studioValues": {},
+  "style": {
+    "components/studio/CustomerPreviewFrame.tsx::hex": 1,
+    "components/studio/LayoutBuilder.tsx::nexusBeToken": 266,
+    "components/studio/LayoutBuilder.tsx::rounded": 59,
+    "components/studio/LayoutBuilder.tsx::shadow": 3
+  },
+  "tokenScoped": {
+    "components/studio/build/RuleListPage.tsx": 2,
+    "components/studio/InboundHookScreen.tsx": 2,
+    "components/studio/PublishReview.tsx": 2,
+    "components/studio/VerticalLibrary.tsx": 2,
+    "components/studio/WorkflowBuilder.tsx": 1,
+    "components/studio/WorkflowRunHistory.tsx": 1
+  }
+}

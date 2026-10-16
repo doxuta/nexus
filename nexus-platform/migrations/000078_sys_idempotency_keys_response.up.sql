@@ -1,0 +1,14 @@
+-- DAILY-QUEUE #174 idem-key-bulk-import (specs/047 FR-12): Idempotency-Key on POST /:entity/bulk and
+-- POST /:entity/import. Their outcome is a per-row envelope (created ids, per-row failures, counts)
+-- that no single record id can re-derive, so the claim STORES the response it answered with and a
+-- resend replays it byte for byte. NULL for every POST /:entity claim (those replay by re-checking
+-- the record id) and for any claim still processing.
+--
+-- MEDIUMTEXT, not JSON: the column is an opaque replay body, never queried by path, and a JSON column
+-- would re-order its keys — the replay would no longer be the exact bytes the first call answered.
+-- 16 MB bounds it far above the largest envelope (BULK_MAX_ROWS / IMPORT_MAX_ROWS rows of errors).
+--
+-- The stored envelope holds record ids, per-row error codes/messages and counts — never the submitted
+-- row values or file content. It lives as long as the claim (24 h, then the janitor deletes the row).
+-- Appended last (no AFTER): ADD COLUMN at the end is an INSTANT change on MySQL 8, no table rebuild.
+ALTER TABLE sys_idempotency_keys ADD COLUMN response MEDIUMTEXT NULL DEFAULT NULL;

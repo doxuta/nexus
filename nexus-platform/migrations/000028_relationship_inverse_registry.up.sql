@@ -1,0 +1,43 @@
+-- Bidirectional / inverse-field relationship registry (ENG-REL2 #4).
+--
+-- Prior to this migration, sys_relationships only ever recorded N-N relationships (join-table
+-- rows written by RelationService.RegisterRelationship). A 1-N relation FIELD (FK-on-child,
+-- options.relatedEntity) materializes a `<field>_id` column on the child entity's obj_* table
+-- but has never had a matching sys_relationships row — so there was no registry entry an
+-- admin/Studio UI could read to discover the INVERSE (parent) side of a 1-N relation (e.g.
+-- "which field on accounts lists all its contacts?").
+--
+-- This migration adds the two columns the inverse registry needs:
+--
+--   inverse_field   — the field name exposed on the PARENT side (e.g. "contacts" on
+--                      accounts, mirroring the FK-on-child field "account" on contacts).
+--   child_fk_column — the physical `<field>_id` column name on the CHILD (owning) entity's
+--                      obj_* table, so a reader never has to re-derive it from the field name.
+--
+-- RM-41 discipline: add ONLY these two columns. join_key_lhs/rhs and primary_flag_column
+-- remain deferred to a milestone that actively needs them (see metadata.go
+-- RelationshipDefinition doc comment).
+--
+-- idx_sys_rel_inverse is a PLAIN (non-unique) index: it backs GetRelationshipByInverseField's
+-- lookup by (tenant, parent_entity_name, inverse_field). A duplicate combination is checked at
+-- the SERVICE layer (422 FIELD_RELATION_INVERSE_TAKEN, config-time pre-check) rather than by a
+-- DB-level UNIQUE constraint — deliberately: a UNIQUE index here would reintroduce the same
+-- soft-delete-recreate collision RM-21 hardens against elsewhere (an inverse_field freed by a
+-- soft-deleted field/entity must be reusable). This pre-check is honest, not airtight: it is a
+-- read-then-write TOCTOU — two concurrent AddField calls claiming the SAME (parent,
+-- inverseField) can both pass the pre-check before either commits, and both insert. This is
+-- accepted as a benign advisory-metadata race (unlike the sys_fields/sys_entities/sys_relationships
+-- NAME uniqueness races, which ARE DB-enforced — see uq_sys_entities_tenant_name (migration
+-- 000001), uq_sys_fields_tenant_entity_name (migration 000012), and uq_sysrel_tenant_name
+-- (migration 000025)):
+-- the worst outcome is two 1-N rows advertising the same inverse_field label to a
+-- reader/Studio UI, not a data-integrity or cross-tenant violation. Mirrors the plain
+-- (non-unique) idx_sys_rel_parent / idx_sys_rel_child indexes from migration 000001, not the
+-- UNIQUE pair added in migration 000025.
+--
+-- MySQL 8 / InnoDB / utf8mb4. Mirrors 000025's plain (non-guarded) ALTER style — no
+-- stored-procedure IF-NOT-EXISTS wrapper, relying on golang-migrate's own version tracking.
+ALTER TABLE sys_relationships
+    ADD COLUMN inverse_field   VARCHAR(100) DEFAULT NULL,
+    ADD COLUMN child_fk_column VARCHAR(100) DEFAULT NULL,
+    ADD INDEX idx_sys_rel_inverse (tenant_id, parent_entity_name, inverse_field);

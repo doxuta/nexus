@@ -1,0 +1,22 @@
+[
+  {"name": "keeps dashboard in place, appends new table last",
+   "current": [{"itemType": "entity", "key": "patients"}, {"itemType": "dashboard", "key": "overview"}],
+   "add": ["visits"],
+   "want": [{"itemType": "entity", "key": "patients"}, {"itemType": "dashboard", "key": "overview"}, {"itemType": "entity", "key": "visits"}]},
+  {"name": "keeps custom label",
+   "current": [{"itemType": "entity", "key": "patients", "label": "Bệnh nhân của tôi"}],
+   "add": ["visits"],
+   "want": [{"itemType": "entity", "key": "patients", "label": "Bệnh nhân của tôi"}, {"itemType": "entity", "key": "visits"}]},
+  {"name": "table already in menu is not duplicated",
+   "current": [{"itemType": "entity", "key": "patients", "label": "BN"}, {"itemType": "dashboard", "key": "patients"}],
+   "add": ["patients"],
+   "want": [{"itemType": "entity", "key": "patients", "label": "BN"}, {"itemType": "dashboard", "key": "patients"}]},
+  {"name": "empty menu becomes the added tables",
+   "current": [],
+   "add": ["a", "b"],
+   "want": [{"itemType": "entity", "key": "a"}, {"itemType": "entity", "key": "b"}]},
+  {"name": "several added tables keep proposal order, repeats dropped",
+   "current": [{"itemType": "dashboard", "key": "d"}],
+   "add": ["z", "m", "z", "a"],
+   "want": [{"itemType": "dashboard", "key": "d"}, {"itemType": "entity", "key": "z"}, {"itemType": "entity", "key": "m"}, {"itemType": "entity", "key": "a"}]}
+]

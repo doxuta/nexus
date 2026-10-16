@@ -1,0 +1,32 @@
+-- SYS-JOBS-TENANT-LIST-INDEX (DAILY-QUEUE #31): the walk of the tenant's "Việc nền" listing
+-- (GET /admin/jobs — specs/021-durable-job-queue §3, jobs.tenantListSelect).
+--
+--   WHERE tenant_id = ? [AND job_type = ?] [AND status = ?]
+--         [AND (created_at < ? OR (created_at = ? AND id < ?))]   -- keyset cursor
+--   ORDER BY created_at DESC, id DESC LIMIT ?
+--
+-- Without it the only index with a tenant_id prefix is idx_sys_jobs_dedup (tenant_id, job_type,
+-- payload_hash), and a status filter tempts the optimizer onto idx_sys_jobs_claim (status, …) — the
+-- failed rows of EVERY tenant: either way a page read a whole set and sorted it (measured on
+-- 300 rows: "Index lookup … using idx_sys_jobs_claim (status='failed')" → Filter tenant → Sort).
+-- With it a page is a forward walk from the cursor:
+--
+--   * (tenant_id, created_at DESC, id DESC) IS the ORDER BY. `id` is named explicitly — the
+--     implicit PK suffix would sit after status/job_type and break the order inside one
+--     created_at (ties are common: TIMESTAMP(3), bursts of deliveries). DESC, because a
+--     backwards walk of an ascending index loses index condition pushdown on the first page
+--     (MySQL 8.0.46: "Index lookup … (reverse)" + a Filter node that reads every row).
+--   * status, job_type ride along so the optional filters are checked on the index entry
+--     ("with index condition") — only matching rows are read from the table.
+--
+-- The listing names the index in an optimizer hint (/*+ INDEX(…) */): on a schema without this
+-- migration MySQL ignores the hint with warning 3128 and the listing still answers (sorting), unlike
+-- FORCE INDEX which would fail. Plans pinned by jobs.TestJobsTenantListSeeks_Integration.
+-- ponytail: one index for every filter combination; a filtered walk steps over the tenant's
+-- non-matching index entries (for "failed", its done history) without reading rows. If a tenant's
+-- 30-day history grows past a few hundred thousand rows, add (tenant_id, status, created_at DESC,
+-- id DESC) for the status-filtered walk.
+--
+-- In-place build (ALGORITHM=INPLACE, LOCK=NONE): the queue stays writable while it builds.
+ALTER TABLE sys_jobs
+    ADD KEY idx_sys_jobs_tenant_list (tenant_id, created_at DESC, id DESC, status, job_type);

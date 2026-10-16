@@ -1,0 +1,461 @@
+//go:build integration
+
+// specs/043 S3b — `bpm-seat-authority` (tasks T067–T071): authority to decide moves from the
+// instance's current_step/escalated CAS and its current_approver_* projection to the work seats +
+// the seq counter, proven against real MySQL.
+//
+// What S3b promises:
+//   - a decision is ONE transaction that locks the instance row, checks the seq the caller READ
+//     (a stale read — even one that "looks the same", the ABA — loses with ErrConcurrent) and that
+//     the actor holds an open seat of the visit, then writes the instance and its seats;
+//   - two tabs pressing Approve on one seat advance the step once; the loser gets the conflict;
+//   - an instance the seats have never been written for (armed by a pre-S3a binary) gets the seat
+//     the moment it is touched, on the same node id Migration A's backfill would have written;
+//   - the SLA sweep walks tenants one by one, every query pinned to the tenant, and an instance
+//     escalates exactly once however many sweeps race.
+//
+// Run with:
+//
+//	TEST_DATABASE_URL="root:@tcp(127.0.0.1:3306)/?charset=utf8mb4&parseTime=True&multiStatements=true&loc=Local" \
+//	  go test -tags=integration -race ./internal/services/ -run 'TestDecide_|TestDelegate_|TestRecall_|TestClaimBreach_|TestSLAScheduler_|TestSeatNodeID_'
+package services
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"nexus/platform/internal/bpm"
+)
+
+// racyStore is the real repository with a seam between the READ of an instance and the WRITE of a
+// decision about it: onRead runs after every GetInstance, in the caller's goroutine. A test uses
+// it to let another writer (or another tab) get in exactly there — the window a lost update lives in.
+type racyStore struct {
+	*bpm.SQLRepository
+	onRead func(inst *bpm.Instance)
+}
+
+func (s *racyStore) GetInstance(ctx context.Context, tenantID, id string) (*bpm.Instance, error) {
+	inst, err := s.SQLRepository.GetInstance(ctx, tenantID, id)
+	if err == nil && s.onRead != nil {
+		s.onRead(inst)
+	}
+	return inst, err
+}
+
+func (s *bpmStack) racyDecider(onRead func(*bpm.Instance)) (*bpm.Decider, *racyStore) {
+	rs := &racyStore{SQLRepository: s.repo, onRead: onRead}
+	return bpm.NewDecider(rs, s.repo, s.repo, nil, nil), rs
+}
+
+// armTwoStep creates a two-step process (seatAp1 then seatAp2, both with a 1h deadline) on a fresh
+// entity and arms one instance on it through the real after-create path.
+func armTwoStep(t *testing.T, st *bpmStack, entity string) (tenant, instID string) {
+	t.Helper()
+	ctx := context.Background()
+	tenant = o3aTenantA
+	st.createEntity(t, ctx, tenant, entity, []FieldInput{{Name: "status", Label: "Status", FieldType: "text"}})
+	if _, err := st.approval.CreateProcess(ctx, tenant, CreateApprovalProcessInput{
+		Name: entity + "-2", EntityName: entity, Trigger: "after_create",
+		Steps: []ApprovalStepInput{
+			{Name: "Trưởng phòng", ApproverType: "user", ApproverID: seatAp1, SLASeconds: 3600},
+			{Name: "Kế toán", ApproverType: "user", ApproverID: seatAp2, SLASeconds: 3600},
+		},
+		IsActive: boolPtr(true), ActorID: seatSubmitter,
+	}); err != nil {
+		t.Fatalf("CreateProcess: %v", err)
+	}
+	rid, err := st.recordSvc.Create(ctx, bpmAdmin(seatSubmitter), tenant, seatSubmitter, entity, map[string]any{"status": "draft"})
+	if err != nil {
+		t.Fatalf("create record: %v", err)
+	}
+	st.drain(t)
+	return tenant, st.onlyPendingInstance(t, tenant, entity, rid).ID
+}
+
+func approvedEntries(inst *bpm.Instance) int {
+	n := 0
+	for _, h := range inst.History {
+		if h.Action == bpm.HistoryApproved {
+			n++
+		}
+	}
+	return n
+}
+
+// TestDecide_StaleReadAfterDelegate_Loses (T067, ABA): approver A reads the step, hands it to B,
+// and only then does the stale Approve land. current_step and escalated are exactly what A read,
+// so the old CAS let A decide a step A had already given away; the seq has moved, so now it loses.
+func TestDecide_StaleReadAfterDelegate_Loses(t *testing.T) {
+	st := bpmWire(t)
+	ctx := context.Background()
+	tenant, id := armTwoStep(t, st, "seataba")
+
+	var once sync.Once
+	decider, _ := st.racyDecider(func(*bpm.Instance) {
+		once.Do(func() {
+			if _, err := st.requester.Delegate(ctx, tenant, id, seatAp3, "nghỉ phép", bpm.Actor{UserID: seatAp1}); err != nil {
+				t.Errorf("delegate in the race window: %v", err)
+			}
+		})
+	})
+	_, err := decider.Decide(ctx, tenant, id, bpm.DecisionApprove, "duyệt", bpm.Actor{UserID: seatAp1})
+	if !errors.Is(err, bpm.ErrConcurrent) {
+		t.Fatalf("a stale approve after the step was handed on: err = %v; want ErrConcurrent", err)
+	}
+
+	inst, getErr := st.repo.GetInstance(ctx, tenant, id)
+	if getErr != nil {
+		t.Fatalf("GetInstance: %v", getErr)
+	}
+	if inst.Status != bpm.StatusPending || inst.CurrentStep != 0 || inst.CurrentApproverID != seatAp3 || approvedEntries(inst) != 0 {
+		t.Fatalf("the stale approve left a mark: status=%s step=%d approver=%s history=%+v", inst.Status, inst.CurrentStep, inst.CurrentApproverID, inst.History)
+	}
+	if open := openSeats(seatsOf(t, st.sdb, tenant, id)); len(open) != 1 || open[0].AssigneeID != seatAp3 || open[0].NodeID != "s1" {
+		t.Fatalf("open seats after the lost decision: %+v; want only the delegate's seat on s1", open)
+	}
+}
+
+// TestDecide_SameSeatTwoTabs_SecondGets409 (T068, -race): one approver, two tabs, both read the
+// step before either writes. The step advances once; the other tab is refused with the conflict
+// the API answers as 409 APPROVAL_CONFLICT.
+func TestDecide_SameSeatTwoTabs_SecondGets409(t *testing.T) {
+	st := bpmWire(t)
+	ctx := context.Background()
+	tenant, id := armTwoStep(t, st, "seattabs")
+
+	var arrived int32
+	var both sync.WaitGroup
+	both.Add(2)
+	decider, rs := st.racyDecider(nil)
+	rs.onRead = func(*bpm.Instance) {
+		if atomic.AddInt32(&arrived, 1) <= 2 { // the two tabs' reads; later reads pass through
+			both.Done()
+			both.Wait()
+		}
+	}
+	svc := NewApprovalService(st.repo, st.repo, decider)
+
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = svc.Decide(ctx, tenant, id, bpm.DecisionApprove, "duyệt", bpm.Actor{UserID: seatAp1})
+		}(i)
+	}
+	wg.Wait()
+
+	wins, conflicts := 0, 0
+	for _, err := range errs {
+		var ve *ValidationError
+		switch {
+		case err == nil:
+			wins++
+		case errors.As(err, &ve) && ve.Code == "APPROVAL_CONFLICT":
+			conflicts++
+		default:
+			t.Fatalf("a tab got %v; want success or APPROVAL_CONFLICT", err)
+		}
+	}
+	if wins != 1 || conflicts != 1 {
+		t.Fatalf("wins=%d conflicts=%d; want exactly one of each (errs: %v)", wins, conflicts, errs)
+	}
+
+	inst, err := st.repo.GetInstance(ctx, tenant, id)
+	if err != nil {
+		t.Fatalf("GetInstance: %v", err)
+	}
+	if inst.CurrentStep != 1 || inst.Status != bpm.StatusPending || approvedEntries(inst) != 1 {
+		t.Fatalf("two tabs moved the instance to step %d (%s) with %d approvals; want step 1 pending, one approval", inst.CurrentStep, inst.Status, approvedEntries(inst))
+	}
+	assertMirror(t, st.sdb, tenant, id, "two-tabs")
+	if got := instState(t, st.sdb, tenant, id).Seq; got != 2 {
+		t.Fatalf("seq = %d; want 2 (the arm + the one decision that won)", got)
+	}
+}
+
+// TestDecide_LateSecondClickOnNextStep_SecondGets409 (review finding on T068, MySQL): the same
+// person holds BOTH steps (an admin may decide any), tab 2 still shows step 0 and clicks Approve
+// AFTER tab 1 committed — no race, nothing for the seq lock to catch, because the server's own
+// read already says step 1. The step the screen SAW (expectedStep) is the only thing that tells
+// the click is stale: 409, and step 1 stays pending, unapproved.
+func TestDecide_LateSecondClickOnNextStep_SecondGets409(t *testing.T) {
+	st := bpmWire(t)
+	ctx := context.Background()
+	tenant, id := armTwoStep(t, st, "seatlate")
+	svc := NewApprovalService(st.repo, st.repo, bpm.NewDecider(st.repo, st.repo, st.repo, nil, nil))
+	admin := bpm.Actor{UserID: seatAp3, IsAdmin: true}
+	saw := 0
+
+	if _, err := svc.DecideAt(ctx, tenant, id, bpm.DecisionApprove, "tab 1", admin, &saw); err != nil {
+		t.Fatalf("tab 1: %v", err)
+	}
+	_, err := svc.DecideAt(ctx, tenant, id, bpm.DecisionApprove, "tab 2", admin, &saw)
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Code != "APPROVAL_CONFLICT" {
+		t.Fatalf("tab 2 (late, still on step 0): err = %v; want APPROVAL_CONFLICT", err)
+	}
+	inst, getErr := st.repo.GetInstance(ctx, tenant, id)
+	if getErr != nil {
+		t.Fatalf("GetInstance: %v", getErr)
+	}
+	if inst.CurrentStep != 1 || inst.Status != bpm.StatusPending || approvedEntries(inst) != 1 {
+		t.Fatalf("the late click moved the instance: step=%d status=%s approvals=%d; want step 1 pending, one approval", inst.CurrentStep, inst.Status, approvedEntries(inst))
+	}
+}
+
+// TestDecide_SeatHolderWithNullProjection_Decides: authority is the SEAT. A holder of the open seat
+// of a step whose current_approver_* projection is NULL (a step that is not exactly one user/role
+// seat, D-5) saw the row in the inbox since S3a2 but could not decide it; now they can, and a
+// stranger still cannot.
+func TestDecide_SeatHolderWithNullProjection_Decides(t *testing.T) {
+	st := bpmWire(t)
+	ctx := context.Background()
+	tenant, id := armTwoStep(t, st, "seatnull")
+	if _, err := st.sdb.Exec(`UPDATE sys_approval_instances SET current_approver_type = NULL, current_approver_id = NULL
+		WHERE tenant_id = ? AND id = ?`, tenant, id); err != nil {
+		t.Fatalf("null the projection: %v", err)
+	}
+
+	approval := NewApprovalService(st.repo, st.repo, bpm.NewDecider(st.repo, st.repo, st.repo, nil, nil))
+	_, err := approval.Decide(ctx, tenant, id, bpm.DecisionApprove, "", bpm.Actor{UserID: seatAp3})
+	var ve *ValidationError
+	if !errors.As(err, &ve) || ve.Code != "APPROVAL_NOT_AUTHORIZED" {
+		t.Fatalf("a stranger on a NULL-projection step: err = %v; want APPROVAL_NOT_AUTHORIZED", err)
+	}
+	if got := instState(t, st.sdb, tenant, id).CurrentStep; got != 0 {
+		t.Fatalf("the refused stranger moved the instance to step %d", got)
+	}
+	if _, err := approval.Decide(ctx, tenant, id, bpm.DecisionApprove, "ok", bpm.Actor{UserID: seatAp1}); err != nil {
+		t.Fatalf("the seat holder on a NULL-projection step: %v", err)
+	}
+	if got := instState(t, st.sdb, tenant, id).CurrentStep; got != 1 {
+		t.Fatalf("current_step = %d; want 1 after the seat holder approved", got)
+	}
+	assertMirror(t, st.sdb, tenant, id, "null-projection-decided")
+}
+
+// sqlNodeID is the expression Migration A's backfill uses for a seat's node id (plan §Migration A
+// 4(b)) — the Go seatNodeID must answer the same for every well-formed pin.
+func sqlNodeID(t *testing.T, st *bpmStack, tenant, id string) string {
+	t.Helper()
+	var node string
+	if err := st.sdb.Get(&node, `SELECT COALESCE(JSON_UNQUOTE(JSON_EXTRACT(process_snapshot, CONCAT('$.steps[', current_step, '].id'))),
+		CONCAT('s', current_step + 1)) FROM sys_approval_instances WHERE tenant_id = ? AND id = ?`, tenant, id); err != nil {
+		t.Fatalf("backfill expression: %v", err)
+	}
+	return node
+}
+
+// TestDecide_SeatlessInstance_CreatesSeatOnTouch (T070, D-6) + TestSeatNodeID_GoMatchesMigrationSQL:
+// an instance armed by a pre-S3a binary has no seat. Deciding it leaves the seat a decision
+// leaves — done, by the actor, on the node the pin names — instead of a decision no table shows.
+// Run for a pin WITH ids and a LEGACY pin without them: the node the engine creates equals what
+// the migration's SQL computes for the same row.
+func TestDecide_SeatlessInstance_CreatesSeatOnTouch(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		stripIDs bool
+		want     string
+	}{
+		{"pin with ids", false, "s1"},
+		{"legacy pin without ids", true, "s1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := bpmWire(t)
+			ctx := context.Background()
+			tenant, id := armTwoStep(t, st, "seatless")
+			if tc.stripIDs {
+				if _, err := st.sdb.Exec(`UPDATE sys_approval_instances SET process_snapshot = JSON_REMOVE(process_snapshot, '$.steps[0].id', '$.steps[1].id')
+					WHERE tenant_id = ? AND id = ?`, tenant, id); err != nil {
+					t.Fatalf("strip pinned ids: %v", err)
+				}
+			}
+			if _, err := st.sdb.Exec(`DELETE FROM sys_bpm_tasks WHERE tenant_id = ? AND instance_id = ?`, tenant, id); err != nil {
+				t.Fatalf("drop the seats (a pre-S3a arming): %v", err)
+			}
+			if got := sqlNodeID(t, st, tenant, id); got != tc.want {
+				t.Fatalf("setup: the migration's expression says %q; want %q", got, tc.want)
+			}
+
+			approval := NewApprovalService(st.repo, st.repo, bpm.NewDecider(st.repo, st.repo, st.repo, nil, nil))
+			if _, err := approval.Decide(ctx, tenant, id, bpm.DecisionApprove, "duyệt", bpm.Actor{UserID: seatAp1}); err != nil {
+				t.Fatalf("decide a seatless instance: %v", err)
+			}
+
+			seats := seatsOf(t, st.sdb, tenant, id)
+			var done []seatRow
+			for _, s := range seats {
+				if s.Status == "done" {
+					done = append(done, s)
+				}
+			}
+			if len(done) != 1 {
+				t.Fatalf("seats %+v; want exactly one done seat (the one created on touch and closed by the decision)", seats)
+			}
+			d := done[0]
+			if d.NodeID != tc.want || str(d.DecidedBy) != seatAp1 || str(d.Outcome) != "approved" || d.AssigneeID != seatAp1 {
+				t.Fatalf("done seat %+v; want %s approved by %s", d, tc.want, seatAp1)
+			}
+			assertMirror(t, st.sdb, tenant, id, "seatless-decided")
+		})
+	}
+}
+
+// TestDelegate_MovesSeatKeepsDue (T071): a delegation hands the seat on — the delegator's closes
+// as reassigned, the target's opens on the same visit with the SAME deadline and delegated_from —
+// and does not buy time.
+func TestDelegate_MovesSeatKeepsDue(t *testing.T) {
+	st := bpmWire(t)
+	ctx := context.Background()
+	tenant, id := armTwoStep(t, st, "seatdeleg")
+	before := openSeats(seatsOf(t, st.sdb, tenant, id))
+	if len(before) != 1 || before[0].DueAt == nil {
+		t.Fatalf("setup: want one open seat with a deadline, got %+v", before)
+	}
+	if _, err := st.requester.Delegate(ctx, tenant, id, seatAp3, "nghỉ phép", bpm.Actor{UserID: seatAp1}); err != nil {
+		t.Fatalf("delegate: %v", err)
+	}
+	seats := seatsOf(t, st.sdb, tenant, id)
+	open := openSeats(seats)
+	if len(open) != 1 {
+		t.Fatalf("seats after delegating: %+v; want one open", seats)
+	}
+	o := open[0]
+	if o.AssigneeID != seatAp3 || str(o.DelegatedFrom) != seatAp1 || !sameInstant(o.DueAt, before[0].DueAt) || o.EntrySeq != before[0].EntrySeq {
+		t.Fatalf("delegate's seat %+v; want %s, delegated from %s, due %v, visit %d (as before)", o, seatAp3, seatAp1, before[0].DueAt, before[0].EntrySeq)
+	}
+	if seats[0].Status != "done" || str(seats[0].Outcome) != "reassigned" || str(seats[0].DecidedBy) != seatAp1 {
+		t.Fatalf("delegator's seat %+v; want done/reassigned by %s", seats[0], seatAp1)
+	}
+}
+
+// TestRecall_ClosesAllSeats (T071): a recall withdraws EVERY open seat, however many the step has.
+func TestRecall_ClosesAllSeats(t *testing.T) {
+	st := bpmWire(t)
+	ctx := context.Background()
+	tenant, id := armTwoStep(t, st, "seatrecall")
+	// A second open seat on the same step (what a parallel step opens, S4), planted raw.
+	if _, err := st.sdb.Exec(`INSERT INTO sys_bpm_tasks (id, tenant_id, instance_id, process_id, entity_name, record_id, node_id,
+		entry_seq, kind, assignee_type, assignee_id, status, version, created_at, updated_at)
+		SELECT UUID(), tenant_id, instance_id, process_id, entity_name, record_id, node_id, entry_seq, kind, 'user', ?, 'open', 0, NOW(3), NOW(3)
+		FROM sys_bpm_tasks WHERE tenant_id = ? AND instance_id = ? AND status = 'open'`, seatAp3, tenant, id); err != nil {
+		t.Fatalf("plant a second seat: %v", err)
+	}
+	if n := len(openSeats(seatsOf(t, st.sdb, tenant, id))); n != 2 {
+		t.Fatalf("setup: %d open seats; want 2", n)
+	}
+	var inst *bpm.Instance
+	inst, err := st.requester.Recall(ctx, tenant, id, "gửi nhầm", bpm.Actor{UserID: seatSubmitter})
+	if err != nil || inst.Status != bpm.StatusCancelled {
+		t.Fatalf("recall: inst=%+v err=%v", inst, err)
+	}
+	for _, s := range seatsOf(t, st.sdb, tenant, id) {
+		if s.Status != "cancelled" || str(s.Outcome) != "recalled" || s.DecidedBy != nil {
+			t.Fatalf("seat after recall %+v; want cancelled/recalled, decided by nobody", s)
+		}
+	}
+}
+
+// breach arms one instance whose only step is already past its deadline and returns its id.
+func armBreached(t *testing.T, st *bpmStack, tenant, entity string) string {
+	t.Helper()
+	ctx := context.Background()
+	st.createEntity(t, ctx, tenant, entity, []FieldInput{{Name: "status", Label: "Status", FieldType: "text"}})
+	if _, err := st.approval.CreateProcess(ctx, tenant, CreateApprovalProcessInput{
+		Name: entity + "-sla", EntityName: entity, Trigger: "after_create",
+		Steps:    []ApprovalStepInput{{Name: "OnCall", ApproverType: "user", ApproverID: seatAp1, SLASeconds: 1}},
+		IsActive: boolPtr(true), ActorID: seatSubmitter,
+	}); err != nil {
+		t.Fatalf("CreateProcess: %v", err)
+	}
+	rid, err := st.recordSvc.Create(ctx, bpmAdmin(seatSubmitter), tenant, seatSubmitter, entity, map[string]any{"status": "draft"})
+	if err != nil {
+		t.Fatalf("create record: %v", err)
+	}
+	return rid
+}
+
+func escalatedEntries(inst *bpm.Instance) int {
+	n := 0
+	for _, h := range inst.History {
+		if h.Action == bpm.HistoryEscalated {
+			n++
+		}
+	}
+	return n
+}
+
+// TestClaimBreach_PerSeatOnce (T069, -race): several sweeps racing over one breached step escalate
+// it once — one history entry, one notice, the seat stamped once — across BOTH tenants of a sweep.
+func TestClaimBreach_PerSeatOnce(t *testing.T) {
+	st := bpmWire(t)
+	ctx := context.Background()
+	ridA := armBreached(t, st, o3aTenantA, "seatsla")
+	ridB := armBreached(t, st, o3aTenantB, "seatslab")
+	st.drain(t)
+	idA := st.onlyPendingInstance(t, o3aTenantA, "seatsla", ridA).ID
+	idB := st.onlyPendingInstance(t, o3aTenantB, "seatslab", ridB).ID
+
+	notifier := bpm.NewSLAScheduler(bpm.SLASchedulerConfig{Interval: time.Minute}, st.repo, st.repo, nil, nil)
+	now := time.Now().UTC().Add(time.Hour)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); notifier.RunBreachesForTest(ctx, now) }()
+	}
+	wg.Wait()
+
+	for _, c := range []struct{ tenant, id string }{{o3aTenantA, idA}, {o3aTenantB, idB}} {
+		inst, err := st.repo.GetInstance(ctx, c.tenant, c.id)
+		if err != nil {
+			t.Fatalf("GetInstance: %v", err)
+		}
+		if !inst.Escalated || escalatedEntries(inst) != 1 {
+			t.Fatalf("tenant %s: escalated=%v with %d escalation entries; want exactly one", c.tenant, inst.Escalated, escalatedEntries(inst))
+		}
+		if open := openSeats(seatsOf(t, st.sdb, c.tenant, c.id)); len(open) != 1 || open[0].BreachNotifiedAt == nil {
+			t.Fatalf("tenant %s: open seats %+v; want the one seat stamped breached", c.tenant, open)
+		}
+		if got := st.notifCount(t, c.tenant, seatAp1); got != 2 { // arm notice + ONE breach notice
+			t.Fatalf("tenant %s: %d notices for the approver; want 2 (arm + one breach)", c.tenant, got)
+		}
+	}
+}
+
+// TestSLAScheduler_IteratesTenantsPinned (T074): the sweep reads the tenant registry and then one
+// pinned query per tenant. A breached instance of a tenant that is not active is left alone — a
+// suspended customer is not pinged; the old scan escalated every tenant's rows.
+func TestSLAScheduler_IteratesTenantsPinned(t *testing.T) {
+	st := bpmWire(t)
+	ctx := context.Background()
+	ridA := armBreached(t, st, o3aTenantA, "seatslaact")
+	ridB := armBreached(t, st, o3aTenantB, "seatslasus")
+	st.drain(t)
+	idA := st.onlyPendingInstance(t, o3aTenantA, "seatslaact", ridA).ID
+	idB := st.onlyPendingInstance(t, o3aTenantB, "seatslasus", ridB).ID
+	if _, err := st.sdb.Exec(`UPDATE tenants SET status = 'suspended' WHERE id = ?`, o3aTenantB); err != nil {
+		t.Fatalf("suspend tenant B: %v", err)
+	}
+
+	bpm.NewSLAScheduler(bpm.SLASchedulerConfig{Interval: time.Minute}, st.repo, st.repo, nil, nil).
+		RunBreachesForTest(ctx, time.Now().UTC().Add(time.Hour))
+
+	a, _ := st.repo.GetInstance(ctx, o3aTenantA, idA)
+	b, _ := st.repo.GetInstance(ctx, o3aTenantB, idB)
+	if a == nil || b == nil {
+		t.Fatalf("instances vanished: a=%v b=%v", a, b)
+	}
+	if !a.Escalated {
+		t.Fatalf("the active tenant's breached instance was not escalated")
+	}
+	if b.Escalated {
+		t.Fatalf("a suspended tenant's instance was escalated by the sweep")
+	}
+}
