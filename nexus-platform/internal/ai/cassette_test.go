@@ -254,7 +254,6 @@ func TestReplay_StaleCassetteFailsWithReRecordHint(t *testing.T) {
 		{name: "tool call differs", calls: []ChatRequest{builderTools, toolTurn("get_layout")}, why: "assistant(list_entities)"},
 		{name: "another prompt", calls: []ChatRequest{func() ChatRequest { r := builderTools; r.Messages = ask("q2").Messages; return r }()}, why: "(another prompt)"},
 		{name: "another agent", calls: []ChatRequest{assistantTools}, why: "(another agent, or tools added or renamed)"},
-		{name: "cassette exhausted", calls: []ChatRequest{builderTools, toolTurn("list_entities"), ask("q3")}, why: "no exchange left for call 3 (the cassette holds 2)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -280,6 +279,35 @@ func TestReplay_StaleCassetteFailsWithReRecordHint(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A cassette that matched every call and simply ran out is not stale: a replayed server answers one
+// run of the recorded steps, and a second run on the same stack asks for more. The error says to start
+// again from a fresh stack (nobody without a key can re-record) and keeps re-recording for changed steps.
+func TestReplay_UsedUpCassetteSaysStartAFreshStack(t *testing.T) {
+	path := recordCassette(t, []ChatRequest{ask("q1"), ask("q2")}, []ChatResponse{finalTextResp("a1"), finalTextResp("a2")})
+	c, err := NewCompleter(config.AIConfig{GatewayMode: config.AIGatewayReplay, Cassette: path})
+	if err != nil {
+		t.Fatalf("NewCompleter(replay): %v", err)
+	}
+	for i, q := range []string{"q1", "q2"} {
+		if _, err := c.Complete(context.Background(), ask(q)); err != nil {
+			t.Fatalf("call %d: %v; want it answered", i+1, err)
+		}
+	}
+	_, err = c.Complete(context.Background(), ask("q1"))
+	if !errors.Is(err, ErrGateway) {
+		t.Fatalf("error = %v; want ErrGateway", err)
+	}
+	for _, want := range []string{"cassette " + path + " is used up", "no exchange left for call 3 (the cassette holds 2)",
+		"answers one run", "fresh stack", "re-record only if the steps changed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "is stale") {
+		t.Errorf("error %q calls a used-up cassette stale", err)
 	}
 }
 
