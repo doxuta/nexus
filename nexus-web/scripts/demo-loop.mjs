@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// The whole product loop in a real browser (issue #1): the builder asks the assistant for a helpdesk, previews the
-// proposal, applies it to drafts and publishes it; gives the sales rep's role the access the assistant spelled out (by
-// hand, until #2); the rep creates a ticket, sees the builder's too, edits their own and is refused the builder's; the
-// builder changes the list layout, publishes it and rolls back, and the rep sees the previous layout again.
+// The whole product loop in a real browser (issues #1 and #2): the builder asks the assistant for a helpdesk app and says
+// who will use it; the assistant proposes the table, the app and the sales reps' access; the builder previews the cards
+// (the table on the Data page, the access as ghost cells on the access matrix), applies them and publishes once; the rep
+// opens Tickets from the app switcher, creates a ticket, sees the builder's too, edits their own and is refused the
+// builder's; the builder changes the list layout, publishes it and rolls back, and the rep sees the previous layout again.
 //
 //   node scripts/demo-loop.mjs <out-dir>          (from nexus-web/, against a FRESH one-command demo)
 //
@@ -28,10 +29,12 @@ const PERSONAS = {
   // A non-admin: is_admin bypasses every ACL, so only the rep proves the access rules.
   rep: { email: "test@example.com", password: "Demo-Rep-2026!" },
 };
-// Fixed: the cassette is keyed on it.
+// Fixed: the cassette is keyed on it. It says who will use the app, so the assistant proposes the access too (#2).
 const PROMPT =
-  "Build a simple helpdesk: tickets with a title, a priority (low/medium/high) and a status (open/closed). " +
-  "Sales reps can see all tickets and edit their own.";
+  "Build a small helpdesk app: a Tickets table with a title, a description, a priority (low/medium/high) and a status " +
+  "(open/closed), and a menu entry for it. Our sales reps (Nhân viên kinh doanh) can see all tickets, create them, and " +
+  "edit their own; nobody but managers deletes.";
+const REP_ROLE = "crm_sales_rep"; // the role the seed gives the rep: "Nhân viên kinh doanh"
 const TABLE = "tickets"; // what the recorded proposal builds: a stack that already has it has run the loop before
 const TICKET = "Printer on floor 2 is jammed"; // the rep's
 const TICKET_EDITED = `${TICKET} (toner replaced)`;
@@ -163,8 +166,8 @@ async function submitPublish(page, want) {
 }
 
 /** "Tạo mới" on the list, as `page`'s user: every required text gets `title`, every required pick list its first value. */
-async function createTicket(page, title) {
-  await go(page, `/${entity.name}`);
+async function createTicket(page, title, { onList = false } = {}) {
+  if (!onList) await go(page, `/${entity.name}`);
   await (await button(page, t("page.list.new"), "main")).click();
   const form = '[role="dialog"]';
   await page.waitForSelector(`${form} form`);
@@ -204,8 +207,62 @@ async function repList(page) {
   return listColumns(page);
 }
 
+/** The assistant's cards: title, state (from the aria-label "<state>: <title>") and the visible text of each. */
+const cards = (page) =>
+  page.$$eval(`${assistant} article`, (arts) => arts.map((a) => ({
+    title: a.querySelector("h3")?.textContent.trim() ?? "",
+    label: a.getAttribute("aria-label") ?? "",
+    text: a.innerText,
+  })));
+/** The index of the access card: the one whose "where" line is Người dùng & quyền (fails the step when there is none). */
+async function accessCard(page) {
+  const all = await cards(page);
+  const i = all.findIndex((c) => c.text.split("\n").some((l) => l.trim() === t("studio.assistant.where.access")));
+  if (i < 0) throw new Error(`no access card: ${JSON.stringify(all.map((c) => c.title))}`);
+  return i;
+}
+/** Clicks the button labelled `text` inside card `i`. */
+async function clickInCard(page, i, text) {
+  const h = await page.waitForFunction(
+    (scope, i, text) => [...(document.querySelectorAll(`${scope} article`)[i]?.querySelectorAll("button") ?? [])]
+      .find((b) => b.textContent.trim() === text && !b.disabled),
+    {}, assistant, i, text,
+  );
+  await h.asElement().click();
+}
+/** Waits until card `i` leaves the open/applying states; it must be fully applied ("Áp dụng một phần" fails too). */
+async function waitApplied(page, i) {
+  const state = await page.waitForFunction(
+    (scope, i, done, open, applying) => {
+      const a = document.querySelectorAll(`${scope} article`)[i];
+      const l = a?.getAttribute("aria-label") ?? "";
+      if (l.startsWith(`${open}: `) || l.startsWith(`${applying}: `)) return false;
+      return l.startsWith(`${done}: `) ? "done" : `not applied: ${l} — ${a?.innerText.slice(-200)}`;
+    },
+    { timeout: 120_000, polling: 300 },
+    assistant, i, t("studio.assistant.card.state.done"), t("studio.assistant.card.state.open"), t("studio.assistant.card.state.applying"),
+  );
+  const got = await state.jsonValue();
+  if (got !== "done") throw new Error(got);
+}
+/** The rep's grants on one table, as {view, create, edit, delete} → access level ("none" when absent). */
+async function grantsOn(roleId, table) {
+  const grants = (await api(`/admin/roles/${roleId}`)).data.role.actions.filter((a) => a.entityName === table);
+  return Object.fromEntries(["view", "create", "edit", "delete"].map((a) => [a, grants.find((g) => g.action === a)?.accessLevel ?? "none"]));
+}
+/** The app's menu tab for the table (the context bar), clicked as a person does (never a typed URL). */
+async function openFromMenu(page) {
+  const tab = await page.waitForFunction(
+    (label) => [...document.querySelectorAll(".slds-context-bar__secondary a")].find((a) => a.textContent.trim().endsWith(label)),
+    {}, entity.label,
+  );
+  await tab.asElement().click();
+  await waitPath(page, `/${entity.name}`);
+  await page.waitForSelector("main table thead th");
+}
+
 // ── the loop ──
-let builder, rep, entity, repRole, recordId, builderRecordId, titleField, hidden, publishedV2;
+let builder, rep, entity, repRole, recordId, builderRecordId, titleField, hidden, publishedV2, app, crmBefore;
 let active; // the page the current step works in: the runner screenshots it
 const assistant = '[data-testid="assistant-dock"]';
 const steps = [
@@ -231,8 +288,9 @@ const steps = [
     );
     const got = await outcome.jsonValue();
     if (got !== "cards") throw new Error(got);
-    const n = await builder.$$eval(`${assistant} article`, (a) => a.length);
-    return `${n} proposal card(s)`;
+    const all = await cards(builder);
+    await accessCard(builder); // the access was proposed, not left for the builder to set by hand
+    return `${all.length} proposal card(s): ${all.map((c) => c.title).join(" | ")}`;
   }],
 
   ["proposal-previewed", async () => {
@@ -246,39 +304,64 @@ const steps = [
     return "the proposed table is drawn as a ghost row on the page";
   }],
 
-  ["proposal-applied-to-drafts", async () => {
-    const applyAll = t("studio.assistant.card.applyAll").split("{n}")[0];
-    const eligible = [t("studio.assistant.card.apply"), t("studio.assistant.draft.applyDraft")];
-    // Cards "Áp dụng tất cả" can fire, by index (a card that must be confirmed one by one is left as it is).
-    const targets = await builder.$$eval(`${assistant} article`, (arts, eligible) =>
-      arts.map((a, i) => ([...a.querySelectorAll("button")].some((b) => eligible.includes(b.textContent.trim())) ? i : -1)).filter((i) => i >= 0), eligible);
-    if (targets.length === 0) throw new Error("no proposal card can be applied");
-    const all = await builder.$$(`${assistant} button`);
-    let bulk = null;
-    for (const b of all) if ((await b.evaluate((x) => x.textContent.trim())).startsWith(applyAll)) bulk = b;
-    if (bulk) await bulk.click();
-    else await (await button(builder, eligible[0], assistant)).click();
-    // Fully applied only: "Áp dụng một phần" (partly applied) fails the step like "Chưa áp dụng được".
-    const done = t("studio.assistant.card.state.done");
-    const state = await builder.waitForFunction(
-      (scope, targets, done, open, applying) => {
-        const arts = document.querySelectorAll(`${scope} article`);
-        const labels = targets.map((i) => arts[i]?.getAttribute("aria-label") ?? "");
-        if (labels.some((l) => l.startsWith(`${open}: `) || l.startsWith(`${applying}: `))) return false;
-        const bad = labels.findIndex((l) => !l.startsWith(`${done}: `));
-        return bad < 0 ? "done" : `not applied: ${labels[bad]} — ${arts[targets[bad]].innerText.slice(-200)}`;
-      },
-      { timeout: 120_000, polling: 300 },
-      assistant, targets, done, t("studio.assistant.card.state.open"), t("studio.assistant.card.state.applying"),
+  ["access-previewed-on-the-matrix", async () => {
+    // The access card's preview opens Người dùng & quyền: the rep's role gets ghost cells on the proposed table (a ghost
+    // column, as the table is not built yet), with the level the card leads to.
+    const i = await accessCard(builder);
+    const said = (await cards(builder))[i].title;
+    await clickInCard(builder, i, t("studio.assistant.preview.show"));
+    await waitPath(builder, studio("dung/nguoi-dung-quyen"));
+    const note = t("studio.build.ai.access.cell", { level: t("studio.build.access.level.edit") });
+    const cell = await builder.waitForFunction(
+      (scope, note) => [...document.querySelectorAll("main td.nx-proposed")].find((td) => !td.closest(scope) && td.innerText.includes(note)),
+      {}, assistant, note,
     );
-    const got = await state.jsonValue();
-    if (got !== "done") throw new Error(got);
-    // What landed: a new table, born hidden from the customer until Publish, among the drafts.
+    const row = await cell.asElement().evaluate((td) => td.closest("tr").querySelector("th a").textContent.trim());
+    const col = await cell.asElement().evaluate((td) => td.closest("table").querySelectorAll("thead th")[td.cellIndex].innerText.split("\n")[0].trim());
+    return `card: "${said}"; matrix: ${row} × ${col} → "${note}"`;
+  }],
+
+  ["proposals-applied", async () => {
+    // "Áp dụng tất cả" applies what goes to drafts (the table, hidden from the customer until Publish); the app and the
+    // access apply at once for real users, so each is asked in place: "Áp ngay", then "Áp ngay" again in the card.
+    repRole = (await api("/admin/roles")).data.roles.find((r) => r.name === REP_ROLE);
+    if (!repRole) throw new Error(`no role ${REP_ROLE}`);
+    crmBefore = (await api(`/admin/roles/${repRole.id}`)).data.role.actions.filter((a) => a.entityName.startsWith("crm_"));
+    const appsBefore = new Set((await api("/admin/apps")).data.apps.map((a) => a.name));
+    const applyAll = t("studio.assistant.card.applyAll").split("{n}")[0];
+    let bulk = null;
+    for (const b of await builder.$$(`${assistant} button`)) if ((await b.evaluate((x) => x.textContent.trim())).startsWith(applyAll)) bulk = b;
+    const all = await cards(builder);
+    const table = all.findIndex((c) => c.title.startsWith(t("studio.assistant.view.entity").split("{name}")[0]));
+    if (table < 0) throw new Error(`no table card: ${JSON.stringify(all.map((c) => c.title))}`);
+    if (bulk) await bulk.click();
+    else await clickInCard(builder, table, t("studio.assistant.card.apply"));
+    await waitApplied(builder, table);
+    const now = [];
+    for (const [i, c] of (await cards(builder)).entries()) {
+      if (!c.label.startsWith(`${t("studio.assistant.card.state.open")}: `)) continue;
+      await clickInCard(builder, i, t("studio.assistant.draft.applyNow"));
+      await builder.waitForFunction((scope, i, ask) => document.querySelectorAll(`${scope} article`)[i]?.innerText.includes(ask),
+        {}, assistant, i, t("studio.assistant.draft.confirmNow").split("{desc}")[0]);
+      await clickInCard(builder, i, t("studio.assistant.draft.confirmNowAction"));
+      await waitApplied(builder, i);
+      now.push(c.title);
+    }
+    // What landed: the new table among the drafts, the app, and the rep's role with the access the prompt asked for.
     const pending = await drafts();
     const created = pending.find((c) => c.docType === "entity" && c.op === "create");
     if (!created?.entityName) throw new Error(`no new table among the drafts: ${JSON.stringify(pending.map((c) => `${c.op} ${c.docType} ${c.label}`))}`);
     entity = { name: created.entityName, label: created.label };
-    return `${targets.length} applied; drafts: ${pending.map((c) => `${c.op} ${c.docType} "${c.label}"`).join(", ")}`;
+    app = (await api("/admin/apps")).data.apps.find((a) => !appsBefore.has(a.name));
+    if (!app) throw new Error("no new app");
+    const want = { view: "all", create: "all", edit: "owner", delete: "none" };
+    const got = await grantsOn(repRole.id, entity.name);
+    if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`role ${REP_ROLE} on ${entity.name}: ${JSON.stringify(got)}; want ${JSON.stringify(want)}`);
+    // Additive: the role's CRM grants are exactly as they were.
+    const crmAfter = (await api(`/admin/roles/${repRole.id}`)).data.role.actions.filter((a) => a.entityName.startsWith("crm_"));
+    const sig = (gs) => JSON.stringify(gs.map((g) => `${g.entityName}|${g.action}|${g.accessLevel}`).sort());
+    if (sig(crmAfter) !== sig(crmBefore)) throw new Error(`the rep's CRM grants changed: ${sig(crmBefore)} → ${sig(crmAfter)}`);
+    return `applied to drafts: table; applied now: ${now.join(" | ")}; ${repRole.label} (${REP_ROLE}) on ${entity.name}: view all, create, edit own, no delete; ${crmAfter.length} CRM grants untouched; drafts: ${pending.map((c) => `${c.op} ${c.docType} "${c.label}"`).join(", ")}`;
   }],
 
   ["publish-review", async () => {
@@ -291,47 +374,43 @@ const steps = [
     return `version ${publishedV2} is live`;
   }],
 
-  // until #2: the assistant cannot propose access yet, so the builder sets what its reply spells out for the rep's role:
-  // see every ticket, edit only the ones they created (owner_id), no delete; and create, so that they have their own.
-  ["rep-granted-what-the-assistant-said", async () => {
-    const users = (await api("/admin/users")).data.users;
-    const roleId = users.find((u) => u.email === PERSONAS.rep.email)?.roleId;
-    repRole = (await api("/admin/roles")).data.roles.find((r) => r.id === roleId);
-    if (!repRole) throw new Error(`${PERSONAS.rep.email} has no role`);
-    await go(builder, studio(`dung/nguoi-dung-quyen/vai/${repRole.id}`));
-    const want = { view: "all", create: "all", edit: "owner" };
-    for (const [action, level] of Object.entries(want)) {
-      const cell = (lv) => `button[aria-label=${attr(t("page.adminRoles.matrix.cell", { action: t(`page.adminRoles.action.${action}`), entity: entity.label, level: t(`page.adminRoles.level.${lv}`) }))}]`;
-      await (await builder.waitForSelector(cell("none"))).click();
-      const item = await builder.waitForFunction((label) => [...document.querySelectorAll('[role="menuitemcheckbox"]')].find((i) => i.textContent.trim() === label), {}, t(`page.adminRoles.level.${level}`));
-      await item.asElement().click();
-      await builder.waitForSelector(cell(level));
-    }
-    await (await button(builder, t("action.save"), '[data-testid="unsaved-bar"]')).click();
-    await (await button(builder, t("direct.confirm"))).click(); // a delivered project: roles apply at once, asked in place
-    await builder.waitForFunction(() => !document.querySelector('[data-testid="unsaved-bar"] button'));
-    const grants = (await api(`/admin/roles/${repRole.id}`)).data.role.actions.filter((a) => a.entityName === entity.name);
-    const got = Object.fromEntries(["view", "create", "edit", "delete"].map((a) => [a, grants.find((g) => g.action === a)?.accessLevel ?? "none"]));
-    if (JSON.stringify(got) !== JSON.stringify({ ...want, delete: "none" })) {
-      throw new Error(`role ${repRole.name} on ${entity.name}: ${JSON.stringify(got)}; want ${JSON.stringify({ ...want, delete: "none" })}`);
-    }
-    return `${repRole.label ?? repRole.name} (${repRole.name}) on ${entity.name}: view all, create, edit own, no delete`;
-  }],
-
   ["builder-creates-a-ticket", async () => {
     // The builder's own ticket, filed from the app like anyone's: the rep will see it and must not be able to edit it.
     builderRecordId = await createTicket(builder, BUILDER_TICKET);
     return `created ${entity.name}/${builderRecordId} as ${PERSONAS.builder.email}`;
   }],
 
-  ["rep-creates-a-ticket", async () => {
+  ["rep-opens-the-app-switcher", async () => {
+    // Not by URL: the app launcher lists the new app for the rep, as they can see one of its menu entries.
     active = rep = await signIn(PERSONAS.rep);
-    recordId = await createTicket(rep, TICKET);
+    await go(rep, "/home");
+    await rep.click(`button[title=${attr(t("slds.appLauncher.open"))}]`);
+    await rep.waitForFunction(
+      (label) => [...document.querySelectorAll('[role="dialog"] .slds-app-launcher__tile a')].some((a) => a.textContent.trim() === label),
+      {}, app.label,
+    );
+    const tiles = await rep.$$eval('[role="dialog"] .slds-app-launcher__tile a', (as) => as.map((a) => a.textContent.trim()));
+    return `the launcher lists: ${tiles.join(" | ")}`;
+  }],
+
+  ["rep-opens-tickets-from-the-app-menu", async () => {
+    const tile = await rep.waitForFunction(
+      (label) => [...document.querySelectorAll('[role="dialog"] .slds-app-launcher__tile a')].find((a) => a.textContent.trim() === label),
+      {}, app.label,
+    );
+    await tile.asElement().click();
+    await openFromMenu(rep);
+    await waitText(rep, BUILDER_TICKET, "main table tbody");
+    return `"${app.label}" → "${entity.label}": the list shows "${BUILDER_TICKET}"`;
+  }],
+
+  ["rep-creates-a-ticket", async () => {
+    recordId = await createTicket(rep, TICKET, { onList: true });
     return `created ${entity.name}/${recordId} as ${PERSONAS.rep.email}`;
   }],
 
   ["rep-sees-both-tickets", async () => {
-    await go(rep, `/${entity.name}`);
+    await openFromMenu(rep);
     for (const title of [TICKET, BUILDER_TICKET]) await waitText(rep, title, "main table tbody");
     return `"${TICKET}" (theirs) and "${BUILDER_TICKET}" (the builder's) are listed`;
   }],
@@ -354,12 +433,15 @@ const steps = [
   }],
 
   ["rep-refused-on-the-builders-ticket", async () => {
-    // Row level: the rep sees the builder's ticket, but its edit form says it belongs to someone else, and the server
-    // refuses the very PUT it accepts on the rep's own ticket. Outside the edit scope the server answers 404, as for a
-    // ticket that is not there (by design: LayoutDetail's outOfEditScope), so the GET beside it shows that the ticket
-    // is there and readable. And no delete at all, not even of their own ticket.
-    await go(rep, `/${entity.name}/${builderRecordId}/edit`);
+    // Row level: the rep opens the builder's ticket; its page has no "Sửa" and says it belongs to someone else (the
+    // misleading /edit form is #18), and the server refuses the very PUT it accepts on the rep's own ticket. Outside the
+    // edit scope the server answers 404, as for a ticket that is not there (by design: LayoutDetail's outOfEditScope), so
+    // the GET beside it shows that the ticket is there and readable. And no delete at all, not even of their own ticket.
+    await go(rep, `/${entity.name}/${builderRecordId}`);
     await waitText(rep, t("page.record.editScope.readOnly"), "main");
+    await waitText(rep, BUILDER_TICKET, "main");
+    const edit = await rep.$$eval("main button, main a", (els, label) => els.filter((e) => e.textContent.trim() === label).length, t("page.record.action.edit"));
+    if (edit > 0) throw new Error(`the builder's ticket offers the rep "${t("page.record.action.edit")}"`);
     const body = { [titleField]: TICKET_EDITED };
     const got = {
       "PUT own": await requestAs(rep, "PUT", recordId, body),
