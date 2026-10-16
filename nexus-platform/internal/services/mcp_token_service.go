@@ -40,6 +40,7 @@ type mcpTokenRepo interface {
 	FindByHash(ctx context.Context, hash string) (*auth.MCPToken, error)
 	ListLive(ctx context.Context, tenantID, userID string, now time.Time) ([]auth.MCPToken, error)
 	Revoke(ctx context.Context, tenantID, userID, id string, at time.Time) error
+	RevokeAllForUser(ctx context.Context, tenantID, userID string, at time.Time) (int64, error)
 	Touch(ctx context.Context, tenantID, id string, at time.Time) error
 }
 
@@ -152,6 +153,22 @@ func (s *MCPTokenService) Revoke(ctx context.Context, tenantID, userID, id strin
 		return fmt.Errorf("services.MCPTokenService.Revoke: %w", err)
 	}
 	emitMetaAudit(ctx, s.auditor, tenantID, "__mcp_token__", "revoke", map[string]any{"id": id}, nil)
+	return nil
+}
+
+// RevokeAllForUser ends every live agent key of one builder. AuthService calls it on every
+// credential-level event (logout-all, a password change or reset, the refresh-reuse alarm), so a key
+// minted from a stolen session does not outlive the victim's incident response.
+func (s *MCPTokenService) RevokeAllForUser(ctx context.Context, tenantID, userID string) error {
+	n, err := s.repo.RevokeAllForUser(ctx, tenantID, userID, s.now())
+	if err != nil {
+		return fmt.Errorf("services.MCPTokenService.RevokeAllForUser: %w", err)
+	}
+	if n > 0 {
+		emitMetaAudit(ctx, s.auditor, tenantID, "__mcp_token__", "revoke_all", map[string]any{"userId": userID, "count": n}, nil)
+		s.logger.Info("services.MCPTokenService: agent keys revoked with the user's sessions",
+			zap.String("tenant_id", tenantID), zap.String("user_id", userID), zap.Int64("count", n))
+	}
 	return nil
 }
 

@@ -1293,6 +1293,9 @@ func main() {
 	// as the builder who issued them; proposals land in that builder's thread (aiSessionStore).
 	mcpTokenSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(database), aiSessionStore, userRepo).
 		WithAuditor(auditDispatcher).WithLogger(logger)
+	// A credential-level event (logout-all, a password change or reset, the reuse alarm) ends the user's
+	// agent keys with their sessions: a key minted from a stolen session must not outlive them.
+	authSvc.WithAgentKeys(mcpTokenSvc)
 
 	// ⌘K end-user data assistant (read-only ask-data): reuses the E9 plumbing (gateway, ledger,
 	// session store) with its OWN tool registry — query/aggregate/list only, ZERO propose_*. The

@@ -21,6 +21,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -46,8 +47,16 @@ func (b mcpBearer) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-func TestMCP_TokenScopeAndProposalToThread(t *testing.T) {
-	gdb, sx := a4SetupMigratedDB(t)
+// mcpITRouter is the production chain of cmd/server/main.go for MCP: /api/v1 behind the composite
+// Bearer verifier, the live subject and the builder tier, the auth and token handlers, and /mcp with
+// its own bearer. The auth service ends agent keys with the user's sessions, as in main.go.
+type mcpITRouter struct {
+	r    *gin.Engine
+	keys *services.APIKeyService
+}
+
+func newMCPITRouter(t *testing.T, gdb *gorm.DB, sx *sqlx.DB) mcpITRouter {
+	t.Helper()
 	t.Setenv("JWT_SECRET", itJWTSecret)
 	t.Setenv("JWT_ACCESS_TTL", "15m")
 	t.Setenv("JWT_REFRESH_TTL", "168h")
@@ -65,12 +74,13 @@ func TestMCP_TokenScopeAndProposalToThread(t *testing.T) {
 	store := ai.NewSessionStore(sx)
 	apiKeySvc := services.NewAPIKeyService(auth.NewAPIKeyRepository(gdb), roleRepo)
 	mcpSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(gdb), store, userRepo)
+	authSvc := services.NewAuthService(userRepo, auth.NewRefreshTokenRepository(gdb), tokenSvc).WithAgentKeys(mcpSvc)
 	agent := ai.NewAIBuilderAgent(config.AIConfig{}, nil, meta, nil, nil, zap.NewNop()) // AI off: MCP needs no gateway
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	RegisterAPIRoutes(r.Group("/api/v1"), services.NewCompositeVerifier(tokenSvc, apiKeySvc), services.NewACLService(roleRepo), APIHandlers{
-		Auth:     NewAuthHandler(services.NewAuthService(userRepo, auth.NewRefreshTokenRepository(gdb), tokenSvc), zap.NewNop()),
+		Auth:     NewAuthHandler(authSvc, zap.NewNop()),
 		Metadata: NewMetadataHandler(gdb, zap.NewNop()),
 		Admin:    NewAdminEntityHandler(services.NewEntityService(dynrepo.New(sx), meta), services.NewFieldService(dynrepo.New(sx), meta), zap.NewNop()),
 		AI:       NewAIBuilderHandler(nil, store, nil, nil, zap.NewNop()),
@@ -80,6 +90,39 @@ func TestMCP_TokenScopeAndProposalToThread(t *testing.T) {
 		WithLiveSubject(services.NewCachedUserLoader(userRepo, services.DefaultUserClaimTTL)),
 		WithOperatorTier(middleware.RequireBuilderTier(userRepo, zap.NewNop())))
 	r.Any("/mcp", gin.WrapH(mcpserver.New(mcpSvc, agent, store, nil, zap.NewNop()))) // as cmd/server/main.go
+	return mcpITRouter{r: r, keys: apiKeySvc}
+}
+
+// mcpStatus is the HTTP status of a tools/list on /mcp with credential (raw, no "Bearer " prefix).
+func mcpStatus(t *testing.T, r *gin.Engine, credential string) int {
+	t.Helper()
+	body := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": map[string]any{}}
+	return doAuthed(t, r, http.MethodPost, "/mcp", credential, body, map[string]string{"Accept": "application/json, text/event-stream"}).Code
+}
+
+// issueMCPKey issues an agent key through the Studio route as the given builder JWT.
+func issueMCPKey(t *testing.T, r *gin.Engine, jwt string) (secret, id, session string) {
+	t.Helper()
+	w := doAuthed(t, r, http.MethodPost, "/api/v1/admin/mcp-tokens", jwt, map[string]any{}, nil)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("issue: %d", w.Code) // never print a body that may hold a token
+	}
+	var out struct {
+		Data struct {
+			Token  auth.MCPToken `json:"token"`
+			Secret string        `json:"secret"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode issue: %v", err)
+	}
+	return out.Data.Secret, out.Data.Token.ID, out.Data.Token.SessionID
+}
+
+func TestMCP_TokenScopeAndProposalToThread(t *testing.T) {
+	gdb, sx := a4SetupMigratedDB(t)
+	rt := newMCPITRouter(t, gdb, sx)
+	r, apiKeySvc := rt.r, rt.keys
 
 	const tenant = "ten-mcp-aaaa"
 	a4SeedTenant(t, gdb, tenant, "mcp-ten", "MCP Tenant")
@@ -92,29 +135,8 @@ func TestMCP_TokenScopeAndProposalToThread(t *testing.T) {
 	builderTok := itLogin(t, r, "mcp-ten", "builder@mcp.test", authPassword).Data.AccessToken
 	repTok := itLogin(t, r, "mcp-ten", "rep@mcp.test", authPassword).Data.AccessToken
 
-	issue := func() (secret, id, session string) {
-		t.Helper()
-		w := doAuthed(t, r, http.MethodPost, "/api/v1/admin/mcp-tokens", builderTok, map[string]any{}, nil)
-		if w.Code != http.StatusCreated {
-			t.Fatalf("issue: %d %s", w.Code, w.Body.String())
-		}
-		var out struct {
-			Data struct {
-				Token  auth.MCPToken `json:"token"`
-				Secret string        `json:"secret"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-			t.Fatalf("decode issue: %v", err)
-		}
-		return out.Data.Secret, out.Data.Token.ID, out.Data.Token.SessionID
-	}
-	mcpPost := func(credential string) int {
-		t.Helper()
-		body := map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": map[string]any{}}
-		w := doAuthed(t, r, http.MethodPost, "/mcp", credential, body, map[string]string{"Accept": "application/json, text/event-stream"})
-		return w.Code
-	}
+	issue := func() (secret, id, session string) { t.Helper(); return issueMCPKey(t, r, builderTok) }
+	mcpPost := func(credential string) int { t.Helper(); return mcpStatus(t, r, credential) }
 
 	// ---- issue: builders only ------------------------------------------------------------------
 	if w := doAuthed(t, r, http.MethodPost, "/api/v1/admin/mcp-tokens", repTok, map[string]any{}, nil); w.Code != http.StatusForbidden {
@@ -478,5 +500,43 @@ func TestMCP_RetiredTenantKeysStop(t *testing.T) {
 	}
 	if got := list(); got != http.StatusUnauthorized {
 		t.Fatalf("a retired workspace's key: %d; want 401", got)
+	}
+}
+
+// A stolen session can mint an agent key; the victim's incident response must end it. Logout-all and
+// a password change go through the credential-level endAllSessions, which now ends agent keys too.
+func TestMCP_LogoutAllAndPasswordChangeEndAgentKeys(t *testing.T) {
+	gdb, sx := a4SetupMigratedDB(t)
+	r := newMCPITRouter(t, gdb, sx).r
+	const tenant = "ten-mcp-incident"
+	mcpBuilder(t, gdb, tenant, "mcp-incident")
+	login := func() string {
+		t.Helper()
+		return itLogin(t, r, "mcp-incident", "builder@mcp-incident.test", authPassword).Data.AccessToken
+	}
+
+	jwt := login()
+	secret, _, _ := issueMCPKey(t, r, jwt)
+	if got := mcpStatus(t, r, secret); got != http.StatusOK {
+		t.Fatalf("control: a fresh key: %d", got)
+	}
+	if w := doAuthed(t, r, http.MethodPost, "/api/v1/auth/logout-all", jwt, map[string]any{}, nil); w.Code >= 300 {
+		t.Fatalf("logout-all: %d %s", w.Code, w.Body.String())
+	}
+	if got := mcpStatus(t, r, secret); got != http.StatusUnauthorized {
+		t.Errorf("the key after logout-all: %d; want 401", got)
+	}
+
+	jwt = login()
+	secret, _, _ = issueMCPKey(t, r, jwt)
+	if got := mcpStatus(t, r, secret); got != http.StatusOK {
+		t.Fatalf("control: a fresh key: %d", got)
+	}
+	w := doAuthed(t, r, http.MethodPut, "/api/v1/auth/me/password", jwt, map[string]any{"currentPassword": authPassword, "newPassword": "Br4nd-New-Pw-2026!"}, nil)
+	if w.Code >= 300 {
+		t.Fatalf("password change: %d %s", w.Code, w.Body.String())
+	}
+	if got := mcpStatus(t, r, secret); got != http.StatusUnauthorized {
+		t.Errorf("the key after a password change: %d; want 401", got)
 	}
 }

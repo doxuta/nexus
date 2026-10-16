@@ -64,6 +64,17 @@ func (f *fakeMCPRepo) Revoke(_ context.Context, tenantID, userID, id string, at 
 	return nil
 }
 
+func (f *fakeMCPRepo) RevokeAllForUser(_ context.Context, tenantID, userID string, at time.Time) (int64, error) {
+	var n int64
+	for _, t := range f.rows {
+		if t.TenantID == tenantID && t.UserID == userID && t.RevokedAt == nil {
+			t.RevokedAt = &at
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (f *fakeMCPRepo) Touch(_ context.Context, _, id string, at time.Time) error {
 	f.rows[id].LastUsedAt = &at
 	f.touched++

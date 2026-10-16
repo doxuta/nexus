@@ -102,6 +102,17 @@ func (r *MCPTokenRepository) Revoke(ctx context.Context, tenantID, userID, id st
 	return nil
 }
 
+// RevokeAllForUser soft-revokes every live token of one builder and reports how many it revoked.
+func (r *MCPTokenRepository) RevokeAllForUser(ctx context.Context, tenantID, userID string, at time.Time) (int64, error) {
+	res := r.db.WithContext(ctx).Model(&MCPToken{}).
+		Where("tenant_id = ? AND user_id = ? AND revoked_at IS NULL", tenantID, userID).
+		Update("revoked_at", at)
+	if res.Error != nil {
+		return 0, fmt.Errorf("auth.MCPTokenRepository.RevokeAllForUser: %w", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
 // Touch records a verified request. tenantID comes from the row FindByHash returned.
 func (r *MCPTokenRepository) Touch(ctx context.Context, tenantID, id string, at time.Time) error {
 	err := r.db.WithContext(ctx).Model(&MCPToken{}).

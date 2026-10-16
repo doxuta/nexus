@@ -185,11 +185,26 @@ func (s *AuthService) LogoutEverywhere(ctx context.Context, tenantID, userID str
 	return nil
 }
 
+// agentKeyRevoker ends a user's MCP agent keys (issue #3) — MCPTokenService in production.
+type agentKeyRevoker interface {
+	RevokeAllForUser(ctx context.Context, tenantID, userID string) error
+}
+
+// WithAgentKeys makes every credential-level event end the user's agent keys too (see
+// endAllSessions): an agent key minted from a stolen session must not survive the victim's
+// logout-all or password change.
+func (s *AuthService) WithAgentKeys(r agentKeyRevoker) *AuthService {
+	s.agentKeys = r
+	return s
+}
+
 // endAllSessions is the ONE way a credential-level event ends sessions immediately (#310): logout-all,
 // a password change / reset / admin set, the E5 reuse alarm. It revokes every live row of the user as
 // 'ended' — except keepSessionID when not blank — and invalidates the session guard for each ended
 // session, so the auth stage refuses their access tokens on the very next request instead of after
 // the access TTL. A plain revoke (RevokeAllForUser, revoke_reason NULL) left those tokens alive ≤ 15'.
+// It also ends every MCP agent key of the user (issue #3), keepSessionID or not: a key minted from a
+// stolen session is not tied to one, and must not outlive the victim's logout-all or password change.
 func (s *AuthService) endAllSessions(ctx context.Context, tenantID, userID, keepSessionID string) error {
 	sids, err := s.refresh.EndAllSessions(ctx, tenantID, userID, keepSessionID)
 	if err != nil {
@@ -197,6 +212,11 @@ func (s *AuthService) endAllSessions(ctx context.Context, tenantID, userID, keep
 	}
 	for _, sid := range sids {
 		s.sessions.Invalidate(tenantID, userID, sid)
+	}
+	if s.agentKeys != nil {
+		if err := s.agentKeys.RevokeAllForUser(ctx, tenantID, userID); err != nil {
+			return fmt.Errorf("end agent keys: %w", err)
+		}
 	}
 	return nil
 }
