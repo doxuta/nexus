@@ -217,6 +217,9 @@ const en = {
   "studio.operate.mcp.err.issue": "Could not create the key. Try again in a few minutes.",
   "studio.operate.mcp.err.scope": "The open project changed, nothing was done. Reopen this page and try again.",
   "studio.operate.mcp.err.workspace": "Agent keys can be created only in your own project, not while you work inside a customer's project.",
+
+  // ── Studio project header ───────────────────────────────────────────────
+  "studio.project.homeMetaDelivered": "Nexus workshop",
 } as const;
 
 export type I18nKeyEn = keyof typeof en;

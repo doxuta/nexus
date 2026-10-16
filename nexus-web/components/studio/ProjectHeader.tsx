@@ -40,7 +40,9 @@ export function ProjectHeader({ slug, identity, zone, status, home, openApp, act
   const matches = useStudioIdentity().matches(slug);
   const [reviewing, setReviewing] = useState(false);
   // Counted only when the token belongs to this project (FR-022). Heaviest state wins: pending drafts, then the live version, then "not delivered".
-  const shown = matches && !home ? publish : undefined;
+  // The workshop has no delivery notion until it is delivered (the one-command demo publishes its baseline): from then on its
+  // drafts need the same Publish as a customer project's, or nothing in the Studio could publish them.
+  const shown = matches && (!home || publish?.delivered) ? publish : undefined;
   const hasPending = !!shown && shown.delivered && shown.pendingCount > 0;
   const needsRetry = !!shown && shown.delivered && !!shown.schemaRetry;
   const canPublish = hasPending || needsRetry;
@@ -63,7 +65,8 @@ export function ProjectHeader({ slug, identity, zone, status, home, openApp, act
       {t(hasPending ? "studio.publish.open" : "studio.publish.retryOpen")}
     </Button>
   ) : null;
-  const facts = home ? t("studio.project.homeMeta") : [identity.industry, identity.stageLabel, identity.originLabel].filter(Boolean).join(" · ");
+  // Delivered, the workshop is seen by its customers: its line no longer claims they cannot see it.
+  const facts = home ? t(shown?.delivered ? "studio.project.homeMetaDelivered" : "studio.project.homeMeta") : [identity.industry, identity.stageLabel, identity.originLabel].filter(Boolean).join(" · ");
   const line = (
     <span className="slds-truncate" title={facts}>
       {facts}

@@ -4984,6 +4984,7 @@ const vi = {
   // ── specs/073 kh1a: project header, context gate, common page states ──
   "studio.project.home": "Xưởng Nexus",
   "studio.project.homeMeta": "Xưởng Nexus · khách không thấy",
+  "studio.project.homeMetaDelivered": "Xưởng Nexus",
   "studio.project.menu": "Thêm thao tác",
   "studio.project.openHomeApp": "Mở app của xưởng Nexus",
   "studio.project.openApp": "Mở app của khách",
