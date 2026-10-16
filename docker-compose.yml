@@ -7,7 +7,8 @@
 #
 # Local demo only: MySQL has no root password, the JWT secret below is public. Override every value in a
 # .env file (or the shell) for anything that is not your own laptop. AI is off until you point
-# AI_GATEWAY_BASE_URL at an OpenAI-compatible gateway and set AI_ENABLED=true.
+# AI_GATEWAY_BASE_URL at an OpenAI-compatible gateway and set AI_ENABLED=true, or replay a recorded
+# cassette from ./cassettes: AI_ENABLED=true AI_GATEWAY_MODE=replay AI_GATEWAY_CASSETTE=/cassettes/<name>.jsonl
 name: nexus
 
 x-db: &db "root:@tcp(mysql:3306)/nexus?charset=utf8mb4&parseTime=True&loc=UTC"
@@ -57,6 +58,13 @@ services:
       AI_GATEWAY_BASE_URL: ${AI_GATEWAY_BASE_URL:-}
       AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-claude-opus-5-5}
+      # live | record | replay (nexus-platform/.env.example); a cassette path only with record or replay.
+      AI_GATEWAY_MODE: ${AI_GATEWAY_MODE:-live}
+      AI_GATEWAY_CASSETTE: ${AI_GATEWAY_CASSETTE:-}
+    # Writable, so record can fill it. The container runs as uid 10001: on Linux, make ./cassettes
+    # writable for it before recording (replay only reads).
+    volumes:
+      - ./cassettes:/cassettes
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
       interval: 3s

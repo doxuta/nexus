@@ -35,7 +35,7 @@ Open <http://localhost:8080> (set `NEXUS_PORT` to use another port).
 Workspace code: `northwind`. These credentials are for your laptop only; the compose file documents every
 override. AI features stay off until you point `AI_GATEWAY_BASE_URL` at an OpenAI-compatible gateway and set
 `AI_ENABLED=true`.
-Without a model or key, `AI_GATEWAY_MODE=replay` answers from a cassette (`AI_GATEWAY_CASSETTE`) recorded once with `AI_GATEWAY_MODE=record`.
+Without a model or key, `AI_ENABLED=true AI_GATEWAY_MODE=replay AI_GATEWAY_CASSETTE=/cassettes/<name>.jsonl docker compose up` answers from a cassette in `./cassettes`, recorded once the same way with `AI_GATEWAY_MODE=record` and a live gateway.
 
 ## What's inside
 
