@@ -253,13 +253,20 @@ func main() {
 
 	// E9 AI Builder (../specs/020-e9-ai-builder/spec.md): the conversational NL→metadata agent.
 	// Model A — Nexus owns the loop + the tenant-safe tools; the OpenAI-compatible LLM gateway only relays
-	// messages. LoadAIConfig never errors: absent AI_* vars leave the agent inert (Enabled=false),
-	// and the route still mounts to answer 503 AI_DISABLED (honest-disabled). The gateway base URL
-	// is a localhost-pinned CONFIG value (never a request) → no SSRF. metaRepo satisfies the
-	// tenant-scoped MetadataReader the read tools use; the sqlx-backed run repo writes the
-	// sys_ai_runs ledger (prompt HASHED, per-turn token/latency/outcome).
-	aiCfg := config.LoadAIConfig()
-	aiGateway := ai.NewGateway(aiCfg.BaseURL, time.Duration(aiCfg.TimeoutSec)*time.Second).WithAPIKey(aiCfg.APIKey)
+	// messages. Absent AI_* vars leave the agent inert (Enabled=false), and the route still mounts
+	// to answer 503 AI_DISABLED (honest-disabled); only a bad AI_GATEWAY_MODE/AI_GATEWAY_CASSETTE
+	// fails boot. The gateway base URL is a localhost-pinned CONFIG value (never a request) → no
+	// SSRF. metaRepo satisfies the tenant-scoped MetadataReader the read tools use; the sqlx-backed
+	// run repo writes the sys_ai_runs ledger (prompt HASHED, per-turn token/latency/outcome).
+	aiCfg, err := config.LoadAIConfig()
+	if err != nil {
+		logger.Fatal("Failed to load AI config", zap.Error(err))
+	}
+	// The live gateway, or record/replay through AI_GATEWAY_CASSETTE (demos, CI, evals without a model).
+	aiGateway, err := ai.NewCompleter(*aiCfg)
+	if err != nil {
+		logger.Fatal("Failed to set up the AI gateway", zap.Error(err))
+	}
 	aiRunRepo := ai.NewSQLRunRepository(sqlxDB)
 	// aiAgent itself is constructed LATER (before the ⌘K assistant block): explain_access needs
 	// AccessProbes over userRepo/roleRepo/aclSvc/fieldACLRepo/recordSvc, none of which exist yet.
@@ -274,7 +281,8 @@ func main() {
 	// ALWAYS wires this guard; a handler without one gates nothing (test-only shape).
 	aiBudgetGuard := ai.NewBudgetGuard(*aiCfg, aiRunRepo, logger)
 	if aiCfg.Enabled {
-		logger.Info("AI Builder enabled", zap.String("ai_model", aiCfg.Model), zap.String("ai_gateway", aiCfg.BaseURL))
+		logger.Info("AI Builder enabled", zap.String("ai_model", aiCfg.Model), zap.String("ai_gateway", aiCfg.BaseURL),
+			zap.String("ai_gateway_mode", aiCfg.GatewayMode))
 	} else {
 		logger.Info("AI Builder disabled (AI_ENABLED not \"true\") — route answers 503 AI_DISABLED")
 	}
