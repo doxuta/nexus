@@ -5,9 +5,12 @@ import (
 	"testing"
 )
 
-// loadAI is LoadAIConfig for the tests that leave AI_GATEWAY_MODE alone, where it cannot fail.
+// loadAI is LoadAIConfig for the tests about the other knobs. It owns the gateway mode, so a shell
+// that exports AI_GATEWAY_MODE or AI_GATEWAY_CASSETTE cannot fail them.
 func loadAI(t *testing.T) *AIConfig {
 	t.Helper()
+	t.Setenv("AI_GATEWAY_MODE", "")
+	t.Setenv("AI_GATEWAY_CASSETTE", "")
 	cfg, err := LoadAIConfig()
 	if err != nil {
 		t.Fatalf("LoadAIConfig: %v", err)
