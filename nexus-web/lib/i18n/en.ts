@@ -190,6 +190,27 @@ const en = {
 
   // ── Studio project header ───────────────────────────────────────────────
   "studio.project.homeMetaDelivered": "Nexus workshop",
+
+  // ── Assistant: who may use what it built (issue #2) ──────────────────────
+  "studio.assistant.stepKind.access": "access",
+  "studio.assistant.apply.accessRoleMissing": "The role \"{role}\" is gone — ask the assistant again for a role that exists.",
+  "studio.assistant.apply.accessTableMissing": "There is no table {list} yet: apply the table card first, then the access.",
+  "studio.assistant.apply.accessNothing": "The role already had all of this — nothing changed.",
+  "studio.assistant.where.access": "Users & access",
+  "studio.assistant.view.access": "Let “{role}” use {tables}",
+  "studio.assistant.view.access.line": "{role} can {actions} {table}",
+  "studio.assistant.access.verb.view": "view",
+  "studio.assistant.access.verb.create": "create",
+  "studio.assistant.access.verb.edit": "edit",
+  "studio.assistant.access.verb.delete": "delete",
+  "studio.assistant.access.scope.all": "{verb} all",
+  "studio.assistant.access.scope.owner": "{verb} their own",
+  "studio.assistant.access.scope.team": "{verb} their team's",
+  "studio.assistant.access.scope.field": "{verb} their own and assigned",
+  "studio.assistant.access.none": "no access",
+  "studio.assistant.access.side": "{table}: {actions}",
+  "studio.assistant.done.access": "Access granted to the role.",
+  "studio.assistant.done.accessLink": "Open Users & access",
 } as const;
 
 export type I18nKeyEn = keyof typeof en;

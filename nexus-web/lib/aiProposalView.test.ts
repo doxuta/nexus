@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import { proposalView, proposalDone, proposalWarnLink } from "./aiProposalView";
 import type { AiDraftItem } from "./aiBuilder";
 
@@ -20,6 +20,8 @@ const ITEMS: Record<string, AiDraftItem> = {
   approval: { kind: "approval", approval: { name: "Duyệt giảm giá", entityName: "bao_gia", steps: [{ approverRef: "role:sales_manager" } as never] } },
   dashboard: { kind: "dashboard", dashboard: { name: "Tổng quan", widgets: [{ title: "Doanh thu", type: "metric" }] } },
   workqueue: { kind: "workqueue", workqueue: { name: "cho_duyet", label: "Chờ duyệt", entityName: "bao_gia", filters: [{ field: "status", op: "eq", value: "moi" }] } },
+  access: { kind: "access", access: { role: "crm_sales_rep", roleLabel: "Nhân viên kinh doanh", labels: { tickets: "Phiếu hỗ trợ" },
+    grants: [{ entityName: "tickets", action: "view", accessLevel: "all" }, { entityName: "tickets", action: "create", accessLevel: "all" }, { entityName: "tickets", action: "edit", accessLevel: "owner" }] } },
 };
 
 describe("proposalView", () => {
@@ -112,5 +114,40 @@ describe("proposalDone / proposalWarnLink", () => {
     expect(proposalWarnLink(ITEMS.app, link)?.label).toBe("Mở App và menu");
     expect(proposalWarnLink(ITEMS.records, link)?.href).toBe("/benh_nhan");
     expect(proposalWarnLink(ITEMS.workflow, link)).toBeNull();
+  });
+});
+
+// issue #2: the access card says, in human words, what the role may do on the table.
+describe("proposalView — access", () => {
+  const withChange: AiDraftItem = {
+    ...ITEMS.access,
+    change: { docType: "role", docKey: "r1", op: "update", label: "Vai", target: { name: "crm_sales_rep", entity: "tickets" },
+      before: { grants: [], labels: { tickets: "Phiếu hỗ trợ" } },
+      after: { grants: ITEMS.access.access!.grants, labels: { tickets: "Phiếu hỗ trợ" } } },
+  };
+  afterEach(() => localStorage.removeItem("nexus.prefs.v1"));
+
+  it("one line per table: <role> được xem tất cả · tạo · sửa của mình trên <table>", () => {
+    const v = proposalView(ITEMS.access)!;
+    expect(v.title).toBe("Cho vai “Nhân viên kinh doanh” dùng Phiếu hỗ trợ");
+    expect(texts(v)).toEqual(["add:Nhân viên kinh doanh được xem tất cả · tạo · sửa của mình trên Phiếu hỗ trợ"]);
+    expect(v.where).toBe("Người dùng & quyền");
+  });
+
+  it("in English: <Role label> can view all · create · edit their own <Table>", () => {
+    localStorage.setItem("nexus.prefs.v1", JSON.stringify({ locale: "en" }));
+    expect(texts(proposalView(ITEMS.access))).toEqual(["add:Nhân viên kinh doanh can view all · create · edit their own Phiếu hỗ trợ"]);
+  });
+
+  it("with the server's role change: Sửa, the sentence stays, Trước/Sau name the table's access", () => {
+    const v = proposalView(withChange)!;
+    expect(v.op).toBe("update");
+    expect(texts(v)).toEqual(["add:Nhân viên kinh doanh được xem tất cả · tạo · sửa của mình trên Phiếu hỗ trợ"]);
+    expect(v.before).toEqual(["Phiếu hỗ trợ: không có quyền"]);
+    expect(v.after).toEqual(["Phiếu hỗ trợ: xem tất cả · tạo · sửa của mình"]);
+  });
+
+  it("applied, it points at Người dùng & quyền", () => {
+    expect(proposalDone(ITEMS.access, undefined, link)).toMatchObject({ href: "/studio/dung/nguoi-dung-quyen", label: "Mở Người dùng & quyền" });
   });
 });

@@ -11,8 +11,9 @@ import {
   dashboardWidgetLines, draftRecordsRows, editFieldDiffRows, getApprovalDraft, getDashboardDraft, getDeleteEntityDraft,
   getDeleteFieldDraft, getEditFieldDraft, getRecordsDraft, getWorkQueueDraft, layoutViewLabel, recordCellText,
   recordsPreviewModel, reportSummaryText, reportTypeLabel, summarizeLayoutDraft, workflowActionText, workflowRuleText,
-  workflowTriggerPhrase, workQueueSummaryText, type AiDraftItem,
+  workflowTriggerPhrase, workQueueSummaryText, getAccessDraft, type AiDraftItem,
 } from "@/lib/aiBuilder";
+import { accessText } from "@/lib/accessLevels";
 
 export type ProposalOp = "create" | "update" | "delete";
 
@@ -214,6 +215,18 @@ export function proposalView(item: AiDraftItem, ctx: Ctx = {}): ProposalView | n
       ],
     });
   }
+  const ac = item.kind === "access" ? getAccessDraft(item) : undefined;
+  if (ac) {
+    // "Nhân viên kinh doanh được xem tất cả · tạo · sửa của mình trên Phiếu hỗ trợ", one line per table.
+    const role = ac.roleLabel || ac.role;
+    const label = (n: string) => ac.labels?.[n] || n;
+    const tables = [...new Set(ac.grants.map((g) => g.entityName))];
+    return base({
+      title: V("access", { role, tables: tables.map(label).join(", ") }),
+      where: where(t("studio.assistant.where.access")),
+      changes: tables.map((n) => ({ op: "add" as const, text: V("access.line", { role, actions: accessText(ac.grants, n), table: label(n) }) })),
+    });
+  }
   return null;
 }
 
@@ -260,6 +273,7 @@ export function proposalDone(item: AiDraftItem, createdId: string | undefined, l
     case "dashboard":
       return { text: "Đã tạo bảng điều khiển.", href: createdId ? `/dashboards/${createdId}` : "/dashboards", label: "Mở bảng điều khiển" };
     case "workqueue": return studio("Đã tạo hàng đợi.", "dung/tu-dong/hang-doi", "Mở Hàng đợi việc");
+    case "access": return studio(t("studio.assistant.done.access"), "dung/nguoi-dung-quyen", t("studio.assistant.done.accessLink"));
     default: return studio("Đã tạo thành công.", "dung/du-lieu", "Mở Dữ liệu");
   }
 }

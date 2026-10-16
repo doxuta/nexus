@@ -1,4 +1,4 @@
-// Applies one assistant proposal (14 kinds) through the SAME gated admin APIs the manual builders
+// Applies one assistant proposal (15 kinds) through the SAME gated admin APIs the manual builders
 // use — the AI never writes schema itself (HITL). Pure async: no React, no window. Moved verbatim
 // out of the old AI Builder page (specs/076 ai1) so the card UI and later the side panel
 // share one implementation. Every apply is idempotent: a second click either 409s into an update
@@ -9,8 +9,9 @@ import {
   listWorkflows, updateWorkflow, listReports, updateReport,
   listFields, updateField, deleteField, deleteEntity, createRecordsBulk, createSampleRecords,
   createApprovalProcess, createDashboard, createWorkQueue, listRoles, listUserDirectory,
-  listDraftChanges, discardDraft, type DraftChange, type PublishState,
+  listDraftChanges, discardDraft, getRole, updateRolePermissions, type DraftChange, type PublishState,
 } from "@/lib/api";
+import { mergeAccessGrants } from "@/lib/accessLevels";
 import { errorMessage } from "@/lib/errorMessages";
 import { t, tf } from "@/lib/i18n";
 import { isBeforeTrigger } from "@/lib/workflowBefore";
@@ -23,9 +24,9 @@ import {
   draftEditFieldToUpdatePayload, draftRecordsRows, recordsApplyMessage,
   getApprovalDraft, getDashboardDraft, getWorkQueueDraft,
   approvalDraftRefs, draftApprovalToPayload, draftDashboardToPayload, draftWorkQueueToPayload,
-  resolveApprovalApprovers, resolveRoleByName,
+  resolveApprovalApprovers, resolveRoleByName, getAccessDraft,
   needsLiveConfirm, appliedFootKey, bornHidden, draftDocType, isDestructiveDraft,
-  type AiDraftItem,
+  type AiDraftAccess, type AiDraftItem,
 } from "@/lib/aiBuilder";
 import { classOf } from "@/lib/draftClass";
 import type { I18nKey } from "@/lib/i18n/vi";
@@ -72,6 +73,7 @@ function makeWrites(deps: ApplyDeps) {
     deleteField: w(deleteField), deleteEntity: w(deleteEntity), createRecordsBulk: w(createRecordsBulk),
     createSampleRecords: w(createSampleRecords), createApprovalProcess: w((p: ReturnType<typeof draftApprovalToPayload>) => createApprovalProcess(p)),
     createDashboard: w(createDashboard), createWorkQueue: w(createWorkQueue), addEntityToAppNav: w(addEntityToAppNav),
+    updateRolePermissions: w(updateRolePermissions),
   };
 }
 type Writes = ReturnType<typeof makeWrites>;
@@ -220,8 +222,27 @@ async function run(item: AiDraftItem, deps: ApplyDeps, api: Writes): Promise<App
     await api.createWorkQueue(draftWorkQueueToPayload(wq, roleId));
     return { status: "done" };
   }
+  const ac = item.kind === "access" ? getAccessDraft(item) : undefined;
+  if (ac) return applyAccess(ac, api);
   // Unknown kind, or a known kind whose payload is missing (a persisted draft from a newer backend).
   return err(t("studio.assistant.apply.incomplete"));
+}
+
+// propose_access: the role is named (the model never knows ids) and PUT /admin/roles/:id replaces the whole grant set,
+// so the role is read NOW, the proposal is added by the one additive rule and the set is written back (a traced role
+// entry: Bảo trì › Lịch sử can undo it). A table that does not exist yet is an honest error: a grant on nothing would wait
+// for whatever table gets that name later.
+async function applyAccess(ac: AiDraftAccess, api: Writes): Promise<ApplyOutcome> {
+  const id = resolveRoleByName(ac.role, await listRoles());
+  if (!id) return err(tf("studio.assistant.apply.accessRoleMissing", { role: ac.roleLabel || ac.role }));
+  const have = new Set((await listEntities()).map((e) => e.name));
+  const missing = [...new Set(ac.grants.map((g) => g.entityName))].filter((n) => !have.has(n));
+  if (missing.length > 0) return err(tf("studio.assistant.apply.accessTableMissing", { list: missing.map((n) => ac.labels?.[n] || n).join(", ") }));
+  const role = await getRole(id);
+  const actions = mergeAccessGrants(role.actions ?? [], ac.grants);
+  if (JSON.stringify(actions) === JSON.stringify(role.actions ?? [])) return { status: "done", message: t("studio.assistant.apply.accessNothing") };
+  await api.updateRolePermissions(id, { name: role.name, label: role.label, actions });
+  return { status: "done" };
 }
 
 // Creates the app shell (409 ⇒ MERGE into the existing one: "thêm bảng X vào app Y" is the ordinary

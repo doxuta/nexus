@@ -61,6 +61,12 @@ describe("cardMode — label, confirm, apply-all, footer per class", () => {
     const m = cardMode(item({ kind: "role" }), delivered({ draftableTypes: [], directTypes: ["role"] }));
     expect(m).toMatchObject({ label: "studio.assistant.draft.applyNow", confirm: true, inApplyAll: false, foot: "page.studio.ai.foot.live", canUndo: false });
   });
+  it("an access card (propose_access, a role change) is direct: Áp ngay + confirm, out of apply-all, the live footer", () => {
+    const access = item({ kind: "access", access: { role: "crm_sales_rep", grants: [{ entityName: "tickets", action: "view", accessLevel: "all" }] },
+      change: { docType: "role", docKey: "r1", op: "update", label: "Vai", target: { name: "crm_sales_rep", entity: "tickets" } } });
+    expect(cardMode(access, delivered())).toMatchObject({ label: "studio.assistant.draft.applyNow", confirm: true, inApplyAll: false, foot: "page.studio.ai.foot.live", canUndo: false });
+    expect(cardMode(access, { kind: "undelivered" })).toMatchObject({ label: "studio.assistant.card.apply", confirm: false, inApplyAll: true });
+  });
   it("untraced class adds 'không quay lại được'", () => {
     expect(cardMode(APPROVAL, delivered())).toMatchObject({ label: "studio.assistant.draft.applyNow", confirm: true, inApplyAll: false, foot: "studio.assistant.draft.footer.untraced", canUndo: false });
   });

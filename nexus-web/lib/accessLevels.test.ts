@@ -1,6 +1,23 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { RoleGrant, RoleActionVerb, RoleAccessLevel } from "@/lib/api";
-import { applyLevel, levelOf } from "./accessLevels";
+import { applyLevel, levelOf, mergeAccessGrants } from "./accessLevels";
+
+// Shared arbiter with Go mergeAccessGrants (internal/ai/tools_access_test.go): one additive rule, two implementations.
+const MERGE_CASES = JSON.parse(readFileSync("../nexus-platform/internal/ai/testdata/access_merge_cases.json", "utf8")) as Array<{
+  name: string; current: RoleGrant[]; add: RoleGrant[]; want: RoleGrant[];
+}>;
+
+describe("mergeAccessGrants (shared cases)", () => {
+  it("reads the shared cases", () => expect(MERGE_CASES.length).toBeGreaterThanOrEqual(10));
+  for (const c of MERGE_CASES) {
+    it(c.name, () => {
+      const before = structuredClone(c.current);
+      expect(mergeAccessGrants(c.current, c.add)).toEqual(c.want);
+      expect(c.current).toEqual(before); // the role's grants are never changed in place
+    });
+  }
+});
 
 const g = (entityName: string, action: RoleActionVerb, accessLevel: RoleAccessLevel = "all"): RoleGrant => ({ entityName, action, accessLevel });
 const T = "invoice";
