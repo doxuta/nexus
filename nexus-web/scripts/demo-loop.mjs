@@ -7,20 +7,21 @@
 //   node scripts/demo-loop.mjs <out-dir>          (from nexus-web/, against a FRESH one-command demo)
 //
 // One screenshot per step into <out-dir>; the first failing step prints its name and the script exits 1.
-// NEXUS_URL (default http://localhost:8080) · CHROME_PATH (default: the macOS system Chrome).
+// NEXUS_PORT as for docker compose (default 8080), or NEXUS_URL · CHROME_PATH (default: the macOS app, else
+// google-chrome / chromium / chromium-browser on PATH).
 //
 // Without a model or key the assistant answers from the committed cassette:
 //   AI_ENABLED=true AI_GATEWAY_MODE=replay AI_GATEWAY_CASSETTE=/cassettes/demo-loop.jsonl docker compose up --build
-// Re-record it on a fresh stack with AI_GATEWAY_MODE=record plus a live AI_GATEWAY_BASE_URL / AI_GATEWAY_API_KEY: replay
-// checks every call against the recording (tools offered, the prompt, the shape of the conversation), so a changed
-// prompt or tool list fails as a stale cassette instead of answering with another turn's reply.
+// A replayed stack answers ONE run: for another, `docker compose down -v`, then up again. Re-record only when the
+// steps change, on a fresh stack with AI_GATEWAY_MODE=record plus a live AI_GATEWAY_BASE_URL / AI_GATEWAY_API_KEY:
+// replay checks every call against the recording (tools offered, the prompt, the shape of the conversation), so a
+// changed prompt or tool list fails as a stale cassette instead of answering with another turn's reply.
 import fs from "node:fs";
 import path from "node:path";
 import puppeteer from "puppeteer-core";
 
-const BASE = (process.env.NEXUS_URL ?? "http://localhost:8080").replace(/\/$/, "");
+const BASE = (process.env.NEXUS_URL ?? `http://localhost:${process.env.NEXUS_PORT || 8080}`).replace(/\/$/, "");
 const API = `${BASE}/api/v1`;
-const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const TENANT = "northwind";
 const PERSONAS = {
   builder: { email: "admin@example.com", password: "Demo-Admin-2026!" },
@@ -31,6 +32,7 @@ const PERSONAS = {
 const PROMPT =
   "Build a simple helpdesk: tickets with a title, a priority (low/medium/high) and a status (open/closed). " +
   "Sales reps can see all tickets and edit their own.";
+const TABLE = "tickets"; // what the recorded proposal builds: a stack that already has it has run the loop before
 const TICKET = "Printer on floor 2 is jammed";
 const AI_TIMEOUT = 10 * 60_000; // a live model may take minutes; a replay answers at once
 
@@ -38,6 +40,20 @@ const outDir = process.argv[2];
 if (!outDir) {
   console.error("usage: node scripts/demo-loop.mjs <out-dir>");
   process.exit(2);
+}
+
+// The system Chrome (puppeteer-core downloads none): CHROME_PATH, else the macOS app, else the first one on PATH.
+function findChrome() {
+  if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
+  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  return ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    ...["google-chrome", "chromium", "chromium-browser"].flatMap((name) => dirs.map((d) => path.join(d, name)))]
+    .find((p) => fs.existsSync(p)) ?? null;
+}
+const CHROME = findChrome();
+if (!CHROME) {
+  console.error("FAIL setup: no Chrome found — set CHROME_PATH to a Chrome or Chromium binary");
+  process.exit(1);
 }
 
 // Labels come from the UI's own catalog by key (the UI renders t(key) in its default locale, Vietnamese), so a reworded
@@ -72,6 +88,15 @@ async function api(p, init = {}) {
 }
 const headVersion = async () => (await api("/admin/publish/state")).data.headVersion?.versionNo ?? 0;
 const drafts = async () => (await api("/admin/publish/changes")).data ?? [];
+
+// The cassette answers one run, and the run builds the table it then uses: refuse a stack that has been used.
+async function preflight() {
+  const why = [];
+  if (((await api("/metadata/entities")).data ?? []).some((e) => e.name === TABLE)) why.push(`a ${TABLE} table already exists`);
+  const pending = (await drafts()).length;
+  if (pending > 0) why.push(`${pending} draft change(s) are pending`);
+  if (why.length) throw new Error(`needs a fresh stack: docker compose down -v, then up again (${why.join("; ")})`);
+}
 
 // ── browser ──
 const browser = await puppeteer.launch({
@@ -364,6 +389,7 @@ fs.mkdirSync(outDir, { recursive: true });
 let failed = null;
 try {
   adminToken = (await login(PERSONAS.builder)).accessToken;
+  await preflight();
   for (const [i, [name, run]] of steps.entries()) {
     const file = path.join(outDir, `${String(i + 1).padStart(2, "0")}-${name}.png`);
     const t0 = Date.now();
