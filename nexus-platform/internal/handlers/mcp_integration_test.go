@@ -18,8 +18,10 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"nexus/platform/internal/ai"
 	"nexus/platform/internal/auth"
@@ -27,8 +29,10 @@ import (
 	"nexus/platform/internal/dynrepo"
 	"nexus/platform/internal/mcpserver"
 	"nexus/platform/internal/metadata"
+	"nexus/platform/internal/metaversion"
 	"nexus/platform/internal/middleware"
 	"nexus/platform/internal/services"
+	"nexus/platform/internal/workflow"
 )
 
 // mcpBearer adds the token to every request of the MCP client.
@@ -228,5 +232,112 @@ func TestMCP_TokenScopeAndProposalToThread(t *testing.T) {
 	}
 	if got := mcpPost(demoted); got != http.StatusUnauthorized {
 		t.Errorf("/mcp after the builder lost the builder flag: %d; want 401", got)
+	}
+}
+
+func mcpText(r *mcp.CallToolResult) string {
+	var parts []string
+	for _, c := range r.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			parts = append(parts, tc.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func mcpConnect(t *testing.T, url, secret string) *mcp.ClientSession {
+	t.Helper()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "it", Version: "v0"}, nil).Connect(context.Background(),
+		&mcp.StreamableClientTransport{Endpoint: url, HTTPClient: &http.Client{Transport: mcpBearer(secret)}}, nil)
+	if err != nil {
+		t.Fatalf("mcp connect: %v", err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+// mcpBuilder seeds a tenant with an active builder (admin + builder flag) and returns its ids.
+func mcpBuilder(t *testing.T, gdb *gorm.DB, tenant, slug string) string {
+	t.Helper()
+	a4SeedTenant(t, gdb, tenant, slug, slug)
+	id := a4SeedUser(t, gdb, tenant, "builder@"+slug+".test", true, nil)
+	if err := gdb.Exec("UPDATE users SET is_platform_operator = 1 WHERE id = ?", id).Error; err != nil {
+		t.Fatalf("builder flag: %v", err)
+	}
+	return id
+}
+
+// On a delivered project the builder's edits are drafts, and the in-app builder agent reads them
+// (DraftCaller on /api/v1/admin/*). An agent over /mcp must read the same drafts: a proposal built on
+// the published document would hide the builder's pending edit and, once applied, revert it.
+func TestMCP_ReadsTheBuildersDrafts(t *testing.T) {
+	gdb, sx := a4SetupMigratedDB(t)
+	ctx := context.Background()
+	const tenant = "ten-mcp-draft"
+	builderID := mcpBuilder(t, gdb, tenant, "mcp-draft")
+	entID := uuid.NewString()
+	if err := gdb.Create(&metadata.EntityDefinition{ID: entID, TenantID: tenant, Name: "it_tickets", Label: "Tickets", DataTable: "obj_it_tickets"}).Error; err != nil {
+		t.Fatalf("entity: %v", err)
+	}
+	status := `{"values":["open","closed"]}`
+	if err := gdb.Create(&metadata.FieldDefinition{ID: uuid.NewString(), EntityID: entID, TenantID: tenant, Name: "status", Label: "Status", FieldType: "picklist", Options: &status, FieldOrder: 10}).Error; err != nil {
+		t.Fatalf("field: %v", err)
+	}
+	meta := metadata.NewRepository(gdb)
+	reg := metaversion.NewRegistry(services.NewWorkflowDocAdapter())
+	drafts := metaversion.NewDraftRepo(sx, reg)
+	vers := metaversion.NewVersionRepo(sx)
+	gate := services.NewDraftGate(vers)
+	raw := workflow.NewSQLRepository(sx)
+	wf := services.NewWorkflowService(services.NewDraftWorkflowRepo(raw, drafts, gate)).WithLiveRepo(raw).WithEntityChecker(meta)
+	rule := func(value string) services.CreateWorkflowInput {
+		on := true
+		return services.CreateWorkflowInput{Name: "Close ticket", EntityName: "it_tickets", Trigger: "after_update", IsActive: &on,
+			Rules:   []services.WorkflowRuleInput{{Field: "status", Op: workflow.OpEq, Value: value}},
+			Actions: []services.WorkflowActionInput{{Type: "field_update", Field: "status", Value: "closed"}}}
+	}
+	// The Caller DraftCaller puts on a builder's /api/v1/admin/* request.
+	builderCtx := metaversion.WithCaller(ctx, metaversion.Caller{UserID: builderID, TenantID: tenant, HomeTenantID: tenant, IsBuilder: true, ReadDraft: true})
+	live, err := wf.CreateWorkflow(ctx, tenant, rule("open"))
+	if err != nil {
+		t.Fatalf("create the live rule: %v", err)
+	}
+	if _, err := services.NewPublishService(sx, drafts, vers, reg, gate, nil, nil).Baseline(builderCtx, tenant, "first"); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	edit := rule("closed")
+	if _, err := wf.UpdateWorkflow(builderCtx, tenant, live.ID, services.UpdateWorkflowInput{Name: edit.Name, EntityName: edit.EntityName,
+		Trigger: edit.Trigger, Rules: edit.Rules, Actions: edit.Actions, IsActive: edit.IsActive, ActorID: builderID}); err != nil {
+		t.Fatalf("the builder's draft edit: %v", err)
+	}
+
+	agent := ai.NewAIBuilderAgent(config.AIConfig{}, nil, meta, &ai.DocReaders{Workflows: wf}, nil, zap.NewNop())
+	store := ai.NewSessionStore(sx)
+	mcpSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(gdb), store, auth.NewUserRepository(gdb))
+	_, secret, err := mcpSvc.Issue(ctx, auth.Subject{UserID: builderID, TenantID: tenant, IsAdmin: true}, nil)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	ts := httptest.NewServer(mcpserver.New(mcpSvc, agent, store, zap.NewNop()))
+	defer ts.Close()
+	cs := mcpConnect(t, ts.URL, secret)
+
+	cond := func(v string) string { return `"op":"eq","field":"status","value":"` + v + `"` }
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "nexus_list_workflows", Arguments: map[string]any{"entity": "it_tickets"}})
+	if err != nil {
+		t.Fatalf("list_workflows: %v", err)
+	}
+	if got := mcpText(res); !strings.Contains(got, cond("closed")) || strings.Contains(got, cond("open")) {
+		t.Fatalf("over /mcp the rule reads %s; want the builder's draft (value closed), not the published rule", got)
+	}
+	res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "nexus_propose_workflow", Arguments: map[string]any{
+		"name": "Close ticket", "entity": "it_tickets", "trigger": "after_update",
+		"condition": map[string]any{"match": "and", "rules": []map[string]any{{"field": "status", "op": "eq", "value": "closed"}}},
+		"actions":   []map[string]any{{"type": "field_update", "field": "status", "value": "closed"}}}})
+	if err != nil {
+		t.Fatalf("propose_workflow: %v", err)
+	}
+	if got := mcpText(res); !strings.Contains(got, `"op":"update"`) || strings.Contains(got, "changedPaths") {
+		t.Fatalf("proposing the draft as it stands: %s; want an update with nothing changed against the draft", got)
 	}
 }

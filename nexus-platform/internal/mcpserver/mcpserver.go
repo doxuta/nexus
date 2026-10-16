@@ -20,6 +20,7 @@ import (
 
 	"nexus/platform/internal/ai"
 	"nexus/platform/internal/auth"
+	"nexus/platform/internal/metaversion"
 	"nexus/platform/internal/services"
 )
 
@@ -91,7 +92,13 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 			writeErr(w, http.StatusInternalServerError, "INTERNAL", "Lỗi hệ thống")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, *p)))
+		// The tools then read what the in-app builder agent reads: DraftCaller sets the same Caller on a
+		// builder's /api/v1/admin/* request, so on a delivered project the agent sees the builder's
+		// drafts, not the published model. Verify has just checked that the user is a builder.
+		ctx := metaversion.WithWarnings(metaversion.WithCaller(r.Context(), metaversion.Caller{
+			UserID: p.UserID, TenantID: p.TenantID, HomeTenantID: p.TenantID, IsBuilder: true, ReadDraft: true,
+		}))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, principalKey{}, *p)))
 	})
 }
 
@@ -176,7 +183,7 @@ func (s *server) threadError(p services.MCPPrincipal, err error) *mcp.CallToolRe
 	if errors.Is(err, ai.ErrSessionNotFound) {
 		msg = "THREAD_DELETED: the builder deleted the Studio thread of this token, so nothing was proposed. Ask them to issue a new MCP token."
 	} else {
-		s.logger.Error("mcpserver: thread write failed", zap.String("tenant_id", p.TenantID), zap.String("mcp_token_id", p.TokenID), zap.Error(err))
+		s.logger.Error("mcpserver: token thread unavailable", zap.String("tenant_id", p.TenantID), zap.String("mcp_token_id", p.TokenID), zap.Error(err))
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}, IsError: true}
 }
