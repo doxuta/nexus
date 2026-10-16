@@ -79,7 +79,7 @@ func TestMCP_TokenScopeAndProposalToThread(t *testing.T) {
 	}, zap.NewNop(),
 		WithLiveSubject(services.NewCachedUserLoader(userRepo, services.DefaultUserClaimTTL)),
 		WithOperatorTier(middleware.RequireBuilderTier(userRepo, zap.NewNop())))
-	r.Any("/mcp", gin.WrapH(mcpserver.New(mcpSvc, agent, store, zap.NewNop()))) // as cmd/server/main.go
+	r.Any("/mcp", gin.WrapH(mcpserver.New(mcpSvc, agent, store, nil, zap.NewNop()))) // as cmd/server/main.go
 
 	const tenant = "ten-mcp-aaaa"
 	a4SeedTenant(t, gdb, tenant, "mcp-ten", "MCP Tenant")
@@ -320,7 +320,7 @@ func TestMCP_ReadsTheBuildersDrafts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	ts := httptest.NewServer(mcpserver.New(mcpSvc, agent, store, zap.NewNop()))
+	ts := httptest.NewServer(mcpserver.New(mcpSvc, agent, store, nil, zap.NewNop()))
 	defer ts.Close()
 	cs := mcpConnect(t, ts.URL, secret)
 
@@ -358,7 +358,7 @@ func TestMCP_ParallelProposalsGetOnePlaceEach(t *testing.T) {
 		t.Fatalf("issue: %v", err)
 	}
 	agent := ai.NewAIBuilderAgent(config.AIConfig{}, nil, metadata.NewRepository(gdb), nil, nil, zap.NewNop())
-	ts := httptest.NewServer(mcpserver.New(mcpSvc, agent, store, zap.NewNop()))
+	ts := httptest.NewServer(mcpserver.New(mcpSvc, agent, store, nil, zap.NewNop()))
 	defer ts.Close()
 
 	const n = 12
@@ -401,5 +401,41 @@ func TestMCP_ParallelProposalsGetOnePlaceEach(t *testing.T) {
 	}
 	if want := 2 + 2*n; rows != want || places != want {
 		t.Fatalf("%d parallel proposals left %d messages in %d places; want %d in %d", n, rows, places, want, want)
+	}
+}
+
+// The production freeze checker (the one every /api/v1 write passes): while a tenant is frozen for
+// maintenance or a restore, an agent reads but cannot append a proposal to its thread.
+func TestMCP_FrozenTenantReadsButDoesNotPropose(t *testing.T) {
+	gdb, sx := a4SetupMigratedDB(t)
+	ctx := context.Background()
+	const tenant = "ten-mcp-frozen"
+	builderID := mcpBuilder(t, gdb, tenant, "mcp-frozen")
+	userRepo := auth.NewUserRepository(gdb)
+	store := ai.NewSessionStore(sx)
+	mcpSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(gdb), store, userRepo)
+	tok, secret, err := mcpSvc.Issue(ctx, auth.Subject{UserID: builderID, TenantID: tenant, IsAdmin: true}, nil)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if err := gdb.Exec("UPDATE tenants SET maintenance_until = NOW(3) + INTERVAL 10 MINUTE WHERE id = ?", tenant).Error; err != nil {
+		t.Fatalf("freeze: %v", err)
+	}
+	agent := ai.NewAIBuilderAgent(config.AIConfig{}, nil, metadata.NewRepository(gdb), nil, nil, zap.NewNop())
+	ts := httptest.NewServer(mcpserver.New(mcpSvc, agent, store, services.NewTenantFreeze(userRepo, zap.NewNop()), zap.NewNop()))
+	defer ts.Close()
+	cs := mcpConnect(t, ts.URL, secret)
+
+	if res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "nexus_list_entities", Arguments: map[string]any{}}); err != nil || res.IsError {
+		t.Fatalf("a read while frozen: %v %s; want it served", err, mcpText(res))
+	}
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "nexus_propose_entity", Arguments: map[string]any{
+		"name": "frozen_tbl", "label": "Frozen", "fields": []map[string]any{{"name": "name", "label": "Name", "fieldType": "text"}}}})
+	if err != nil || !res.IsError || !strings.HasPrefix(mcpText(res), "TENANT_MAINTENANCE:") {
+		t.Fatalf("a proposal while frozen: %v %s; want a TENANT_MAINTENANCE tool error", err, mcpText(res))
+	}
+	var rows int
+	if err := sx.Get(&rows, "SELECT COUNT(*) FROM sys_ai_messages WHERE session_id = ? AND tenant_id = ?", tok.SessionID, tenant); err != nil || rows != 2 {
+		t.Fatalf("thread rows = %d (%v); want only the 2 of the key's opening turn", rows, err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
@@ -168,7 +169,12 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 
 func serve(t *testing.T, v Verifier, run Runner, th Threads) *httptest.Server {
 	t.Helper()
-	ts := httptest.NewServer(New(v, run, th, zap.NewNop()))
+	return serveWith(t, v, run, th, nil)
+}
+
+func serveWith(t *testing.T, v Verifier, run Runner, th Threads, f Freezer) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(New(v, run, th, f, zap.NewNop()))
 	t.Cleanup(ts.Close)
 	return ts
 }
@@ -352,5 +358,35 @@ func TestCall_APanicIsAToolErrorAndTheServerLives(t *testing.T) {
 	}
 	if res = callTool(t, ts, "nexus_list_entities", nil); res.IsError || run.calls != 2 {
 		t.Fatalf("the next call: %s (error %v, calls %d); want the server still serving", text(res), res.IsError, run.calls)
+	}
+}
+
+type fakeFreezer struct {
+	until  time.Time
+	frozen bool
+}
+
+func (f fakeFreezer) FrozenUntil(context.Context, string) (time.Time, bool, error) {
+	return f.until, f.frozen, nil
+}
+
+// During a maintenance or restore freeze every /api/v1 write answers 503; over /mcp reads keep
+// working and a proposal (a thread write) is refused with a tool error, before any work.
+func TestCall_DuringAFreezeReadsWorkProposalsDoNot(t *testing.T) {
+	until := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	run := &fakeRunner{res: `{"ok":true,"result":{"buffered":"entity \"x\""}}`, added: []ai.DraftItem{{Kind: "entity", Entity: &ai.DraftEntity{Name: "x"}}}}
+	th := &fakeThreads{}
+	ts := serveWith(t, &fakeVerifier{}, run, th, fakeFreezer{until: until, frozen: true})
+
+	res := callTool(t, ts, "nexus_propose_entity", map[string]any{"name": "x"})
+	if !res.IsError || !strings.HasPrefix(text(res), "TENANT_MAINTENANCE:") || !strings.Contains(text(res), "2026-10-17T12:00:00Z") {
+		t.Fatalf("propose while frozen: %s (error %v); want a TENANT_MAINTENANCE tool error naming the end", text(res), res.IsError)
+	}
+	if len(run.calls)+th.gets+len(th.appends) != 0 {
+		t.Fatalf("propose while frozen ran %d tool(s), read the thread %d time(s), wrote %d turn(s); want none", len(run.calls), th.gets, len(th.appends))
+	}
+	run.res, run.added = `{"ok":true,"result":{"entities":[]}}`, nil
+	if res = callTool(t, ts, "nexus_list_entities", nil); res.IsError || len(run.calls) != 1 {
+		t.Fatalf("a read while frozen: %s (error %v); want it served", text(res), res.IsError)
 	}
 }

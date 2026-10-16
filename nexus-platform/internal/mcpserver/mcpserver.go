@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
@@ -34,6 +35,12 @@ type Runner interface {
 	RunTool(ctx context.Context, tenantID, tag string, prior []ai.DraftItem, name, argsJSON string) (string, []ai.DraftItem)
 }
 
+// Freezer is the per-tenant maintenance freeze (services.TenantFreeze): the same checker every
+// /api/v1 write passes through (middleware.RequireTenantWritable).
+type Freezer interface {
+	FrozenUntil(ctx context.Context, tenantID string) (time.Time, bool, error)
+}
+
 // Threads reads and appends the token's assistant thread (ai.SessionStore).
 type Threads interface {
 	GetSession(ctx context.Context, tenantID, userID, id string) (ai.Session, []ai.Message, error)
@@ -47,17 +54,18 @@ type server struct {
 	tokens  Verifier
 	runner  Runner
 	threads Threads
+	freeze  Freezer // nil = no freeze (test-only shape; production passes the API's own checker)
 	logger  *zap.Logger
 }
 
 // New returns the /mcp handler: bearer auth for nxm_ tokens in front of the SDK's streamable HTTP
 // handler in stateless mode. Every request verifies its token again and nothing is kept between
 // requests, so a revoked or expired token stops at its next request.
-func New(tokens Verifier, runner Runner, threads Threads, logger *zap.Logger) http.Handler {
+func New(tokens Verifier, runner Runner, threads Threads, freeze Freezer, logger *zap.Logger) http.Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	s := &server{tokens: tokens, runner: runner, threads: threads, logger: logger}
+	s := &server{tokens: tokens, runner: runner, threads: threads, freeze: freeze, logger: logger}
 	srv := mcp.NewServer(&mcp.Implementation{Name: "nexus", Title: "Nexus", Version: "1"}, &mcp.ServerOptions{Instructions: instructions})
 	for _, t := range tools(ai.ToolDefinitions()) {
 		srv.AddTool(t, s.call)
@@ -150,6 +158,11 @@ func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (res *mcp.C
 	}
 	var prior []ai.DraftItem
 	if isPropose(name) {
+		if until, frozen := s.frozen(ctx, p); frozen {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+				"TENANT_MAINTENANCE: the workspace is frozen for maintenance or a restore until %s, so nothing was proposed. Reading still works; propose again after that time.",
+				until.UTC().Format(time.RFC3339))}}}, nil
+		}
 		if prior, err = s.priorProposals(ctx, p); err != nil {
 			return s.threadError(p, err), nil
 		}
@@ -169,6 +182,20 @@ func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (res *mcp.C
 	}
 	out.Content = append(out.Content, &mcp.TextContent{Text: proposedNote})
 	return out, nil
+}
+
+// frozen asks the API's freeze checker, as RequireTenantWritable does for every /api/v1 write: a
+// proposal is a thread write, so it waits out a maintenance or restore freeze; reads do not. The
+// checker already decided on a read error (a known live freeze stays frozen); here it is only logged.
+func (s *server) frozen(ctx context.Context, p services.MCPPrincipal) (time.Time, bool) {
+	if s.freeze == nil {
+		return time.Time{}, false
+	}
+	until, frozen, err := s.freeze.FrozenUntil(ctx, p.TenantID)
+	if err != nil {
+		s.logger.Warn("mcpserver: freeze read failed", zap.String("tenant_id", p.TenantID), zap.Bool("frozen", frozen), zap.Error(err))
+	}
+	return until, frozen
 }
 
 // priorProposals reads every proposal already in the token's thread.

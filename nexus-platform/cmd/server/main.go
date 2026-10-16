@@ -1502,7 +1502,7 @@ func main() {
 	})
 	// MCP (issue #3): agents propose, humans dispose. Outside /api/v1: its own bearer (nxm_ tokens
 	// only, refused everywhere else) and the SDK's stateless streamable HTTP transport.
-	r.Any("/mcp", gin.WrapH(mcpserver.New(mcpTokenSvc, aiAgent, aiSessionStore, logger)))
+	r.Any("/mcp", gin.WrapH(mcpserver.New(mcpTokenSvc, aiAgent, aiSessionStore, tenantFreeze, logger)))
 
 	// API v1 routes. RegisterAPIRoutes is the single wiring point shared with the integration
 	// tests: it mounts the PUBLIC /auth/* endpoints, then a PROTECTED sub-group fronted by
