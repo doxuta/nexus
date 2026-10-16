@@ -95,6 +95,19 @@ func readCassette(t *testing.T, path string) []cassetteEntry {
 	return out
 }
 
+// olderRecording writes five long, valid cassette lines to path — longer than anything a test records
+// afterwards, so leftovers show — and returns them.
+func olderRecording(t *testing.T, path string) string {
+	t.Helper()
+	line := `{"fingerprint":{"shape":"older recording"},"request":{"model":"old","messages":[{"role":"user","content":"` +
+		strings.Repeat("x", 400) + `"}]},"response":{"choices":[{"message":{"role":"assistant","content":"old"}}]}}` + "\n"
+	old := strings.Repeat(line, 5)
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return old
+}
+
 func replyOf(resp ChatResponse) string {
 	if len(resp.Choices) == 0 {
 		return ""
@@ -122,9 +135,7 @@ func TestRecord_AppendsEveryExchangeInOrder_NeverTheKey(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	path := filepath.Join(t.TempDir(), "demo.jsonl")
-	if err := os.WriteFile(path, []byte(`{"fingerprint":"a line from an older recording"}`+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	olderRecording(t, path)
 	c, err := NewCompleter(config.AIConfig{GatewayMode: config.AIGatewayRecord, Cassette: path, BaseURL: srv.URL, APIKey: key, TimeoutSec: 5})
 	if err != nil {
 		t.Fatalf("NewCompleter(record): %v", err)
@@ -152,7 +163,7 @@ func TestRecord_AppendsEveryExchangeInOrder_NeverTheKey(t *testing.T) {
 	got := readCassette(t, path)
 	want := []struct{ q, reply string }{{"q1", "reply 1"}, {"q2", "reply 2"}, {"q4", "reply 4"}}
 	if len(got) != len(want) {
-		t.Fatalf("cassette has %d lines; want %d (older recording dropped, failed call not written)", len(got), len(want))
+		t.Fatalf("cassette has %d lines; want only the %d new ones (older recording dropped, failed call not written)", len(got), len(want))
 	}
 	for i, w := range want {
 		e := got[i]
@@ -162,6 +173,38 @@ func TestRecord_AppendsEveryExchangeInOrder_NeverTheKey(t *testing.T) {
 		if why := fingerprintOf(ask(w.q)).mismatch(e.Fingerprint); why != "" {
 			t.Errorf("line %d fingerprint: the call %s", i+1, why)
 		}
+	}
+}
+
+// Record wipes nothing until it has something to write: a boot that records nothing (AI off, the
+// gateway down, a restart before the first turn) leaves the previous cassette as it was, and the
+// first exchange that succeeds replaces it.
+func TestRecord_KeepsTheOldCassetteUntilAnExchangeSucceeds(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "demo.jsonl")
+	old := olderRecording(t, path)
+	rec, err := newRecorder(&scriptedGateway{t: t,
+		errs:      []error{fmt.Errorf("%w: connection refused", ErrGateway)},
+		responses: []ChatResponse{{}, finalTextResp("new")}}, path)
+	if err != nil {
+		t.Fatalf("newRecorder: %v", err)
+	}
+	unchanged := func(when string) {
+		t.Helper()
+		if raw, err := os.ReadFile(path); err != nil || string(raw) != old {
+			t.Fatalf("%s: the older recording was touched (%d bytes, %v)", when, len(raw), err)
+		}
+	}
+	unchanged("after boot")
+	if _, err := rec.Complete(ctx, ask("q1")); !errors.Is(err, ErrGateway) {
+		t.Fatalf("call 1 error = %v; want the gateway's ErrGateway", err)
+	}
+	unchanged("after a failed call")
+	if _, err := rec.Complete(ctx, ask("q2")); err != nil {
+		t.Fatalf("call 2: %v", err)
+	}
+	if lines := readCassette(t, path); len(lines) != 1 || replyOf(lines[0].Response) != "new" {
+		t.Fatalf("cassette = %d lines; want only the new exchange", len(lines))
 	}
 }
 

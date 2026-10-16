@@ -53,16 +53,20 @@ func NewCompleter(cfg config.AIConfig) (Completer, error) {
 // call — so a stale cassette can be diagnosed from the file; drop Tools from the line if cassettes
 // kept in git grow too big.
 type recorder struct {
-	live Completer
-	path string
-	mu   sync.Mutex // the builder and the assistant can call at once; one Write per line, never interleaved
-	file *os.File
+	live    Completer
+	path    string
+	mu      sync.Mutex // the builder and the assistant can call at once; one Write per line, never interleaved
+	file    *os.File
+	started bool // the first exchange written empties the file first
 }
 
-// newRecorder starts the cassette afresh, so a re-record replaces the stale one. The file stays open
-// for the life of the process; each line is a single write, so a crash keeps every finished exchange.
+// newRecorder opens the cassette WITHOUT truncating it: an unwritable path still stops the boot, but
+// a boot that records nothing (AI off, the gateway down, a restart before the first turn) leaves the
+// previous recording as it was. The first exchange that succeeds replaces it, so a re-record starts
+// afresh. The file stays open for the life of the process; each line is a single write, so a crash
+// keeps every finished exchange.
 func newRecorder(live Completer, path string) (Completer, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("ai.newRecorder: open cassette: %w", err)
 	}
@@ -80,6 +84,12 @@ func (r *recorder) Complete(ctx context.Context, req ChatRequest) (ChatResponse,
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if !r.started {
+		if err := r.file.Truncate(0); err != nil {
+			return ChatResponse{}, fmt.Errorf("ai.recorder.Complete: empty cassette %s: %w", r.path, err)
+		}
+		r.started = true
+	}
 	if _, err := r.file.Write(append(line, '\n')); err != nil {
 		return ChatResponse{}, fmt.Errorf("ai.recorder.Complete: write cassette %s: %w", r.path, err)
 	}
