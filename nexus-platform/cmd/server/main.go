@@ -1288,6 +1288,10 @@ func main() {
 	}), &ai.DocReaders{Layouts: layoutSvc, Workflows: workflowSvc, Reports: reportSvc, Apps: appSvc}, aiRunRepo, logger).
 		WithDelivery(draftGate) // specs/067 L10-5: one grounding line once the project is delivered
 	aiContextResolver := ai.NewContextResolver(aiMeta, appSvc, userRepo)
+	// Issue #3: MCP tokens let an outside agent call the builder agent's read and propose tools at /mcp,
+	// as the builder who issued them; proposals land in that builder's thread (aiSessionStore).
+	mcpTokenSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(database), aiSessionStore, userRepo).
+		WithAuditor(auditDispatcher).WithLogger(logger)
 
 	// ⌘K end-user data assistant (read-only ask-data): reuses the E9 plumbing (gateway, ledger,
 	// session store) with its OWN tool registry — query/aggregate/list only, ZERO propose_*. The
@@ -1666,6 +1670,8 @@ func main() {
 		Doctor: handlers.NewAdminDoctorHandler(doctorSvc, logger),
 		// Machine identity (APIKEY-1): /admin/api-keys — issue (secret shown once), list, revoke.
 		APIKey: handlers.NewAdminAPIKeyHandler(apiKeySvc, logger),
+		// "Connect an agent (MCP)" (issue #3): /admin/mcp-tokens — issue (token shown once), list, revoke.
+		MCPToken: handlers.NewAdminMCPTokenHandler(mcpTokenSvc, logger),
 		// Business-hours calendars (CALENDAR-1): /admin/business-calendars CRUD (admin-gated).
 		Calendar: handlers.NewAdminCalendarHandler(calendarSvc, logger),
 		// "Việc nền" (DAILY-QUEUE #31/#32): /admin/jobs — the tenant's background-job log over
