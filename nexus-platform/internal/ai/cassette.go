@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +20,7 @@ import (
 
 // cassetteEntry is one line of a cassette: one exchange with the gateway.
 type cassetteEntry struct {
-	Fingerprint string       `json:"fingerprint"`
+	Fingerprint fingerprint  `json:"fingerprint"`
 	Request     ChatRequest  `json:"request"`
 	Response    ChatResponse `json:"response"`
 }
@@ -73,7 +74,7 @@ func (r *recorder) Complete(ctx context.Context, req ChatRequest) (ChatResponse,
 	if err != nil {
 		return ChatResponse{}, fmt.Errorf("ai.recorder.Complete: %w", err)
 	}
-	line, err := json.Marshal(cassetteEntry{Fingerprint: fingerprint(req), Request: req, Response: resp})
+	line, err := json.Marshal(cassetteEntry{Fingerprint: fingerprintOf(req), Request: req, Response: resp})
 	if err != nil {
 		return ChatResponse{}, fmt.Errorf("ai.recorder.Complete: encode exchange: %w", err)
 	}
@@ -86,9 +87,9 @@ func (r *recorder) Complete(ctx context.Context, req ChatRequest) (ChatResponse,
 }
 
 // replayer is replay mode: it answers each call with the next exchange of the cassette, strictly in
-// order, without network. A call whose fingerprint differs from the recorded one, or one past the
-// end, means the code no longer makes the calls the cassette holds: it fails as ErrGateway (502) with
-// the way to re-record, instead of answering with the wrong exchange.
+// order, without network. A call whose fingerprint differs from the recorded one — another agent,
+// another prompt, another number of steps — or one past the end fails as ErrGateway (502) with the
+// way to re-record, instead of answering with another turn's exchange.
 type replayer struct {
 	path    string
 	mu      sync.Mutex
@@ -116,15 +117,15 @@ func newReplayer(path string) (Completer, error) {
 }
 
 func (r *replayer) Complete(_ context.Context, req ChatRequest) (ChatResponse, error) {
-	got := fingerprint(req)
+	got := fingerprintOf(req)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.next >= len(r.entries) {
-		return ChatResponse{}, r.stale("no exchange left for call %d [%s] (the cassette holds %d)", r.next+1, got, len(r.entries))
+		return ChatResponse{}, r.stale("no exchange left for call %d (the cassette holds %d)", r.next+1, len(r.entries))
 	}
 	e := r.entries[r.next]
-	if e.Fingerprint != got {
-		return ChatResponse{}, r.stale("call %d sends [%s] where it recorded [%s]", r.next+1, got, e.Fingerprint)
+	if why := got.mismatch(e.Fingerprint); why != "" {
+		return ChatResponse{}, r.stale("call %d %s", r.next+1, why)
 	}
 	r.next++
 	return e.Response, nil
@@ -136,19 +137,52 @@ func (r *replayer) stale(format string, args ...any) error {
 		ErrGateway, r.path, fmt.Sprintf(format, args...), r.path)
 }
 
-// fingerprint is a request's shape: its message roles in order, each assistant turn followed by the
-// names of the tools it called. Contents stay out — they carry fresh UUIDs, so they differ every run.
-func fingerprint(req ChatRequest) string {
-	parts := make([]string, len(req.Messages))
+// fingerprint is what replay checks each call against, so it never hands one turn another's answer:
+// the names of the tools offered (they tell the builder from the assistant; schemas stay out, so a
+// reworded description does not go stale), a short hash of the user messages (the scripted prompts)
+// and the conversation's shape (roles in order, each assistant turn with the tools it called).
+// System grounding and tool results stay out: they carry fresh ids and change with the database.
+type fingerprint struct {
+	Tools []string `json:"tools"`
+	User  string   `json:"user"`
+	Shape string   `json:"shape"`
+}
+
+func fingerprintOf(req ChatRequest) fingerprint {
+	f := fingerprint{Tools: make([]string, len(req.Tools))}
+	for i, t := range req.Tools {
+		f.Tools[i] = t.Function.Name
+	}
+	var users []string
+	shape := make([]string, len(req.Messages))
 	for i, m := range req.Messages {
-		parts[i] = m.Role
+		shape[i] = m.Role
+		if m.Role == "user" {
+			users = append(users, m.Content)
+		}
 		if len(m.ToolCalls) > 0 {
 			names := make([]string, len(m.ToolCalls))
 			for j, tc := range m.ToolCalls {
 				names[j] = tc.Function.Name
 			}
-			parts[i] += "(" + strings.Join(names, ",") + ")"
+			shape[i] += "(" + strings.Join(names, ",") + ")"
 		}
 	}
-	return strings.Join(parts, " ")
+	f.User = sha256Hex(strings.Join(users, "\x00"))[:8]
+	f.Shape = strings.Join(shape, " ")
+	return f
+}
+
+// mismatch says how a call with fingerprint f differs from the exchange recorded as rec; "" = none.
+func (f fingerprint) mismatch(rec fingerprint) string {
+	switch {
+	case !slices.Equal(f.Tools, rec.Tools):
+		return fmt.Sprintf("is offered the tools [%s] where the cassette recorded [%s] (another agent, or tools added or renamed)",
+			strings.Join(f.Tools, ","), strings.Join(rec.Tools, ","))
+	case f.User != rec.User:
+		return fmt.Sprintf("carries user messages hashed %s where the cassette recorded %s (another prompt)", f.User, rec.User)
+	case f.Shape != rec.Shape:
+		return fmt.Sprintf("sends [%s] where the cassette recorded [%s]", f.Shape, rec.Shape)
+	}
+	return ""
 }

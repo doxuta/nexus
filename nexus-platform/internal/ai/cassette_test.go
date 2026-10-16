@@ -10,17 +10,31 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"nexus/platform/internal/config"
+	"nexus/platform/internal/metadata"
 )
 
-// ask is a request shaped "system user"; q changes the contents, never the shape.
+// ask is a request shaped "system user" whose prompt is q.
 func ask(q string) ChatRequest {
 	return ChatRequest{Model: "m", Messages: []ChatMessage{{Role: "system", Content: "persona"}, {Role: "user", Content: q}}}
+}
+
+// freshIDs is req as a later run sends it: the same prompts, but grounding and tool results that
+// carry other ids, as they do against another database.
+func freshIDs(req ChatRequest) ChatRequest {
+	req.Messages = slices.Clone(req.Messages)
+	for i := range req.Messages {
+		if req.Messages[i].Role != "user" {
+			req.Messages[i].Content += " (fresh id 7f3c)"
+		}
+	}
+	return req
 }
 
 // toolTurn is a request whose assistant turn called the tool name and got its result back.
@@ -38,6 +52,13 @@ type echoCompleter struct{}
 
 func (echoCompleter) Complete(_ context.Context, req ChatRequest) (ChatResponse, error) {
 	return finalTextResp("echo " + lastUserMessage(req.Messages)), nil
+}
+
+// countingCompleter answers the nth call with "reply n". Safe for concurrent use.
+type countingCompleter struct{ n atomic.Int64 }
+
+func (c *countingCompleter) Complete(context.Context, ChatRequest) (ChatResponse, error) {
+	return finalTextResp(fmt.Sprintf("reply %d", c.n.Add(1))), nil
 }
 
 // recordCassette records reqs[i] → resps[i] through the recorder and returns the cassette path.
@@ -135,9 +156,11 @@ func TestRecord_AppendsEveryExchangeInOrder_NeverTheKey(t *testing.T) {
 	}
 	for i, w := range want {
 		e := got[i]
-		if lastUserMessage(e.Request.Messages) != w.q || replyOf(e.Response) != w.reply || e.Fingerprint != "system user" {
-			t.Errorf("line %d = %q → %q [%s]; want %q → %q [system user]",
-				i+1, lastUserMessage(e.Request.Messages), replyOf(e.Response), e.Fingerprint, w.q, w.reply)
+		if lastUserMessage(e.Request.Messages) != w.q || replyOf(e.Response) != w.reply {
+			t.Errorf("line %d = %q → %q; want %q → %q", i+1, lastUserMessage(e.Request.Messages), replyOf(e.Response), w.q, w.reply)
+		}
+		if why := fingerprintOf(ask(w.q)).mismatch(e.Fingerprint); why != "" {
+			t.Errorf("line %d fingerprint: the call %s", i+1, why)
 		}
 	}
 }
@@ -156,8 +179,8 @@ func TestReplay_AnswersInOrderWithoutNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCompleter(replay): %v", err)
 	}
-	// Same shapes as the recording, different contents (a live run carries fresh ids).
-	for i, req := range []ChatRequest{ask("other words"), toolTurn("list_entities"), ask("a fresh id 7f3c")} {
+	// The recorded prompts, tools and shapes; grounding and tool results carry fresh ids.
+	for i, req := range []ChatRequest{freshIDs(ask("q1")), freshIDs(toolTurn("list_entities")), freshIDs(ask("q3"))} {
 		resp, err := c.Complete(context.Background(), req)
 		if want := fmt.Sprintf("a%d", i+1); err != nil || replyOf(resp) != want {
 			t.Fatalf("call %d = %q, %v; want %q", i+1, replyOf(resp), err, want)
@@ -165,20 +188,27 @@ func TestReplay_AnswersInOrderWithoutNetwork(t *testing.T) {
 	}
 }
 
-// A cassette that no longer matches the calls fails as a gateway error that says it is stale and how
-// to re-record — never by quietly answering with the wrong exchange.
+// A cassette that no longer matches the calls fails as a gateway error that says it is stale, why,
+// and how to re-record — never by quietly answering with the wrong exchange.
 func TestReplay_StaleCassetteFailsWithReRecordHint(t *testing.T) {
+	builderTools := ask("q1")
+	builderTools.Tools = ToolDefinitions()
+	assistantTools := ask("q1")
+	assistantTools.Tools = AssistantToolDefinitions()
 	tests := []struct {
 		name  string
 		calls []ChatRequest // the last call must fail
+		why   string
 	}{
-		{name: "roles differ", calls: []ChatRequest{{Messages: []ChatMessage{{Role: "user"}}}}},
-		{name: "tool call differs", calls: []ChatRequest{ask("q1"), toolTurn("get_layout")}},
-		{name: "cassette exhausted", calls: []ChatRequest{ask("q1"), toolTurn("list_entities"), ask("q3")}},
+		{name: "roles differ", calls: []ChatRequest{{Tools: ToolDefinitions(), Messages: []ChatMessage{{Role: "user", Content: "q1"}}}}, why: "sends [user] where the cassette recorded [system user]"},
+		{name: "tool call differs", calls: []ChatRequest{builderTools, toolTurn("get_layout")}, why: "assistant(list_entities)"},
+		{name: "another prompt", calls: []ChatRequest{func() ChatRequest { r := builderTools; r.Messages = ask("q2").Messages; return r }()}, why: "(another prompt)"},
+		{name: "another agent", calls: []ChatRequest{assistantTools}, why: "(another agent, or tools added or renamed)"},
+		{name: "cassette exhausted", calls: []ChatRequest{builderTools, toolTurn("list_entities"), ask("q3")}, why: "no exchange left for call 3 (the cassette holds 2)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			path := recordCassette(t, []ChatRequest{ask("q1"), toolTurn("list_entities")},
+			path := recordCassette(t, []ChatRequest{builderTools, toolTurn("list_entities")},
 				[]ChatResponse{finalTextResp("a1"), finalTextResp("a2")})
 			c, err := NewCompleter(config.AIConfig{GatewayMode: config.AIGatewayReplay, Cassette: path})
 			if err != nil {
@@ -194,7 +224,7 @@ func TestReplay_StaleCassetteFailsWithReRecordHint(t *testing.T) {
 			if !errors.Is(err, ErrGateway) {
 				t.Fatalf("error = %v; want ErrGateway", err)
 			}
-			for _, want := range []string{"stale", path, "AI_GATEWAY_MODE=record"} {
+			for _, want := range []string{"is stale: ", tt.why, "AI_GATEWAY_MODE=record AI_GATEWAY_CASSETTE=" + path} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("error %q does not mention %q", err, want)
 				}
@@ -203,27 +233,52 @@ func TestReplay_StaleCassetteFailsWithReRecordHint(t *testing.T) {
 	}
 }
 
-func TestFingerprint_IsTheShapeNotTheContents(t *testing.T) {
-	twoCalls := ChatRequest{Messages: []ChatMessage{
-		{Role: "user", Content: "q"},
+// The fingerprint holds what tells one turn from another — the tools offered (names, not schemas),
+// the user messages (hashed) and the conversation's shape — and leaves out what a fresh database
+// changes: grounding, tool results and their ids.
+func TestFingerprint_ToolsPromptsAndShapeNotFreshIDs(t *testing.T) {
+	base := ChatRequest{Model: "m", Tools: ToolDefinitions(), Messages: []ChatMessage{
+		{Role: "system", Content: "persona"},
+		{Role: "system", Content: "grounding: entity patients, id 7f3c"},
+		{Role: "user", Content: "Tạo bảng ticket"},
 		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Function: ToolCallFunc{Name: "list_entities"}}, {ID: "c2", Function: ToolCallFunc{Name: "get_layout"}}}},
-		{Role: "tool", ToolCallID: "c1"},
-		{Role: "tool", ToolCallID: "c2"},
+		{Role: "tool", ToolCallID: "c1", Content: `{"entities":[{"id":"7f3c"}]}`},
+		{Role: "tool", ToolCallID: "c2", Content: `{"layout":"9e1d"}`},
 	}}
+	edit := func(f func(r *ChatRequest)) ChatRequest {
+		r := base
+		r.Messages = slices.Clone(base.Messages)
+		f(&r)
+		return r
+	}
+	got := fingerprintOf(base)
+	if got.Shape != "system system user assistant(list_entities,get_layout) tool tool" || got.User != sha256Hex("Tạo bảng ticket")[:8] ||
+		len(got.Tools) != len(ToolDefinitions()) || got.Tools[0] != ToolDefinitions()[0].Function.Name {
+		t.Fatalf("fingerprintOf = %+v; want the tool names, the hashed prompt and the shape", got)
+	}
 	tests := []struct {
-		name string
-		req  ChatRequest
-		want string
+		name  string
+		req   ChatRequest
+		match bool
 	}{
-		{name: "roles in order", req: ask("q"), want: "system user"},
-		{name: "tool calls named", req: twoCalls, want: "user assistant(list_entities,get_layout) tool tool"},
-		{name: "contents, ids and model ignored", req: ChatRequest{Model: "other", Messages: []ChatMessage{
-			{Role: "system", Content: "grounding with a fresh uuid 7f3c"}, {Role: "user", Content: "other words"}}}, want: "system user"},
+		{name: "fresh ids, other schemas and the model ignored", match: true, req: edit(func(r *ChatRequest) {
+			r.Model = "other"
+			r.Tools = slices.Clone(r.Tools)
+			r.Tools[0].Function.Description = "a reworded description"
+			r.Messages[1].Content = "grounding: entity patients, id 0b2a"
+			r.Messages[4].Content = `{"entities":[{"id":"0b2a"}]}`
+		})},
+		{name: "another agent's tools", req: edit(func(r *ChatRequest) { r.Tools = AssistantToolDefinitions() })},
+		{name: "another prompt", req: edit(func(r *ChatRequest) { r.Messages[2].Content = "Tạo bảng khách hàng" })},
+		{name: "another tool called", req: edit(func(r *ChatRequest) {
+			r.Messages[3].ToolCalls = []ToolCall{{ID: "c1", Function: ToolCallFunc{Name: "list_entities"}}, {ID: "c2", Function: ToolCallFunc{Name: "list_fields"}}}
+		})},
+		{name: "another shape", req: edit(func(r *ChatRequest) { r.Messages = r.Messages[:3] })},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := fingerprint(tt.req); got != tt.want {
-				t.Fatalf("fingerprint = %q; want %q", got, tt.want)
+			if why := fingerprintOf(tt.req).mismatch(got); (why == "") != tt.match {
+				t.Fatalf("mismatch = %q; want a match: %v", why, tt.match)
 			}
 		})
 	}
@@ -234,21 +289,25 @@ func TestFingerprint_IsTheShapeNotTheContents(t *testing.T) {
 func TestRecordReplay_ConcurrentCalls(t *testing.T) {
 	const n = 32
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "concurrent.jsonl")
-	rec, err := newRecorder(echoCompleter{}, path)
-	if err != nil {
-		t.Fatalf("newRecorder: %v", err)
+	record := func(live Completer, prompt func(i int) string) string {
+		path := filepath.Join(t.TempDir(), "concurrent.jsonl")
+		rec, err := newRecorder(live, path)
+		if err != nil {
+			t.Fatalf("newRecorder: %v", err)
+		}
+		var wg sync.WaitGroup
+		for i := range n {
+			wg.Go(func() {
+				if _, err := rec.Complete(ctx, ask(prompt(i))); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		wg.Wait()
+		return path
 	}
-	var wg sync.WaitGroup
-	for i := range n {
-		wg.Go(func() {
-			if _, err := rec.Complete(ctx, ask(fmt.Sprintf("q%02d", i))); err != nil {
-				t.Error(err)
-			}
-		})
-	}
-	wg.Wait()
-	lines := readCassette(t, path)
+
+	lines := readCassette(t, record(echoCompleter{}, func(i int) string { return fmt.Sprintf("q%02d", i) }))
 	if len(lines) != n {
 		t.Fatalf("cassette has %d lines; want %d", len(lines), n)
 	}
@@ -258,14 +317,17 @@ func TestRecordReplay_ConcurrentCalls(t *testing.T) {
 		}
 	}
 
-	rep, err := NewCompleter(config.AIConfig{GatewayMode: config.AIGatewayReplay, Cassette: path})
+	// n recordings of one prompt, so any arrival order matches; each must be served once.
+	rep, err := NewCompleter(config.AIConfig{GatewayMode: config.AIGatewayReplay,
+		Cassette: record(&countingCompleter{}, func(int) string { return "same prompt" })})
 	if err != nil {
 		t.Fatalf("NewCompleter(replay): %v", err)
 	}
 	served := make(chan string, n)
+	var wg sync.WaitGroup
 	for range n {
 		wg.Go(func() {
-			resp, err := rep.Complete(ctx, ask("any"))
+			resp, err := rep.Complete(ctx, ask("same prompt"))
 			if err != nil {
 				t.Error(err)
 				return
@@ -285,7 +347,7 @@ func TestRecordReplay_ConcurrentCalls(t *testing.T) {
 	if len(seen) != n {
 		t.Fatalf("replay served %d distinct exchanges; want all %d", len(seen), n)
 	}
-	if _, err := rep.Complete(ctx, ask("one more")); !errors.Is(err, ErrGateway) {
+	if _, err := rep.Complete(ctx, ask("same prompt")); !errors.Is(err, ErrGateway) {
 		t.Fatalf("call %d error = %v; want the exhausted-cassette ErrGateway", n+1, err)
 	}
 }
@@ -340,7 +402,7 @@ func TestNewCompleter_Modes(t *testing.T) {
 
 	dir := t.TempDir()
 	notJSON := filepath.Join(dir, "not-json.jsonl")
-	if err := os.WriteFile(notJSON, []byte(`{"fingerprint":"user"}`+"\nnot json\n"), 0o644); err != nil {
+	if err := os.WriteFile(notJSON, []byte(`{"fingerprint":{"shape":"user"}}`+"\nnot json\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct {
@@ -361,6 +423,74 @@ func TestNewCompleter_Modes(t *testing.T) {
 			}
 			if c != nil {
 				t.Fatalf("NewCompleter returned %T beside its error; want nil", c)
+			}
+		})
+	}
+}
+
+// A replay answers each turn with that turn's own recording or refuses. Recorded as builder "A",
+// builder "B", then the ⌘K assistant "C": replaying with the assistant first, or with the two builder
+// prompts swapped, fails with the stale error at call 1, never hands one turn another's answer; the
+// recorded order replays against a database whose contents differ.
+func TestReplay_RefusesTurnsInAnotherOrder(t *testing.T) {
+	ctx := context.Background()
+	type turn struct{ agent, prompt, reply string }
+	a := turn{"builder", "Tạo bảng ticket", "reply A"}
+	b := turn{"builder", "Thêm trường ưu tiên cho ticket", "reply B"}
+	c := turn{"assistant", "Có bao nhiêu ticket đang mở?", "reply C"}
+	run := func(gw Completer, label string, tr turn) (string, error) {
+		msgs := []ChatMessage{{Role: "user", Content: tr.prompt}}
+		if tr.agent == "builder" {
+			db := twoTenantReader()
+			db.entities["tenant-A"][0].Label = label
+			res, err := NewAIBuilderAgent(enabledCfg(3), gw, db, nil, nil, nil).Chat(ctx, Scope{UserID: "admin"}, "tenant-A", "", msgs)
+			return res.Reply, err
+		}
+		rd := &fakeRecordReader{ents: []metadata.EntityDefinition{{Name: "tickets", Label: label}}}
+		res, err := NewAssistantAgent(enabledCfg(3), gw, rd, nil, nil).Ask(ctx, callerScope(), "tenant-A", "", msgs)
+		return res.Reply, err
+	}
+
+	path := filepath.Join(t.TempDir(), "turns.jsonl")
+	rec, err := newRecorder(&scriptedGateway{t: t, responses: []ChatResponse{
+		finalTextResp(a.reply), finalTextResp(b.reply), finalTextResp(c.reply)}}, path)
+	if err != nil {
+		t.Fatalf("newRecorder: %v", err)
+	}
+	for _, tr := range []turn{a, b, c} {
+		if _, err := run(rec, "recorded database", tr); err != nil {
+			t.Fatalf("record %q: %v", tr.prompt, err)
+		}
+	}
+
+	cfg := enabledCfg(3)
+	cfg.GatewayMode, cfg.Cassette = config.AIGatewayReplay, path
+	tests := []struct {
+		name        string
+		turns       []turn
+		wantStaleAt int // 0 = every turn gets its own recorded reply
+	}{
+		{name: "recorded order, another database", turns: []turn{a, b, c}},
+		{name: "assistant first", turns: []turn{c, a, b}, wantStaleAt: 1},
+		{name: "builder prompts swapped", turns: []turn{b, a, c}, wantStaleAt: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			replay, err := NewCompleter(cfg)
+			if err != nil {
+				t.Fatalf("NewCompleter(replay): %v", err)
+			}
+			for i, tr := range tt.turns {
+				reply, err := run(replay, "fresh database", tr)
+				if i+1 == tt.wantStaleAt {
+					if !errors.Is(err, ErrGateway) || !strings.Contains(err.Error(), "is stale: call 1 ") {
+						t.Fatalf("turn %d (%s %q) = %q, %v; want the stale-cassette ErrGateway at call 1", i+1, tr.agent, tr.prompt, reply, err)
+					}
+					return
+				}
+				if err != nil || reply != tr.reply {
+					t.Fatalf("turn %d (%s %q) = %q, %v; want its own recorded %q", i+1, tr.agent, tr.prompt, reply, err, tr.reply)
+				}
 			}
 		})
 	}
