@@ -451,7 +451,7 @@ func TestReplay_DrivesTheBuilderWithoutBaseURLOrKey(t *testing.T) {
 
 // A replayed turn costs nothing by design, so the zero-usage canary — there to catch a live gateway
 // that stops reporting usage — stays quiet for it, on the builder and on the assistant; a live
-// gateway that reports no usage still trips it on both.
+// gateway that reports no usage still trips it on both, recorded or not.
 func TestReplay_ZeroUsageCanaryStaysQuiet(t *testing.T) {
 	ctx := context.Background()
 	canaries := func(gw Completer) int {
@@ -478,13 +478,14 @@ func TestReplay_ZeroUsageCanaryStaysQuiet(t *testing.T) {
 		t.Fatalf("a live gateway without usage logged the canary %d times; want once per agent", n)
 	}
 
+	// Record mode is live: the same gateway under the recorder still trips the canary on both agents.
 	path := filepath.Join(t.TempDir(), "turns.jsonl")
-	rec, err := newRecorder(&scriptedGateway{t: t, responses: []ChatResponse{finalTextResp("built"), finalTextResp("answered")}}, path)
+	rec, err := newRecorder(&scriptedGateway{t: t, responses: []ChatResponse{noUsage("built"), noUsage("answered")}}, path)
 	if err != nil {
 		t.Fatalf("newRecorder: %v", err)
 	}
-	if n := canaries(rec); n != 0 {
-		t.Fatalf("recording turns that report usage logged the canary %d times", n)
+	if n := canaries(rec); n != 2 {
+		t.Fatalf("recording through a gateway without usage logged the canary %d times; want once per agent", n)
 	}
 	cfg := enabledCfg(3)
 	cfg.GatewayMode, cfg.Cassette = config.AIGatewayReplay, path
