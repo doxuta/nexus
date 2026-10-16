@@ -271,6 +271,18 @@ func (a *AIBuilderAgent) ChatWithProgress(ctx context.Context, scope Scope, tena
 	}, nil
 }
 
+// RunTool runs ONE builder tool outside a chat turn, for the MCP surface (internal/mcpserver): the
+// same tenant-scoped executor and validators as a Chat turn, with no gateway call and no ledger
+// row, so it also runs with AI disabled. prior holds the thread's earlier proposals, so a tool that
+// accepts "an entity proposed this turn" accepts one an earlier call proposed; tag namespaces the
+// @refs of propose_records per thread, as the run id does per turn. It returns the tool's JSON
+// result and the proposals this call added, each with its change envelope.
+func (a *AIBuilderAgent) RunTool(ctx context.Context, tenantID, tag string, prior []DraftItem, name, argsJSON string) (string, []DraftItem) {
+	exec := &toolExecutor{reader: a.reader, docs: a.docs, tenantID: tenantID, turnTag: tag, draft: append([]DraftItem(nil), prior...)}
+	res := exec.execute(ctx, name, argsJSON)
+	return res, exec.draft[len(prior):]
+}
+
 // finalizeDraft stamps entity.appName with the app the turn ran in (D6) at the ONE place every
 // result-with-draft passes through. A table that a propose_app of the SAME turn already packs
 // into its menu is left unstamped (that card attaches it; stamping too would double-add).
