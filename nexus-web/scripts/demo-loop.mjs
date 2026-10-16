@@ -341,8 +341,9 @@ const steps = [
     for (const [i, c] of (await cards(builder)).entries()) {
       if (!c.label.startsWith(`${t("studio.assistant.card.state.open")}: `)) continue;
       await clickInCard(builder, i, t("studio.assistant.draft.applyNow"));
-      await builder.waitForFunction((scope, i, ask) => document.querySelectorAll(`${scope} article`)[i]?.innerText.includes(ask),
-        {}, assistant, i, t("studio.assistant.draft.confirmNow").split("{desc}")[0]);
+      // The question in the card: the app's "Áp ngay cho người dùng thật: …", the access card's own wording.
+      await builder.waitForFunction((scope, i, asks) => asks.some((ask) => document.querySelectorAll(`${scope} article`)[i]?.innerText.includes(ask)),
+        {}, assistant, i, ["studio.assistant.draft.confirmNow", "studio.assistant.access.confirmHidden"].map((k) => t(k).split("{desc}")[0]));
       await clickInCard(builder, i, t("studio.assistant.draft.confirmNowAction"));
       await waitApplied(builder, i);
       now.push(c.title);

@@ -284,7 +284,10 @@ export function ProposalCard({ item, state, delivered, asSample, onAsSampleChang
           <div className="slds-m-top_small">
             <InlineConfirm
               tone="warning"
-              message={realRows ? t("studio.assistant.sample.confirmReal") : tf("studio.assistant.draft.confirmNow", { desc: view.title })}
+              message={realRows ? t("studio.assistant.sample.confirmReal")
+                // Access applies at once; on a published project the new table itself waits for Publish.
+                : item.kind === "access" ? tf(delivered ? "studio.assistant.access.confirmHidden" : "studio.assistant.access.confirm", { desc: view.title })
+                : tf("studio.assistant.draft.confirmNow", { desc: view.title })}
               confirmLabel={realRows ? t("studio.assistant.sample.confirmRealAction") : t("studio.assistant.draft.confirmNowAction")}
               onConfirm={doApply}
               onCancel={cancelConfirm}

@@ -134,3 +134,36 @@ describe("ProposalCard — sealed and undone", () => {
     expect(screen.queryByRole("button", { name: "Hoàn tác" })).toBeNull();
   });
 });
+
+// Issue #2, verifier round 1 (LOW): the question asked before an access card applies says what really happens — the
+// access applies at once to real users, and (on a published project) the new table stays hidden from them until Publish.
+describe("ProposalCard — access card question", () => {
+  const ACCESS: AiDraftItem = {
+    kind: "access",
+    access: { role: "crm_sales_rep", roleLabel: "Nhân viên kinh doanh", labels: { tickets: "Phiếu hỗ trợ" },
+      grants: [{ entityName: "tickets", action: "view", accessLevel: "all" }] },
+    change: { docType: "role", docKey: "r1", op: "update", label: "Vai", target: { name: "crm_sales_rep", entity: "tickets" },
+      before: { grants: [], labels: { tickets: "Phiếu hỗ trợ" } }, after: { grants: [], labels: { tickets: "Phiếu hỗ trợ" } } },
+  };
+  const ask = (delivery: Delivery, delivered: boolean) => {
+    const onApply = vi.fn();
+    render(<ProposalCard item={ACCESS} asSample onAsSampleChange={() => {}} onApply={onApply} onDiscard={() => {}} link={(id) => `/studio/${id}`}
+      delivered={delivered} draft={{ mode: cardMode(ACCESS, delivery), onRecheck: vi.fn(), onUndoPlan: vi.fn(), onUndo: vi.fn(), canOpenDrafts: false, onOpenDrafts: vi.fn() }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Áp ngay" }));
+    return onApply;
+  };
+  const delivered: Delivery = { kind: "delivered", state: { ...(DELIVERED as Extract<Delivery, { kind: "delivered" }>).state, directTypes: ["role"] } };
+
+  it("published project: applies now, the table stays hidden from customers until Xuất bản", () => {
+    const onApply = ask(delivered, true);
+    expect(screen.getByText("Quyền này áp ngay cho người dùng thật: Nhân viên kinh doanh được xem tất cả trên Phiếu hỗ trợ. Bảng vẫn ẩn với khách cho tới khi anh Xuất bản.")).toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole("button", { name: "Áp ngay" }).at(-1)!);
+    expect(onApply).toHaveBeenCalledTimes(1);
+  });
+
+  it("never published: asked too, without a publish to wait for", () => {
+    ask({ kind: "undelivered" }, false);
+    expect(screen.getByText("Quyền này áp ngay cho người dùng thật: Nhân viên kinh doanh được xem tất cả trên Phiếu hỗ trợ.")).toBeInTheDocument();
+  });
+});
