@@ -53,7 +53,8 @@ proposal waits in the Studio until a human applies and publishes it. No tool app
 3. Back in the Studio, click **Mở cuộc trò chuyện** on that key. The proposal appears as a card. Apply it to drafts,
    then publish.
 
-The key works on `/mcp` only, acts as the builder who created it, and can be revoked from the same list.
+The key works on `/mcp` only, acts as the builder who created it, and can be revoked from the same list. The server
+needs no model of its own for this: the agent brings one, so `AI_ENABLED` can stay off.
 `nexus-web/scripts/mcp-loop.mjs` runs this loop end to end on a fresh stack, and `evals/mcp/` measures it on five
 requests.
 
