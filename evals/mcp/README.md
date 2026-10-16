@@ -16,6 +16,11 @@ For each task, the runner:
 3. revokes the key;
 4. grades the conversation's proposals.
 
+A session that never reached the server fails, whatever it answered: it needs at least one `nexus_` tool call, or
+the `nexus` server connected in its init event. A failed connection still exits 0, and task 5 wants no proposal, so
+without this rule it would pass. `python3 evals/mcp/test_run.py` (in CI) checks the pass rule on a recorded
+transcript and on a synthetic failed connection.
+
 Nothing is applied, so the workspace is unchanged. `--out` keeps each stream-json transcript with every `nxm_` token
 redacted, plus `results.json`. The exit code is 1 when a task fails.
 
@@ -41,7 +46,8 @@ cached part, shown in brackets. Claude Code reports about $0.07–0.10 per task.
 | 4 | `layout:crm_leads/list` | list_entities, list_fields, get_layout, propose_layout | 208,661 (201,623) | 772 | pass |
 | 5 | none | list_entities, list_roles, explain_access | 155,599 (149,237) | 636 | pass |
 
-**5/5 pass.** Notes:
+**5/5 pass.** The rule that a session must reach the server came after this run; the five recorded sessions all
+connected and called `nexus_` tools, so the result stands (checked on the transcripts, not re-run). Notes:
 
 - **Task 3 was rewritten.** Its first version asked to link contacts and opportunities. The CRM pack already
   links those two N-N. The agent read the relationships, proposed nothing, and said why. That first run is the

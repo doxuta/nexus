@@ -4,7 +4,8 @@ proposal, and only a proposal?
 
 Each task gets its own agent key, so its own Studio conversation: the runner issues the key as the builder, runs one
 headless Claude Code session on it, revokes the key, then grades the proposals the conversation holds (their kinds
-and names) with code, never with a model. Nothing is applied: the workspace is left as it was.
+and names) with code, never with a model. A session that never reached the server fails, whatever it answered.
+Nothing is applied: the workspace is left as it was. test_run.py checks the pass rule on recorded transcripts.
 
     python3 evals/mcp/run.py [--base http://localhost:8080] [--only 1,5] [--out DIR] [-- <extra claude flags>]
 
@@ -80,6 +81,30 @@ def redact(s):
     return re.sub(r"nxm_[A-Za-z0-9_-]{40,}", "nxm_[REDACTED]", s)
 
 
+def parse_events(stdout):
+    """The stream-json events of one `claude -p` session."""
+    return [json.loads(line) for line in stdout.splitlines() if line.strip().startswith("{")]
+
+
+def tool_calls(events):
+    """Names of the nexus tools the agent called, in order (mcp__nexus__ prefix dropped)."""
+    return [c["name"].removeprefix("mcp__nexus__") for e in events if e.get("type") == "assistant"
+            for c in e["message"]["content"] if c.get("type") == "tool_use"]
+
+
+def reached_server(events):
+    """Whether the session reached Nexus: a nexus_ tool call, or the nexus server connected in the init event."""
+    init = next((e for e in events if e.get("type") == "system" and e.get("subtype") == "init"), {})
+    connected = any(s.get("name") == "nexus" and s.get("status") == "connected" for s in init.get("mcp_servers") or [])
+    return connected or any(c.startswith("nexus_") for c in tool_calls(events))
+
+
+def passes(task, events, drafts, returncode):
+    """Whether a task passed: the session reached the server, ended cleanly, and the grader accepts the thread's
+    proposals. A session whose MCP connection failed still exits 0, and with no proposal it would pass task 5."""
+    return returncode == 0 and reached_server(events) and task[2](drafts)
+
+
 def run_task(base, jwt, task, claude_args, out):
     tid, prompt, grade, want = task
     code, body = req(base, "POST", "/admin/mcp-tokens", jwt, {})
@@ -100,19 +125,18 @@ def run_task(base, jwt, task, claude_args, out):
     if out:
         with open(os.path.join(out, f"task-{tid}.jsonl"), "w") as f:
             f.write(redact(p.stdout))
-    events = [json.loads(line) for line in p.stdout.splitlines() if line.strip().startswith("{")]
-    calls = [c["name"].removeprefix("mcp__nexus__") for e in events if e.get("type") == "assistant"
-             for c in e["message"]["content"] if c.get("type") == "tool_use"]
+    events = parse_events(p.stdout)
+    calls = tool_calls(events)
     result = next((e for e in events if e.get("type") == "result"), {})
     usage = result.get("usage") or {}
     model = next((e.get("model") for e in events if e.get("type") == "system" and e.get("subtype") == "init"), "?")
     code, body = req(base, "GET", "/admin/ai/builder/sessions/" + tok["sessionId"], jwt)
     ds = drafts_of(body["data"]) if code == 200 else []
-    ok = p.returncode == 0 and code == 200 and grade(ds)
+    ok = code == 200 and passes(task, events, ds, p.returncode)
     return {
         "task": tid, "prompt": prompt, "want": want, "pass": ok, "model": model,
         "proposals": [label(d) for d in ds],
-        "tools": calls, "turns": result.get("num_turns"),
+        "tools": calls, "reached_server": reached_server(events), "turns": result.get("num_turns"),
         "input_tokens": usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) + usage.get("cache_read_input_tokens", 0),
         "cached_input_tokens": usage.get("cache_read_input_tokens", 0),
         "output_tokens": usage.get("output_tokens", 0),

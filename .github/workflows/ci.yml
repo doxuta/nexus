@@ -43,6 +43,8 @@ jobs:
         run: |
           python3 scripts/test_acceptance_acl.py
           python3 scripts/test_acceptance_named_credentials.py
+      - name: eval pass-rule unit tests
+        run: python3 ../evals/mcp/test_run.py
 
   integration:
     name: go integration (MySQL 8 · migrate up · -race)
