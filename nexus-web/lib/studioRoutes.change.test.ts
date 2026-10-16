@@ -22,7 +22,7 @@ describe("routeForChange targets", () => {
     [{ docType: "report", op: "create" }, `${P}/dung/bao-cao`],
     [{ docType: "dashboard", op: "create" }, `${P}/dung/bao-cao`],
     [{ docType: "app", op: "create", target: { name: "crm" } }, `${P}/dung/man-hinh/app?app=crm`],
-    [{ docType: "access", op: "update", target: { name: "le_tan", entity: "invoice" } }, `${P}/dung/nguoi-dung-quyen`],
+    [{ docType: "role", op: "update", docKey: "3f2b8a10-5c1d-4e2f-9a7b-0c1d2e3f4a5b", target: { name: "le_tan", entity: "invoice" } }, `${P}/dung/nguoi-dung-quyen`],
     [{ docType: "branding", op: "update" }, `${P}/dung/thuong-hieu`],
     [{ docType: "relationship", op: "create" },`${P}/dung/du-lieu/so-do`],
     [{ docType: "approval", op: "create" }, `${P}/dung/tu-dong/duyet`],
@@ -34,7 +34,7 @@ describe("routeForChange targets", () => {
     expect(r?.stay).toBe(false);
   });
 
-  it("unknown docType has no target", () => expect(go({ docType: "role", op: "update" })).toBeNull());
+  it("unknown docType has no target", () => expect(go({ docType: "field_acl", op: "update" })).toBeNull());
 });
 
 describe("routeForChange stays put", () => {

@@ -30,7 +30,7 @@ export const PAINTED: ReadonlyArray<{ docType: string; op: ProposalOp }> = [
   { docType: "layout", op: "update" }, // f3 screen-editor-ai-preview: form + record page (list screens are not drawn yet)
   { docType: "workflow", op: "create" }, { docType: "workflow", op: "update" }, { docType: "workflow", op: "delete" },
   { docType: "app", op: "update" },
-  { docType: "access", op: "update" },
+  { docType: "role", op: "update" }, // an access card (propose_access): the role's cells on the access matrix
   { docType: "report", op: "create" },
   { docType: "report", op: "update" },
   { docType: "report", op: "delete" },

@@ -25,8 +25,8 @@ beforeEach(() => { push.mockClear(); pathname = "/studio/du-an/demo/dung/du-lieu
 describe("ProposalOverlay", () => {
   it("PAINTED lists only what editors draw: a kind nobody paints (layout:create) gets no preview", () => {
     expect(PAINTED.map((p) => `${p.docType}:${p.op}`).sort()).toEqual(
-      ["access:update", "app:update", "branding:update", "entity:create", "entity:delete", "field:create", "field:update", "layout:update",
-        "report:create", "report:delete", "report:update", "workflow:create", "workflow:delete", "workflow:update"],
+      ["app:update", "branding:update", "entity:create", "entity:delete", "field:create", "field:update", "layout:update",
+        "report:create", "report:delete", "report:update", "role:update", "workflow:create", "workflow:delete", "workflow:update"],
     );
     const { result } = renderHook(() => useProposalOverlay(), { wrapper: ({ children }) => <ProposalOverlayProvider slug="demo">{children}</ProposalOverlayProvider> });
     expect(result.current?.canPreview(mk("a", { docType: "layout", op: "create", target: { docType: "layout", entity: "lich_hen" } }))).toBe(false);

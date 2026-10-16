@@ -10,7 +10,8 @@ vi.mock("@/lib/admin", async (orig) => ({ ...(await orig<typeof import("@/lib/ad
 vi.mock("@/lib/api", async (orig) => ({ ...(await orig<typeof import("@/lib/api")>()), getPublishState: () => hoisted.delivered() }));
 
 vi.mock("next/navigation", async (orig) => ({ ...(await orig<typeof import("next/navigation")>()), useRouter: () => ({ push: vi.fn() }), usePathname: () => "/studio/du-an/demo/dung/bao-cao" }));
-import { AccessMatrix } from "./AccessMatrix";
+import { AccessMatrix, accessGhost } from "./AccessMatrix";
+import { useProposedChanges } from "@/components/studio/assistant/ProposalOverlay";
 import { mkChange, WithPreview } from "@/test/previewProbe";
 
 const g = (entityName: string, action: RoleGrant["action"], accessLevel: RoleGrant["accessLevel"] = "all"): RoleGrant => ({ entityName, action, accessLevel });
@@ -220,24 +221,50 @@ describe("delivered project: 'Áp ngay cho người dùng thật' (lát f2-direc
   });
 });
 
-// specs/074 lát f2-ai-preview-menu-access-report-brand (T407): an assistant "access" change paints the cell it would touch.
-describe("assistant preview (docType access)", () => {
-  const change = mkChange("access", "update", { target: { name: "r1", entity: "invoice" }, before: { level: "none" }, after: { level: "view" } });
+// issue #2: an access card (propose_access) is a "role" change — docKey = role id, before/after = { grants, labels } of the
+// tables it touches. The page turns the previewed card into `proposed` cells and ghost columns (accessGhost), as here.
+describe("assistant preview (an access card)", () => {
+  const card = (before: RoleGrant[], after: RoleGrant[], labels: Record<string, string>) =>
+    mkChange("role", "update", { docKey: "r3", target: { name: "r3", entity: Object.keys(labels)[0] }, before: { grants: before, labels }, after: { grants: after, labels } });
+  function Page({ roles, tables }: { roles: RoleDetail[]; tables: { name: string; label: string }[] }) {
+    const ghost = accessGhost(useProposedChanges("role")[0] ?? null, roles, tables);
+    return <AccessMatrix roles={roles} tables={[...tables, ...ghost.pending]} proposed={ghost.proposed} roleHref={href} />;
+  }
   const renderWith = (c: ReturnType<typeof mkChange> | null) =>
-    render(<WithPreview change={c}><AccessMatrix roles={[FRONT, ODD]} tables={TABLES} roleHref={href} /></WithPreview>);
+    render(<WithPreview change={c}><Page roles={[FRONT, ODD]} tables={TABLES} /></WithPreview>);
+  const onVisit = card([g("invoice", "create")], [g("invoice", "create"), g("visit", "view"), g("visit", "create"), g("visit", "edit", "owner")], { visit: "Lịch hẹn" });
 
-  it("tints the cell, says the proposed level and what it was before; other cells stay plain", async () => {
-    renderWith({ ...change, before: { level: "none" }, after: { level: "view" } });
-    const td = (await screen.findByText("Chỉ xem · Đề xuất")).closest("td")!;
+  it("tints the card's cell, says the level it leads to and the one it replaces; other cells stay plain", async () => {
+    renderWith(onVisit);
+    const td = (await screen.findByText("Xem và sửa · Đề xuất")).closest("td")!;
     expect(td.className).toContain("nx-proposed");
     expect(td.textContent).toContain("Trước: Không thấy");
-    expect(td.getAttribute("data-proposal-key")).toBe("access-update");
+    expect(td.getAttribute("data-proposal-key")).toBe("role-update");
+    expect(within(td).getByRole("combobox", { name: name("Kế toán", "Lịch hẹn", "Không thấy") })).toBeInTheDocument();
     expect(document.querySelectorAll(".nx-proposed")).toHaveLength(1);
   });
 
+  it("the builder can still set the ghosted cell by hand", async () => {
+    renderWith(onVisit);
+    await screen.findByText("Xem và sửa · Đề xuất");
+    fireEvent.change(screen.getByRole("combobox", { name: name("Kế toán", "Lịch hẹn", "Không thấy") }), { target: { value: "view" } });
+    await waitFor(() => expect(hoisted.update).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    expect(hoisted.update.mock.calls[0][1].actions).toEqual(expect.arrayContaining([g("invoice", "create"), g("visit", "view")]));
+  });
+
+  it("a table the card names that is not built yet is a read-only ghost column", async () => {
+    renderWith(card([], [g("tickets", "view"), g("tickets", "create"), g("tickets", "edit", "owner")], { tickets: "Phiếu hỗ trợ" }));
+    const head = (await screen.findByRole("columnheader", { name: /Phiếu hỗ trợ/ }));
+    expect(head.className).toContain("nx-proposed");
+    expect(head.textContent).toContain("Đề xuất");
+    const td = screen.getByText("Xem và sửa · Đề xuất").closest("td")!;
+    expect(within(td).queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: /Phiếu hỗ trợ/ })).toBeNull();
+  });
+
   it("Bỏ (clear) removes the ghost and leaves the real grants alone", async () => {
-    renderWith(change);
-    await screen.findByText("Chỉ xem · Đề xuất");
+    renderWith(onVisit);
+    await screen.findByText("Xem và sửa · Đề xuất");
     fireEvent.click(screen.getByRole("button", { name: "clear-preview" }));
     await waitFor(() => expect(document.querySelectorAll(".nx-proposed")).toHaveLength(0));
     expect(screen.queryByText(/Đề xuất/)).toBeNull();

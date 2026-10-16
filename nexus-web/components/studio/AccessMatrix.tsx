@@ -30,11 +30,32 @@ const TIERS = ["none", "view", "edit"] as const;
 const TIER_KEY = { none: "studio.build.access.level.none", view: "studio.build.access.level.view", edit: "studio.build.access.level.edit", custom: "studio.build.access.level.custom" } as const;
 const MERGE_MS = 300;
 
-// An assistant "access" change (docType access): target.name = role name, target.entity = table, before/after = { level }.
-const levelText = (v: unknown): string | null => (typeof v === "object" && v !== null && (v as { level?: string }).level && (v as { level: string }).level in TIER_KEY ? t(TIER_KEY[(v as { level: keyof typeof TIER_KEY }).level]) : null);
-function GhostNote({ change }: { change: ProposedChange }) {
-  const now = levelText(change.after);
-  const was = levelText(change.before);
+// An assistant access card (propose_access): a "role" change, docKey = role id, before/after = { grants, labels } of the
+// tables it touches (plus the role's "*" rows). The note says the level a cell would get and the one it has.
+type AccessSide = { grants?: RoleGrant[]; labels?: Record<string, string> };
+const side = (v: unknown): AccessSide => (typeof v === "object" && v !== null ? (v as AccessSide) : {});
+const tierText = (v: unknown, table: string): string | null => {
+  const grants = side(v).grants;
+  return Array.isArray(grants) ? t(TIER_KEY[levelOf(grants, table).tier]) : null;
+};
+const accessTablesOf = (c: ProposedChange | null): string[] => Object.keys(side(c?.after).labels ?? {});
+
+/**
+ * What the access card being previewed draws on the page: its role's cells (`proposed`) and, as read-only columns, the
+ * tables it names that are not built yet (the table card is still to be applied).
+ */
+export function accessGhost(change: ProposedChange | null, roles: readonly RoleDetail[], built: readonly { name: string }[]) {
+  const tables = accessTablesOf(change);
+  const role = change ? roles.find((r) => r.id === change.docKey || r.name === change.target.name) : undefined;
+  const labels = side(change?.after).labels ?? {};
+  return {
+    proposed: role ? new Set(tables.map((n) => `${role.id}|${n}`)) : undefined,
+    pending: tables.filter((n) => !built.some((e) => e.name === n)).map((n) => ({ name: n, label: labels[n] || n, pending: true })),
+  };
+}
+function GhostNote({ change, table }: { change: ProposedChange; table: string }) {
+  const now = tierText(change.after, table);
+  const was = tierText(change.before, table);
   return (
     <div className="slds-text-body_small">
       {now && <StatusText tone="proposed">{tf("studio.build.ai.access.cell", { level: now })}</StatusText>}
@@ -45,7 +66,8 @@ function GhostNote({ change }: { change: ProposedChange }) {
 
 export interface AccessMatrixProps {
   roles: RoleDetail[];
-  tables: { name: string; label: string }[];
+  /** `pending`: a table an assistant card proposes that does not exist yet — drawn, never editable. */
+  tables: { name: string; label: string; pending?: boolean }[];
   roleHref: (roleId: string) => string;
   /** `"<roleId>|<table>"` of the cells an assistant proposal touches (ghost tint). */
   proposed?: ReadonlySet<string>;
@@ -66,7 +88,7 @@ export function AccessMatrix({ roles, tables, roleHref, proposed, onSaved, viewA
   const [live, setLive] = useState("");
   // Delivered project: a role grant has no draft, so the change is asked in place before it is queued (lát f2-direct-apply-access).
   const { guard, dialog, notice } = useDirectApply({ inline: true });
-  const ghostOf = useProposedChanges("access");
+  const ghost = useProposedChanges("role")[0] ?? null;
   const latest = useRef({ roles, onSaved });
   useEffect(() => { latest.current = { roles, onSaved }; });
 
@@ -162,8 +184,9 @@ export function AccessMatrix({ roles, tables, roleHref, proposed, onSaved, viewA
                 <div className="slds-truncate">{t("studio.build.access.matrix.role")}</div>
               </th>
               {tables.map((tb) => (
-                <th key={tb.name} scope="col">
+                <th key={tb.name} scope="col" className={tb.pending ? "nx-proposed" : undefined}>
                   <div className="slds-truncate" title={tb.name}>{tb.label}</div>
+                  {tb.pending && <StatusText tone="proposed">{t("studio.assistant.card.lead")}</StatusText>}
                 </th>
               ))}
             </tr>
@@ -196,9 +219,18 @@ export function AccessMatrix({ roles, tables, roleHref, proposed, onSaved, viewA
                   {tables.map((tb) => {
                     const { tier, inherited } = levelOf(grants, tb.name);
                     const key = `${role.id}|${tb.name}`;
-                    const gc = ghostOf.find((c) => (c.target.name === role.name || c.target.name === role.id) && c.target.entity === tb.name);
-                    const ghost = proposed?.has(key) || gc ? "nx-proposed" : undefined;
+                    const tint = proposed?.has(key) ? "nx-proposed" : undefined;
+                    const gc = tint && ghost && (ghost.docKey === role.id || ghost.target.name === role.name) && accessTablesOf(ghost).includes(tb.name) ? ghost : null;
                     const mark = gc ? { "data-proposal-key": gc.proposalKey } : undefined;
+                    if (tb.pending) {
+                      // Nothing to grant on yet: the cell says what the role has (nothing, or what "*" gives) and what the card adds.
+                      return (
+                        <td key={tb.name} className={clsx("min-w-36", tint)} {...mark}>
+                          <span className="slds-text-color_weak">{t(TIER_KEY[tier])}</span>
+                          {gc && <GhostNote change={gc} table={tb.name} />}
+                        </td>
+                      );
+                    }
                     if (inherited || tier === "custom") {
                       const shown = t(inherited ? "studio.build.access.level.inherited" : "studio.build.access.level.custom");
                       const label = tf("studio.build.access.matrix.cell", {
@@ -207,17 +239,17 @@ export function AccessMatrix({ roles, tables, roleHref, proposed, onSaved, viewA
                         level: t(inherited ? "studio.build.access.level.inheritedName" : "studio.build.access.level.customName"),
                       });
                       return (
-                        <td key={tb.name} className={clsx("min-w-36", ghost)} {...mark}>
+                        <td key={tb.name} className={clsx("min-w-36", tint)} {...mark}>
                           <Link href={roleHref(role.id)} aria-label={label}>
                             {inherited ? `${t(TIER_KEY[tier])}, ${shown}` : shown}
                           </Link>
-                          {gc && <GhostNote change={gc} />}
+                          {gc && <GhostNote change={gc} table={tb.name} />}
                         </td>
                       );
                     }
                     const name = tf("studio.build.access.matrix.cell", { role: roleText, table: tb.label, level: t(TIER_KEY[tier]) });
                     return (
-                      <td key={tb.name} className={clsx("min-w-36", ghost)} {...mark}>
+                      <td key={tb.name} className={clsx("min-w-36", tint)} {...mark}>
                         <Select
                           label={name}
                           labelHidden
@@ -232,7 +264,7 @@ export function AccessMatrix({ roles, tables, roleHref, proposed, onSaved, viewA
                             void guard(tf("studio.build.access.applyNow.matrix", { role: roleText, table: tb.label, level: t(TIER_KEY[next]) }), () => change(role, tb.name, next));
                           }}
                         />
-                        {gc && <GhostNote change={gc} />}
+                        {gc && <GhostNote change={gc} table={tb.name} />}
                       </td>
                     );
                   })}
