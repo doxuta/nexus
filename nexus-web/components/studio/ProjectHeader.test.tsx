@@ -137,6 +137,34 @@ describe("ProjectHeader", () => {
       expect(screen.queryByRole("button", { name: "Xuất bản" })).toBeNull();
     });
 
+    // The one-command demo delivers the workshop itself (seed-demo.py publishes a baseline for northwind): from then on
+    // the builder's edits there are drafts, and without this button nothing in the Studio could publish them.
+    it("the workshop: no status while undelivered, the same Publish once it has been delivered", () => {
+      const home = (publish: React.ComponentProps<typeof ProjectHeader>["publish"]) =>
+        render(<ProjectHeader slug="northwind" identity={{ name: "Xưởng Nexus" }} zone="dung" home publish={publish} />);
+      home({ delivered: false, pendingCount: 0, versionNo: null });
+      expect(screen.queryByText("Chưa giao · khách chưa thấy gì")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Xuất bản" })).toBeNull();
+      cleanup();
+      home({ delivered: true, pendingCount: 1, versionNo: 1 });
+      expect(screen.getByText("1 thay đổi chưa xuất bản")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Xuất bản" }));
+      expect(screen.getByRole("dialog", { name: "Xem lại và xuất bản" })).toBeInTheDocument();
+    });
+
+    // Once delivered, customers DO see the workshop: its line must not say they do not, beside "Khách đang dùng phiên bản N".
+    it("the delivered workshop drops 'khách không thấy' from its line; undelivered, the line stays", () => {
+      const home = (publish: React.ComponentProps<typeof ProjectHeader>["publish"]) =>
+        render(<ProjectHeader slug="northwind" identity={{ name: "Xưởng Nexus" }} zone="dung" home publish={publish} />);
+      home({ delivered: false, pendingCount: 0, versionNo: null });
+      expect(screen.getByText("Xưởng Nexus · khách không thấy")).toBeInTheDocument();
+      cleanup();
+      const { getByTestId } = home({ delivered: true, pendingCount: 0, versionNo: 2 });
+      expect(screen.getByText("Khách đang dùng phiên bản 2")).toBeInTheDocument();
+      expect(getByTestId("project-header").textContent).not.toContain("khách không thấy");
+      expect(screen.getAllByTitle("Xưởng Nexus").filter((el) => el.classList.contains("slds-truncate"))).toHaveLength(1); // the line, beside the h1
+    });
+
     it("counts only when the token belongs to this project", () => {
       matches.mockReturnValue(false);
       head({ delivered: true, pendingCount: 3, versionNo: 4 });

@@ -16,6 +16,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
 	"nexus/platform/internal/config"
 	"nexus/platform/internal/metadata"
 )
@@ -251,7 +254,6 @@ func TestReplay_StaleCassetteFailsWithReRecordHint(t *testing.T) {
 		{name: "tool call differs", calls: []ChatRequest{builderTools, toolTurn("get_layout")}, why: "assistant(list_entities)"},
 		{name: "another prompt", calls: []ChatRequest{func() ChatRequest { r := builderTools; r.Messages = ask("q2").Messages; return r }()}, why: "(another prompt)"},
 		{name: "another agent", calls: []ChatRequest{assistantTools}, why: "(another agent, or tools added or renamed)"},
-		{name: "cassette exhausted", calls: []ChatRequest{builderTools, toolTurn("list_entities"), ask("q3")}, why: "no exchange left for call 3 (the cassette holds 2)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -277,6 +279,35 @@ func TestReplay_StaleCassetteFailsWithReRecordHint(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A cassette that matched every call and simply ran out is not stale: a replayed server answers one
+// run of the recorded steps, and a second run on the same stack asks for more. The error says to start
+// again from a fresh stack (nobody without a key can re-record) and keeps re-recording for changed steps.
+func TestReplay_UsedUpCassetteSaysStartAFreshStack(t *testing.T) {
+	path := recordCassette(t, []ChatRequest{ask("q1"), ask("q2")}, []ChatResponse{finalTextResp("a1"), finalTextResp("a2")})
+	c, err := NewCompleter(config.AIConfig{GatewayMode: config.AIGatewayReplay, Cassette: path})
+	if err != nil {
+		t.Fatalf("NewCompleter(replay): %v", err)
+	}
+	for i, q := range []string{"q1", "q2"} {
+		if _, err := c.Complete(context.Background(), ask(q)); err != nil {
+			t.Fatalf("call %d: %v; want it answered", i+1, err)
+		}
+	}
+	_, err = c.Complete(context.Background(), ask("q1"))
+	if !errors.Is(err, ErrGateway) {
+		t.Fatalf("error = %v; want ErrGateway", err)
+	}
+	for _, want := range []string{"cassette " + path + " is used up", "no exchange left for call 3 (the cassette holds 2)",
+		"answers one run", "fresh stack", "re-record only if the steps changed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "is stale") {
+		t.Errorf("error %q calls a used-up cassette stale", err)
 	}
 }
 
@@ -443,6 +474,55 @@ func TestReplay_DrivesTheBuilderWithoutBaseURLOrKey(t *testing.T) {
 	}
 	if got.Outcome != outcomeOK || got.Reply != recorded.Reply || len(got.Draft) != 1 || got.Draft[0].Entity == nil || got.Draft[0].Entity.Name != "appointments" {
 		t.Fatalf("replayed turn = %q %q %+v; want the recorded reply and the appointments draft", got.Outcome, got.Reply, got.Draft)
+	}
+}
+
+// A replayed turn costs nothing by design, so the zero-usage canary — there to catch a live gateway
+// that stops reporting usage — stays quiet for it, on the builder and on the assistant; a live
+// gateway that reports no usage still trips it on both, recorded or not.
+func TestReplay_ZeroUsageCanaryStaysQuiet(t *testing.T) {
+	ctx := context.Background()
+	canaries := func(gw Completer) int {
+		t.Helper()
+		core, logs := observer.New(zap.WarnLevel)
+		logger := zap.New(core)
+		if _, err := NewAIBuilderAgent(enabledCfg(3), gw, twoTenantReader(), nil, nil, logger).
+			Chat(ctx, Scope{UserID: "admin"}, "tenant-A", "", []ChatMessage{{Role: "user", Content: "Build a simple helpdesk"}}); err != nil {
+			t.Fatalf("builder turn: %v", err)
+		}
+		rd := &fakeRecordReader{ents: []metadata.EntityDefinition{{Name: "tickets", Label: "Tickets"}}}
+		if _, err := NewAssistantAgent(enabledCfg(3), gw, rd, nil, logger).
+			Ask(ctx, callerScope(), "tenant-A", "", []ChatMessage{{Role: "user", Content: "How many tickets are open?"}}); err != nil {
+			t.Fatalf("assistant turn: %v", err)
+		}
+		return logs.FilterMessageSnippet("gateway returned no usage on a successful").Len()
+	}
+	noUsage := func(text string) ChatResponse {
+		r := finalTextResp(text)
+		r.Usage = Usage{}
+		return r
+	}
+	if n := canaries(&scriptedGateway{t: t, responses: []ChatResponse{noUsage("built"), noUsage("answered")}}); n != 2 {
+		t.Fatalf("a live gateway without usage logged the canary %d times; want once per agent", n)
+	}
+
+	// Record mode is live: the same gateway under the recorder still trips the canary on both agents.
+	path := filepath.Join(t.TempDir(), "turns.jsonl")
+	rec, err := newRecorder(&scriptedGateway{t: t, responses: []ChatResponse{noUsage("built"), noUsage("answered")}}, path)
+	if err != nil {
+		t.Fatalf("newRecorder: %v", err)
+	}
+	if n := canaries(rec); n != 2 {
+		t.Fatalf("recording through a gateway without usage logged the canary %d times; want once per agent", n)
+	}
+	cfg := enabledCfg(3)
+	cfg.GatewayMode, cfg.Cassette = config.AIGatewayReplay, path
+	replay, err := NewCompleter(cfg)
+	if err != nil {
+		t.Fatalf("NewCompleter(replay): %v", err)
+	}
+	if n := canaries(replay); n != 0 {
+		t.Fatalf("replayed turns logged the zero-usage canary %d times; want none, their zero usage is by design", n)
 	}
 }
 
