@@ -120,7 +120,7 @@ func (r *replayer) Complete(_ context.Context, req ChatRequest) (ChatResponse, e
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.next >= len(r.entries) {
-		return ChatResponse{}, r.stale("it holds %d exchanges and call %d asks for another [%s]", len(r.entries), r.next+1, got)
+		return ChatResponse{}, r.stale("no exchange left for call %d [%s] (the cassette holds %d)", r.next+1, got, len(r.entries))
 	}
 	e := r.entries[r.next]
 	if e.Fingerprint != got {
