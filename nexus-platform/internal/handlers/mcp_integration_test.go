@@ -12,9 +12,11 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -339,5 +341,65 @@ func TestMCP_ReadsTheBuildersDrafts(t *testing.T) {
 	}
 	if got := mcpText(res); !strings.Contains(got, `"op":"update"`) || strings.Contains(got, "changedPaths") {
 		t.Fatalf("proposing the draft as it stands: %s; want an update with nothing changed against the draft", got)
+	}
+}
+
+// An MCP client may run tool calls in parallel: every proposal still gets its own place in the
+// thread, because the Studio keys a card (and what was applied of it) by that place.
+func TestMCP_ParallelProposalsGetOnePlaceEach(t *testing.T) {
+	gdb, sx := a4SetupMigratedDB(t)
+	ctx := context.Background()
+	const tenant = "ten-mcp-par"
+	builderID := mcpBuilder(t, gdb, tenant, "mcp-par")
+	store := ai.NewSessionStore(sx)
+	mcpSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(gdb), store, auth.NewUserRepository(gdb))
+	tok, secret, err := mcpSvc.Issue(ctx, auth.Subject{UserID: builderID, TenantID: tenant, IsAdmin: true}, nil)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	agent := ai.NewAIBuilderAgent(config.AIConfig{}, nil, metadata.NewRepository(gdb), nil, nil, zap.NewNop())
+	ts := httptest.NewServer(mcpserver.New(mcpSvc, agent, store, zap.NewNop()))
+	defer ts.Close()
+
+	const n = 12
+	clients := make([]*mcp.ClientSession, n)
+	for i := range clients {
+		clients[i] = mcpConnect(t, ts.URL, secret)
+	}
+	var wg sync.WaitGroup
+	errs := make([]string, n)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			res, err := clients[i].CallTool(ctx, &mcp.CallToolParams{Name: "nexus_propose_entity", Arguments: map[string]any{
+				"name": fmt.Sprintf("par_tbl_%d", i), "label": fmt.Sprintf("Par %d", i),
+				"fields": []map[string]any{{"name": "name", "label": "Name", "fieldType": "text"}}}})
+			switch {
+			case err != nil:
+				errs[i] = err.Error()
+			case res.IsError:
+				errs[i] = mcpText(res)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	for i, e := range errs {
+		if e != "" {
+			t.Errorf("proposal %d: %s", i, e)
+		}
+	}
+	var rows, places int
+	if err := sx.Get(&rows, "SELECT COUNT(*) FROM sys_ai_messages WHERE session_id = ? AND tenant_id = ?", tok.SessionID, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if err := sx.Get(&places, "SELECT COUNT(DISTINCT seq) FROM sys_ai_messages WHERE session_id = ? AND tenant_id = ?", tok.SessionID, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if want := 2 + 2*n; rows != want || places != want {
+		t.Fatalf("%d parallel proposals left %d messages in %d places; want %d in %d", n, rows, places, want, want)
 	}
 }
