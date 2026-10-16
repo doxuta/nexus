@@ -145,7 +145,7 @@ func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallT
 	draft, err := json.Marshal(added)
 	if err == nil {
 		_, err = s.threads.AppendTurn(ctx, p.TenantID, p.UserID, p.SessionID, "",
-			"[MCP] "+req.Params.Name, "Agent đề xuất qua MCP: "+result(res).Result.Buffered+".", draft)
+			"[MCP] Agent gọi "+req.Params.Name, "Agent đề xuất qua MCP: "+result(res).Result.Buffered+".", draft)
 	}
 	if err != nil {
 		return s.threadError(p, err), nil
