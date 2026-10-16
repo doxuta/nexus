@@ -362,7 +362,13 @@ const steps = [
     const crmAfter = (await api(`/admin/roles/${repRole.id}`)).data.role.actions.filter((a) => a.entityName.startsWith("crm_"));
     const sig = (gs) => JSON.stringify(gs.map((g) => `${g.entityName}|${g.action}|${g.accessLevel}`).sort());
     if (sig(crmAfter) !== sig(crmBefore)) throw new Error(`the rep's CRM grants changed: ${sig(crmBefore)} → ${sig(crmAfter)}`);
-    return `applied to drafts: table; applied now: ${now.join(" | ")}; ${repRole.label} (${REP_ROLE}) on ${entity.name}: view all, create, edit own, no delete; ${crmAfter.length} CRM grants untouched; drafts: ${pending.map((c) => `${c.op} ${c.docType} "${c.label}"`).join(", ")}`;
+    // The access applied at once, but the table is not the customer's before Publish: the rep's own token gets the 404 of
+    // a table that is not there, on the data path as on the metadata reads.
+    const repToken = (await login(PERSONAS.rep)).accessToken;
+    const early = await fetch(`${API}/${entity.name}`, { headers: { Authorization: `Bearer ${repToken}` } });
+    const earlyCode = (await early.json().catch(() => ({}))).code ?? "";
+    if (early.status !== 404 || earlyCode !== "ENTITY_NOT_FOUND") throw new Error(`the rep reached ${entity.name} before the publish: ${early.status} ${earlyCode}`);
+    return `applied to drafts: table; applied now: ${now.join(" | ")}; ${repRole.label} (${REP_ROLE}) on ${entity.name}: view all, create, edit own, no delete; ${crmAfter.length} CRM grants untouched; before the publish the rep's GET /${entity.name} → 404 ${earlyCode}; drafts: ${pending.map((c) => `${c.op} ${c.docType} "${c.label}"`).join(", ")}`;
   }],
 
   ["publish-review", async () => {
