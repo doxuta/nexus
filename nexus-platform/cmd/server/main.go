@@ -1285,6 +1285,8 @@ func main() {
 		Records:  recordSvc,
 		// queue #319: propose_edit_field judges FIELD_REQUIRED_WHILE_LOCKED at propose time.
 		FieldLocks: fieldACLRepo,
+		// issue #2: propose_access grants only on a table the customer does not have yet.
+		Published: draftGate,
 	}), &ai.DocReaders{Layouts: layoutSvc, Workflows: workflowSvc, Reports: reportSvc, Apps: appSvc}, aiRunRepo, logger).
 		WithDelivery(draftGate) // specs/067 L10-5: one grounding line once the project is delivered
 	aiContextResolver := ai.NewContextResolver(aiMeta, appSvc, userRepo)

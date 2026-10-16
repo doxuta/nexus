@@ -16,7 +16,14 @@ import (
 	"nexus/platform/internal/services"
 )
 
-type fakeAccessUsers struct{ byKey map[string]*auth.User } // key: tenantID+"/"+email or +id
+type fakeAccessUsers struct {
+	byKey    map[string]*auth.User  // key: tenantID+"/"+email or +id
+	byTenant map[string][]auth.User // ListUsers (propose_access)
+}
+
+func (f *fakeAccessUsers) ListUsers(_ context.Context, tenantID string) ([]auth.User, error) {
+	return f.byTenant[tenantID], nil
+}
 
 func (f *fakeAccessUsers) GetUserByEmail(_ context.Context, tenantID, email string) (*auth.User, error) {
 	if u, ok := f.byKey[tenantID+"/"+email]; ok {
@@ -32,11 +39,28 @@ func (f *fakeAccessUsers) GetUserByID(_ context.Context, tenantID, id string) (*
 	return nil, auth.ErrUserNotFound
 }
 
-type fakeAccessRoles struct{ byID map[string]*auth.Role }
+type fakeAccessRoles struct {
+	byID     map[string]*auth.Role
+	byTenant map[string][]auth.Role       // ListRoles (propose_access)
+	actions  map[string][]auth.RoleAction // role id -> grants
+}
 
 func (f *fakeAccessRoles) GetRoleByID(_ context.Context, _, id string) (*auth.Role, error) {
 	if r, ok := f.byID[id]; ok {
 		return r, nil
+	}
+	return nil, auth.ErrRoleNotFound
+}
+
+func (f *fakeAccessRoles) ListRoles(_ context.Context, tenantID string) ([]auth.Role, error) {
+	return f.byTenant[tenantID], nil
+}
+
+func (f *fakeAccessRoles) ListActionsForRole(_ context.Context, tenantID, roleID string) ([]auth.RoleAction, error) {
+	for _, r := range f.byTenant[tenantID] {
+		if r.ID == roleID {
+			return f.actions[roleID], nil
+		}
 	}
 	return nil, auth.ErrRoleNotFound
 }

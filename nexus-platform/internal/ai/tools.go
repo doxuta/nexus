@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"nexus/platform/internal/auth"
 	"nexus/platform/internal/ddl"
@@ -50,7 +51,7 @@ type MetadataReader interface {
 // plus PUT/DELETE /admin/fields/:id, DELETE /admin/entities/:name and POST /:entity/bulk for the
 // EASE Nước 7 edit/delete/records kinds (HITL, spec §7).
 type DraftItem struct {
-	Kind         string             `json:"kind"`                   // "entity" | "field" | "relationship" | "layout" | "workflow" | "report" | "app" | "edit_field" | "delete_field" | "delete_entity" | "records" | "approval" | "dashboard" | "workqueue" | "record_create" | "record_update"
+	Kind         string             `json:"kind"`                   // "entity" | "field" | "relationship" | "layout" | "workflow" | "report" | "app" | "edit_field" | "delete_field" | "delete_entity" | "records" | "approval" | "dashboard" | "workqueue" | "access" | "record_create" | "record_update"
 	Entity       *DraftEntity       `json:"entity,omitempty"`       // set when Kind=="entity"
 	Field        *DraftField        `json:"field,omitempty"`        // set when Kind=="field"
 	Relationship *DraftRelationship `json:"relationship,omitempty"` // set when Kind=="relationship"
@@ -68,6 +69,7 @@ type DraftItem struct {
 	Approval  *DraftApproval  `json:"approval,omitempty"`  // set when Kind=="approval"
 	Dashboard *DraftDashboard `json:"dashboard,omitempty"` // set when Kind=="dashboard"
 	WorkQueue *DraftWorkQueue `json:"workqueue,omitempty"` // set when Kind=="workqueue" (one-word key, matching the kind token — the FE's primary lookup)
+	Access    *DraftAccess    `json:"access,omitempty"`    // set when Kind=="access" (propose_access, tools_access.go)
 	// RecordCreate/RecordUpdate are the ⌘K assistant's HITL single-record drafts (assistant_tools.go
 	// — the only two draft kinds a NON-admin surface can emit). Applied by the FE via the normal
 	// POST /:entity / PUT /:entity/:id under the CALLER's own token — never an admin route.
@@ -104,7 +106,7 @@ type DraftField struct {
 // M7 adds propose_workflow, M8 adds propose_report, M10 adds snapshot_model, Apps Phase 3 adds
 // propose_app, EASE Nước 7 adds propose_edit_field + propose_delete_field + propose_delete_entity
 // + propose_records, AI-MODULES adds propose_approval + propose_dashboard + propose_workqueue +
-// explain_access + list_packs).
+// explain_access + list_packs, issue #2 adds propose_access).
 // CRITICAL invariant: NO schema declares a tenant parameter. The tenant is injected by the
 // executor from the request's verified JWT, so it is structurally impossible for the model to
 // address another tenant's data — isolation by construction, not a runtime check.
@@ -487,6 +489,33 @@ func toolDefinitionsBase() []Tool {
 		{
 			Type: "function",
 			Function: ToolFunction{
+				Name:        "propose_access",
+				Description: "Đề xuất NGƯỜI NÀO được dùng thứ bạn đang dựng: vai nào được xem / tạo / sửa bảng nào. GỌI KHI người dùng nói ai sẽ dùng thứ đang dựng (the user says who will use what you are building — vd 'nhân viên kinh doanh xem mọi ticket, tạo ticket, sửa ticket của mình'), ngay trong CÙNG lượt với propose_entity / propose_app, để người đó mở được bảng mới thay vì bị chặn. role = TÊN một vai ĐÃ CÓ (gọi list_roles trước; mỗi người chỉ giữ MỘT vai, nên cấp thêm cho đúng vai họ đang giữ — KHÔNG tạo vai mới, KHÔNG đổi vai của ai). entity = bảng vừa propose_entity trong cuộc trò chuyện này, hoặc bảng chưa xuất bản — KHÔNG phải bảng khách đã dùng. actions ⊂ {view, create, edit}; scope 'all' (mọi bản ghi) hoặc 'owner' (chỉ bản ghi của chính họ) — mỗi grant MỘT scope, cần hai mức thì tách hai grant (vd view+create 'all', edit 'owner'). Chỉ CỘNG THÊM: không bao giờ bớt hay hạ quyền đang có của vai. Công cụ này KHÔNG BAO GIỜ cấp quyền quản trị: không xoá (delete), không quyền theo trường, không chia sẻ bản ghi, không vai dành riêng hay vai của quản trị viên — những thứ đó (vd 'chỉ quản lý được xoá') người duyệt tự cấp ở màn Người dùng & quyền, nói rõ trong tóm tắt. Chỉ đưa vào draft — người duyệt Áp dụng mới thành thật.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"grants": map[string]any{
+							"type":        "array",
+							"description": "Các quyền cần cộng thêm (1..20). Mỗi phần tử: một vai, một bảng, các hành động, một phạm vi.",
+							"items": map[string]any{
+								"type": "object",
+								"properties": map[string]any{
+									"role":    map[string]any{"type": "string", "description": "TÊN vai đang có (từ list_roles), vd 'crm_sales_rep'."},
+									"entity":  map[string]any{"type": "string", "description": "Tên bảng vừa đề xuất hoặc chưa xuất bản, vd 'tickets'."},
+									"actions": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": accessActionOrder}, "description": "Hành động được phép: view (xem), create (tạo), edit (sửa). Không có delete."},
+									"scope":   map[string]any{"type": "string", "enum": []string{"all", "owner"}, "description": "all = mọi bản ghi của bảng; owner = chỉ bản ghi họ tạo / phụ trách."},
+								},
+								"required": []string{"role", "entity", "actions", "scope"},
+							},
+						},
+					},
+					"required": []string{"grants"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: ToolFunction{
 				Name:        "explain_access",
 				Description: "GIẢI THÍCH QUYỀN truy cập của MỘT user trong tenant hiện tại lên MỘT entity (và một record cụ thể nếu truyền recordId): user là ai (role, admin?), tầng module-ACL cho view/edit/delete, tầng row-level (record có hiện ra với user không, vì sao), tầng field-ACL (field bị ẩn / chỉ-đọc). Chỉ đọc, không ghi, không vào draft. Dùng khi được hỏi 'vì sao user X không thấy/không sửa được Y'. Truyền userEmail HOẶC userId (một trong hai).",
 				Parameters: map[string]any{
@@ -505,7 +534,7 @@ func toolDefinitionsBase() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "list_roles",
-				Description: "Liệt kê TÊN các vai (role) đang có của tenant. BẮT BUỘC gọi trước khi dùng roleName trong propose_workqueue hoặc người duyệt (approverType='role') trong propose_approval — tên vai không có thật sẽ làm bước Apply thất bại. Chưa có vai phù hợp thì bỏ trống roleName (queue hiện với mọi người) hoặc dùng approverType='user'.",
+				Description: "Liệt kê TÊN các vai (role) đang có của tenant. BẮT BUỘC gọi trước khi dùng roleName trong propose_workqueue, người duyệt (approverType='role') trong propose_approval hoặc role trong propose_access — tên vai không có thật sẽ làm bước Apply thất bại. Chưa có vai phù hợp thì bỏ trống roleName (queue hiện với mọi người) hoặc dùng approverType='user'.",
 				Parameters: map[string]any{
 					"type":       "object",
 					"properties": map[string]any{},
@@ -783,6 +812,8 @@ func (e *toolExecutor) dispatch(ctx context.Context, name, argsJSON string) stri
 		return e.proposeDashboard(ctx, argsJSON)
 	case "propose_workqueue":
 		return e.proposeWorkQueue(ctx, argsJSON)
+	case "propose_access":
+		return e.proposeAccess(ctx, argsJSON)
 	case "explain_access":
 		return e.explainAccess(ctx, argsJSON)
 	case "list_packs":
@@ -2905,10 +2936,21 @@ func (e *toolExecutor) proposeWorkQueue(ctx context.Context, argsJSON string) st
 type accessUserLookup interface {
 	GetUserByEmail(ctx context.Context, tenantID, email string) (*auth.User, error)
 	GetUserByID(ctx context.Context, tenantID, id string) (*auth.User, error)
+	// ListUsers backs propose_access: never a role an admin or a platform operator holds.
+	ListUsers(ctx context.Context, tenantID string) ([]auth.User, error)
 }
 
 type accessRoleLookup interface {
 	GetRoleByID(ctx context.Context, tenantID, id string) (*auth.Role, error)
+	// ListRoles + ListActionsForRole back propose_access: the role it names and that role's grants.
+	ListRoles(ctx context.Context, tenantID string) ([]auth.Role, error)
+	ListActionsForRole(ctx context.Context, tenantID, roleID string) ([]auth.RoleAction, error)
+}
+
+// publishCutoff is when the workspace was last published (nil = never delivered). Signature of
+// *services.DraftGate.HeadCutoff.
+type publishCutoff interface {
+	HeadCutoff(ctx context.Context, tenantID string) (*time.Time, error)
 }
 
 type accessAuthorizer interface {
@@ -2937,6 +2979,9 @@ type AccessProbes struct {
 	// FieldLocks is OPTIONAL and not part of complete(): it arms propose_edit_field's lock parity
 	// (queue #319) and is nil-safe — unwired, the proposal skips the check and Apply still enforces.
 	FieldLocks services.FieldRestrictionLister // *auth.FieldACLRepository
+	// Published is OPTIONAL and not part of complete(): propose_access asks it whether a live table
+	// is already the customer's. Unwired, every live table counts as published (fail closed).
+	Published publishCutoff // *services.DraftGate
 }
 
 // complete reports whether every probe is wired — explain_access degrades honestly when not.
