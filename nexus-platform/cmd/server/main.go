@@ -253,12 +253,15 @@ func main() {
 
 	// E9 AI Builder (../specs/020-e9-ai-builder/spec.md): the conversational NL→metadata agent.
 	// Model A — Nexus owns the loop + the tenant-safe tools; the OpenAI-compatible LLM gateway only relays
-	// messages. LoadAIConfig never errors: absent AI_* vars leave the agent inert (Enabled=false),
-	// and the route still mounts to answer 503 AI_DISABLED (honest-disabled). The gateway base URL
-	// is a localhost-pinned CONFIG value (never a request) → no SSRF. metaRepo satisfies the
-	// tenant-scoped MetadataReader the read tools use; the sqlx-backed run repo writes the
-	// sys_ai_runs ledger (prompt HASHED, per-turn token/latency/outcome).
-	aiCfg := config.LoadAIConfig()
+	// messages. Absent AI_* vars leave the agent inert (Enabled=false), and the route still mounts
+	// to answer 503 AI_DISABLED (honest-disabled); only a bad AI_GATEWAY_MODE/AI_GATEWAY_CASSETTE
+	// fails boot. The gateway base URL is a localhost-pinned CONFIG value (never a request) → no
+	// SSRF. metaRepo satisfies the tenant-scoped MetadataReader the read tools use; the sqlx-backed
+	// run repo writes the sys_ai_runs ledger (prompt HASHED, per-turn token/latency/outcome).
+	aiCfg, err := config.LoadAIConfig()
+	if err != nil {
+		logger.Fatal("Failed to load AI config", zap.Error(err))
+	}
 	aiGateway := ai.NewGateway(aiCfg.BaseURL, time.Duration(aiCfg.TimeoutSec)*time.Second).WithAPIKey(aiCfg.APIKey)
 	aiRunRepo := ai.NewSQLRunRepository(sqlxDB)
 	// aiAgent itself is constructed LATER (before the ⌘K assistant block): explain_access needs

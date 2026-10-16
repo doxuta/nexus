@@ -1,9 +1,18 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
+)
+
+// AI_GATEWAY_MODE values. live calls the gateway; record does too and appends every exchange to the
+// cassette; replay answers from the cassette alone, with no network, base URL or key.
+const (
+	AIGatewayLive   = "live"
+	AIGatewayRecord = "record"
+	AIGatewayReplay = "replay"
 )
 
 // AI-Builder (E9) gateway defaults: an OpenAI-compatible chat-completions gateway (LiteLLM, vLLM,
@@ -63,6 +72,11 @@ type AIConfig struct {
 	MaxTokens  int
 	MaxSteps   int
 
+	// GatewayMode is AI_GATEWAY_MODE (AIGatewayLive, the default, | AIGatewayRecord | AIGatewayReplay);
+	// Cassette is AI_GATEWAY_CASSETTE, the JSON-lines file record writes and replay reads.
+	GatewayMode string
+	Cassette    string
+
 	// M4 (MED-1) budget/rate/concurrency knobs, all applied PER TENANT by ai.BudgetGuard
 	// (the tenant is the unit of cost, and the caller is an already-authenticated admin — so
 	// keying is by tenant, not by IP like the /auth/* limiter).
@@ -92,12 +106,30 @@ type AIConfig struct {
 }
 
 // LoadAIConfig reads the AI_* environment variables, applying safe defaults so the process boots
-// with the AI Builder inert (Enabled=false) when nothing is configured. It never errors: a bad or
-// absent value falls back to the documented default, mirroring the getEnv* helpers used across the
-// config package. AI is an optional accelerator — a misconfigured knob must degrade to
-// honest-disabled, never fail the whole server boot.
-func LoadAIConfig() *AIConfig {
+// with the AI Builder inert (Enabled=false) when nothing is configured. A bad or absent knob falls
+// back to the documented default, mirroring the getEnv* helpers used across the config package. AI
+// is an optional accelerator — a misconfigured knob must degrade to honest-disabled, never fail the
+// whole server boot. The one exception is the gateway mode: an unknown AI_GATEWAY_MODE, or record/
+// replay without AI_GATEWAY_CASSETTE, is an error, because degrading there would quietly run live
+// (network, key, cost) where a replay was meant.
+func LoadAIConfig() (*AIConfig, error) {
 	enabled := strings.EqualFold(strings.TrimSpace(getEnv("AI_ENABLED", "false")), "true")
+
+	rawMode := os.Getenv("AI_GATEWAY_MODE")
+	mode := strings.ToLower(strings.TrimSpace(rawMode))
+	if mode == "" {
+		mode = AIGatewayLive
+	}
+	cassette := strings.TrimSpace(os.Getenv("AI_GATEWAY_CASSETTE"))
+	switch mode {
+	case AIGatewayLive:
+	case AIGatewayRecord, AIGatewayReplay:
+		if cassette == "" {
+			return nil, fmt.Errorf("config.LoadAIConfig: AI_GATEWAY_MODE=%s needs AI_GATEWAY_CASSETTE, the path of the cassette file", mode)
+		}
+	default:
+		return nil, fmt.Errorf("config.LoadAIConfig: AI_GATEWAY_MODE=%q: want live, record or replay", rawMode)
+	}
 
 	baseURL := strings.TrimSpace(getEnv("AI_GATEWAY_BASE_URL", defaultAIGatewayBaseURL))
 	if baseURL == "" {
@@ -121,6 +153,9 @@ func LoadAIConfig() *AIConfig {
 		MaxTokens:  getEnvInt("AI_MAX_TOKENS", defaultAIMaxTokens),
 		MaxSteps:   getEnvInt("AI_MAX_STEPS", defaultAIMaxSteps),
 
+		GatewayMode: mode,
+		Cassette:    cassette,
+
 		// getEnvInt folds non-positive values back to the default, so the rate/concurrency
 		// gates can never be silently zeroed by a typo'd env var (degrade-to-default).
 		RateLimitMaxTurns:         getEnvInt("AI_RATELIMIT_MAX_TURNS", defaultAIRateLimitMaxTurns),
@@ -132,7 +167,7 @@ func LoadAIConfig() *AIConfig {
 		// Budget is the one knob where 0 is meaningful (spec §12: explicit opt-out), so it
 		// uses a zero-allowing reader instead of getEnvInt64.
 		DailyTokenBudget: getEnvInt64ZeroAllowed("AI_DAILY_TOKEN_BUDGET", defaultAIDailyTokenBudget),
-	}
+	}, nil
 }
 
 // getEnvPct reads an integer PERCENT env var: only 1..100 is accepted; unparsable, zero, negative

@@ -1,10 +1,25 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// loadAI is LoadAIConfig for the tests that leave AI_GATEWAY_MODE alone, where it cannot fail.
+func loadAI(t *testing.T) *AIConfig {
+	t.Helper()
+	cfg, err := LoadAIConfig()
+	if err != nil {
+		t.Fatalf("LoadAIConfig: %v", err)
+	}
+	return cfg
+}
 
 func TestLoadAIConfig_Defaults(t *testing.T) {
 	// No AI_* vars set → inert, localhost-pinned defaults.
 	t.Setenv("AI_ENABLED", "")
+	t.Setenv("AI_GATEWAY_MODE", "")
+	t.Setenv("AI_GATEWAY_CASSETTE", "")
 	t.Setenv("AI_GATEWAY_BASE_URL", "")
 	t.Setenv("AI_MODEL", "")
 	t.Setenv("AI_TIMEOUT_SEC", "")
@@ -15,12 +30,15 @@ func TestLoadAIConfig_Defaults(t *testing.T) {
 	t.Setenv("AI_MAX_CONCURRENT", "")
 	t.Setenv("AI_DAILY_TOKEN_BUDGET", "")
 
-	cfg := LoadAIConfig()
+	cfg := loadAI(t)
 	if cfg.Enabled {
 		t.Fatal("Enabled = true; want false by default (AI off unless AI_ENABLED=true)")
 	}
 	if cfg.BaseURL != defaultAIGatewayBaseURL {
 		t.Fatalf("BaseURL = %q; want %q", cfg.BaseURL, defaultAIGatewayBaseURL)
+	}
+	if cfg.GatewayMode != AIGatewayLive || cfg.Cassette != "" {
+		t.Fatalf("GatewayMode/Cassette = %q/%q; want live and no cassette", cfg.GatewayMode, cfg.Cassette)
 	}
 	if cfg.Model != defaultAIModel {
 		t.Fatalf("Model = %q; want %q", cfg.Model, defaultAIModel)
@@ -72,7 +90,7 @@ func TestLoadAIConfig_AssistantDailySharePct(t *testing.T) {
 	for _, tt := range tests {
 		t.Run("val_"+tt.raw, func(t *testing.T) {
 			t.Setenv("ASSISTANT_DAILY_TOKEN_SHARE_PCT", tt.raw)
-			if got := LoadAIConfig().AssistantUserDailySharePct; got != tt.want {
+			if got := loadAI(t).AssistantUserDailySharePct; got != tt.want {
 				t.Fatalf("ASSISTANT_DAILY_TOKEN_SHARE_PCT=%q → %d; want %d", tt.raw, got, tt.want)
 			}
 		})
@@ -91,7 +109,7 @@ func TestLoadAIConfig_EnvOverride(t *testing.T) {
 	t.Setenv("AI_MAX_CONCURRENT", "4")
 	t.Setenv("AI_DAILY_TOKEN_BUDGET", "500000")
 
-	cfg := LoadAIConfig()
+	cfg := loadAI(t)
 	if !cfg.Enabled {
 		t.Fatal("Enabled = false; want true when AI_ENABLED=true")
 	}
@@ -159,7 +177,7 @@ func TestLoadAIConfig_M4Knobs_Degradation(t *testing.T) {
 			for _, k := range []string{"AI_RATELIMIT_MAX_TURNS", "AI_RATELIMIT_WINDOW_SEC", "AI_MAX_CONCURRENT", "AI_DAILY_TOKEN_BUDGET"} {
 				t.Setenv(k, tt.env[k]) // unset (empty) unless the case overrides it
 			}
-			cfg := LoadAIConfig()
+			cfg := loadAI(t)
 			if cfg.RateLimitMaxTurns != tt.wantTurns || cfg.RateLimitWindowSec != tt.wantWindow || cfg.MaxConcurrent != tt.wantConc {
 				t.Fatalf("rate/concurrency = %d/%d/%d; want %d/%d/%d",
 					cfg.RateLimitMaxTurns, cfg.RateLimitWindowSec, cfg.MaxConcurrent,
@@ -177,7 +195,7 @@ func TestLoadAIConfig_EnabledCaseInsensitive(t *testing.T) {
 	for _, v := range []string{"TRUE", "True", "tRuE"} {
 		t.Run(v, func(t *testing.T) {
 			t.Setenv("AI_ENABLED", v)
-			if !LoadAIConfig().Enabled {
+			if !loadAI(t).Enabled {
 				t.Fatalf("AI_ENABLED=%q → Enabled=false; want true", v)
 			}
 		})
@@ -185,7 +203,7 @@ func TestLoadAIConfig_EnabledCaseInsensitive(t *testing.T) {
 	for _, v := range []string{"", "false", "1", "yes", "on"} {
 		t.Run("disabled_"+v, func(t *testing.T) {
 			t.Setenv("AI_ENABLED", v)
-			if LoadAIConfig().Enabled {
+			if loadAI(t).Enabled {
 				t.Fatalf("AI_ENABLED=%q → Enabled=true; want false (only \"true\" enables)", v)
 			}
 		})
@@ -196,14 +214,53 @@ func TestLoadAIConfig_EnabledCaseInsensitive(t *testing.T) {
 // once made every call 502). Pin the literal so a silent change is visible.
 func TestLoadAIConfig_DefaultModelIsListedByGateway(t *testing.T) {
 	t.Setenv("AI_MODEL", "")
-	if got := LoadAIConfig().Model; got != "claude-opus-5-5" {
+	if got := loadAI(t).Model; got != "claude-opus-5-5" {
 		t.Fatalf("default Model = %q; want claude-opus-5-5", got)
+	}
+}
+
+// AI_GATEWAY_MODE is the one AI_* knob that fails fast instead of degrading: a typo must not quietly
+// run live (network, key, cost) where a replay was meant. replay needs neither base URL nor key.
+func TestLoadAIConfig_GatewayMode(t *testing.T) {
+	tests := []struct {
+		name, mode, cassette   string
+		wantMode, wantCassette string
+		wantErr                string // substring of the error; "" = must load
+	}{
+		{name: "unset is live", wantMode: AIGatewayLive},
+		{name: "live", mode: "live", wantMode: AIGatewayLive},
+		{name: "record", mode: "record", cassette: "testdata/demo.jsonl", wantMode: AIGatewayRecord, wantCassette: "testdata/demo.jsonl"},
+		{name: "replay trimmed, any case", mode: " Replay ", cassette: " demo.jsonl ", wantMode: AIGatewayReplay, wantCassette: "demo.jsonl"},
+		{name: "unknown mode", mode: "replya", cassette: "demo.jsonl", wantErr: `AI_GATEWAY_MODE="replya"`},
+		{name: "record without cassette", mode: "record", wantErr: "AI_GATEWAY_CASSETTE"},
+		{name: "replay without cassette", mode: "replay", wantErr: "AI_GATEWAY_CASSETTE"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AI_GATEWAY_MODE", tt.mode)
+			t.Setenv("AI_GATEWAY_CASSETTE", tt.cassette)
+			t.Setenv("AI_GATEWAY_BASE_URL", "")
+			t.Setenv("AI_GATEWAY_API_KEY", "")
+			cfg, err := LoadAIConfig()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("LoadAIConfig() error = %v; want one naming %s", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadAIConfig() error = %v; want nil", err)
+			}
+			if cfg.GatewayMode != tt.wantMode || cfg.Cassette != tt.wantCassette {
+				t.Fatalf("GatewayMode/Cassette = %q/%q; want %q/%q", cfg.GatewayMode, cfg.Cassette, tt.wantMode, tt.wantCassette)
+			}
+		})
 	}
 }
 
 func TestLoadAIConfig_APIKeyFromEnvTrimmed(t *testing.T) {
 	t.Setenv("AI_GATEWAY_API_KEY", "  sk-x \n")
-	if got := LoadAIConfig().APIKey; got != "sk-x" {
+	if got := loadAI(t).APIKey; got != "sk-x" {
 		t.Fatalf("APIKey = %q; want sk-x", got)
 	}
 }
