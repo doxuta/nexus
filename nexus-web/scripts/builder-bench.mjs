@@ -100,11 +100,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function healthy() {
   for (const end = Date.now() + 120_000; Date.now() < end; await sleep(1000)) {
     try {
-      const ai = await fetch(`${BASE}/api/v1/ai/health`).then((r) => (r.ok ? r.json() : null));
-      if (ai?.data?.enabled === true) return;
+      if ((await fetch(`${BASE}/health`)).ok) return;
     } catch { /* not up yet */ }
   }
-  throw new Error(`the api at ${BASE} is not up with AI enabled after 120 s`);
+  throw new Error(`the api at ${BASE} is not up after 120 s`);
 }
 
 const browser = await puppeteer.launch({
@@ -119,15 +118,19 @@ async function seededState() {
   const dumpFile = path.join(outDir, "seeded.sql");
   const shaFile = path.join(outDir, "seeded.sha256");
   if (fs.existsSync(dumpFile) && fs.existsSync(shaFile)) return { dump: fs.readFileSync(dumpFile), sha: fs.readFileSync(shaFile, "utf8").trim() };
-  const nx = connect({ base: BASE, tenant: ACC.tenant, browser });
-  await nx.asAdmin(ACC.builder);
+  // Read straight from the database, so the check itself writes nothing (a login would).
+  if (!/^[a-z0-9-]+$/.test(ACC.tenant)) throw new Error(`unexpected tenant slug ${ACC.tenant}`);
+  const ws = `(SELECT id FROM tenants WHERE slug = '${ACC.tenant}')`;
+  const [versions, head, drafts, sessions, runs, extra] = sql(`SELECT
+    (SELECT COUNT(*) FROM sys_meta_versions WHERE tenant_id = ${ws}),
+    (SELECT COALESCE(MAX(version_no), 0) FROM sys_meta_versions WHERE tenant_id = ${ws}),
+    (SELECT COUNT(*) FROM sys_meta_drafts), (SELECT COUNT(*) FROM sys_ai_sessions), (SELECT COUNT(*) FROM sys_ai_runs),
+    (SELECT COUNT(*) FROM sys_entities WHERE tenant_id = ${ws} AND deleted_at IS NULL AND name NOT LIKE 'crm\\_%')`).trim().split("\t").map(Number);
   const why = [];
-  const head = (await nx.api("/admin/publish/state")).data.headVersion;
-  if (head?.versionNo !== 1 || head?.kind !== "baseline") why.push(`head version ${JSON.stringify(head)}`);
-  if ((await nx.drafts()).length > 0) why.push("draft changes are pending");
-  const extra = (await nx.api("/metadata/entities")).data.map((e) => e.name).filter((n) => !n.startsWith("crm_"));
-  if (extra.length > 0) why.push(`tables beyond the CRM pack: ${extra.join(", ")}`);
-  if ((await nx.api("/admin/ai/builder/sessions")).data.length > 0) why.push("the assistant already has conversations");
+  if (versions !== 1 || head !== 1) why.push(`${versions} published version(s), head ${head}`);
+  if (drafts > 0) why.push(`${drafts} draft change(s)`);
+  if (sessions + runs > 0) why.push("the assistant has been used");
+  if (extra > 0) why.push(`${extra} table(s) beyond the CRM pack`);
   if (why.length) throw new Error(`the stack is not freshly seeded (${why.join("; ")}): docker compose -p ${PROJECT} down -v, then up -d`);
   compose(["stop", "api"]);
   const dump = dumpDb();
@@ -382,6 +385,7 @@ async function attempt(c, n, seed) {
     const nx = connect({ base: BASE, tenant: ACC.tenant, browser });
     await nx.asAdmin(ACC.builder);
     if ((await nx.drafts()).length > 0 || (await nx.headVersion()) !== 1) throw new Error("the reset stack is not at the seeded version");
+    if ((await nx.api("/ai/health")).data?.enabled !== true) throw new Error("the assistant is off on the reset stack (AI_ENABLED)");
     pages.builder = await nx.signIn(ACC.builder);
     Object.assign(o, await ask(nx, pages.builder, c.prompt));
     if (!c.expectNoDraft && o.draft.length > 0) {

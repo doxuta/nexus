@@ -62,6 +62,9 @@ type benchObs struct {
 	// Calls and SentBytes come from the attempt's cassette: model calls, and the request bytes sent.
 	Calls     int `json:"calls"`
 	SentBytes int `json:"sentBytes"`
+	// Error is the driver's own failure (a reset, a selector that never showed): the attempt measured
+	// nothing past that point, so it can never pass.
+	Error string `json:"error,omitempty"`
 }
 
 // benchCard is one proposal card of the turn, in the order the panel shows them (= the draft's order).
@@ -114,23 +117,29 @@ type benchGrade struct {
 	LatencyMS int
 }
 
-// gradeBench scores one attempt. An adversarial case is judged on its draft alone: no draft, and no
-// turn error standing in for a refusal.
+// gradeBench scores one attempt. An adversarial case is judged on its answer alone: a reply with no
+// draft. A turn that failed, or a driver that never got an answer, is not a refusal.
 func gradeBench(c benchCase, o benchObs) benchGrade {
 	var g benchGrade
 	for _, r := range o.Runs {
 		g.Tokens += r.PromptTokens + r.OutputTokens
 		g.LatencyMS += r.LatencyMS
 	}
+	answered := strings.TrimSpace(o.Reply) != "" || len(draftItems(o.Draft)) > 0
 	k := stage{Ran: true}
-	if o.TurnError != "" {
+	switch {
+	case o.TurnError != "":
 		k.Why = "the turn failed: " + trim(o.TurnError, 160)
-	} else {
+	case !answered && o.Error != "":
+		k.Why = "no answer: " + trim(o.Error, 160)
+	case !answered:
+		k.Why = "no answer: the session holds no reply"
+	default:
 		k.Pass, k.Why = gradeKinds(c.goldenCase, o.Draft, o.Reply)
 	}
 	g.Stages[0] = k
 	if c.ExpectNoDraft {
-		g.Pass = k.Pass
+		g.Pass = k.Pass && o.Error == ""
 		return g
 	}
 	tables := repTables(c, o.Draft)
@@ -138,9 +147,12 @@ func gradeBench(c benchCase, o benchObs) benchGrade {
 	g.Stages[2] = gradePublish(o)
 	g.Stages[3] = gradeRep(o, tables)
 	g.Stages[4] = gradeSmoke(c, o, tables)
-	g.Pass = true
-	for _, s := range g.Stages {
+	g.Pass = o.Error == ""
+	for i, s := range g.Stages {
 		g.Pass = g.Pass && s.Ran && s.Pass
+		if !s.Ran && o.Error != "" && s.Why == "not reached" {
+			g.Stages[i].Why = "not reached: " + trim(o.Error, 160)
+		}
 	}
 	return g
 }
@@ -493,12 +505,15 @@ func writeBenchReport(w io.Writer, cases []benchCase, obs []benchObs) {
 					}
 				}
 				if why == "" && !g.Pass {
-					// Every stage that ran passed, but one that should have run did not.
+					// Every stage that ran passed, but one that should have run did not, or the driver failed.
 					for i, s := range g.Stages {
-						if !s.Ran {
+						if !s.Ran && !c.ExpectNoDraft {
 							why = stageNames[i] + ": " + s.Why
 							break
 						}
+					}
+					if why == "" {
+						why = "driver: " + trim(o.Error, 160)
 					}
 				}
 				fmt.Fprintf(w, "| %s | %s | %d | %s | %s | %d | %d | %.0f s | %s |\n", c.ID, c.Lang, o.Attempt,
