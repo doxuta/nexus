@@ -101,9 +101,10 @@ func TestWorkflowEmailRelation_MailsTheLinkedPatient(t *testing.T) {
 		t.Fatalf("create appointment: %v", err)
 	}
 	var run workflow.RunRecord
-	waitUntil(t, "the failed run of the appointment without a patient email", func() bool {
+	// startRun writes the row as running before the actions run: judge it once it is final (#25).
+	waitUntil(t, "the run of the appointment without a patient email to reach a final status", func() bool {
 		return sdb.GetContext(ctx, &run, `SELECT id, tenant_id, workflow_id, trigger_type, record_id, status, error, actions_result, started_at, finished_at
-			FROM sys_workflow_runs WHERE tenant_id = ? AND record_id = ?`, emlTenant, apptNoMail) == nil
+			FROM sys_workflow_runs WHERE tenant_id = ? AND record_id = ?`, emlTenant, apptNoMail) == nil && run.Status != string(workflow.RunRunning)
 	})
 	if run.Status != string(workflow.RunFailed) || run.Error == nil || !strings.Contains(*run.Error, "{{benh_nhan.email}}") || !strings.Contains(*run.Error, "không có địa chỉ") {
 		t.Fatalf("run = status %q error %v; want failed, naming {{benh_nhan.email}}", run.Status, run.Error)
