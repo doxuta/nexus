@@ -24,6 +24,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -232,7 +233,6 @@ func TestParallel_AnyCancelsSiblings_MySQL(t *testing.T) {
 func TestParallel_ConcurrentLastTwoApprovers_OneAdvance(t *testing.T) {
 	const rounds = 50
 	f := armCouncils(t, "parrace", "all", rounds, users(seatAp1, seatAp2, seatAp3)...)
-	ctx := context.Background()
 
 	for _, id := range f.insts {
 		if _, err := f.decide(t, id, bpm.DecisionApprove, "", bpm.Actor{UserID: seatAp1}); err != nil {
@@ -259,32 +259,110 @@ func TestParallel_ConcurrentLastTwoApprovers_OneAdvance(t *testing.T) {
 	}
 
 	for i, id := range f.insts {
-		inst, err := f.st.repo.GetInstance(ctx, f.tenant, id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if inst.Status != bpm.StatusPending || inst.CurrentStep != 1 || inst.CurrentApproverID != seatAp4 {
-			t.Fatalf("round %d: %s@%d approver %s; want pending on step 1 (advanced once)", i, inst.Status, inst.CurrentStep, inst.CurrentApproverID)
-		}
-		votes, partial := 0, 0
-		for _, h := range inst.History {
-			if h.Action == bpm.HistoryApproved {
-				votes++
-				if h.Partial {
-					partial++
-				}
+		wantAdvancedOnce(t, f, fmt.Sprintf("round %d", i), id)
+	}
+}
+
+// wantAdvancedOnce: the three-seat council of instance id counted every vote (the first two
+// partial) and opened the next step exactly once.
+func wantAdvancedOnce(t *testing.T, f *parallelFixture, label, id string) {
+	t.Helper()
+	inst, err := f.st.repo.GetInstance(context.Background(), f.tenant, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.Status != bpm.StatusPending || inst.CurrentStep != 1 || inst.CurrentApproverID != seatAp4 {
+		t.Fatalf("%s: %s@%d approver %s; want pending on step 1 (advanced once)", label, inst.Status, inst.CurrentStep, inst.CurrentApproverID)
+	}
+	votes, partial := 0, 0
+	for _, h := range inst.History {
+		if h.Action == bpm.HistoryApproved {
+			votes++
+			if h.Partial {
+				partial++
 			}
 		}
-		if votes != 3 || partial != 2 {
-			t.Fatalf("round %d: history has %d votes (%d partial); want 3 (2 partial) — %+v", i, votes, partial, inst.History)
-		}
-		if open, approved, _, _ := seatsByNode(t, f, id, "s1"); open != 0 || approved != 3 {
-			t.Fatalf("round %d council seats open=%d approved=%d; want 0/3", i, open, approved)
-		}
-		if open, _, _, _ := seatsByNode(t, f, id, "s2"); open != 1 {
-			t.Fatalf("round %d next-step seats open=%d; want exactly 1 (the step advanced once)", i, open)
+	}
+	if votes != 3 || partial != 2 {
+		t.Fatalf("%s: history has %d votes (%d partial); want 3 (2 partial) — %+v", label, votes, partial, inst.History)
+	}
+	if open, approved, _, _ := seatsByNode(t, f, id, "s1"); open != 0 || approved != 3 {
+		t.Fatalf("%s council seats open=%d approved=%d; want 0/3", label, open, approved)
+	}
+	if open, _, _, _ := seatsByNode(t, f, id, "s2"); open != 1 {
+		t.Fatalf("%s next-step seats open=%d; want exactly 1 (the step advanced once)", label, open)
+	}
+}
+
+// TestParallel_ConcurrentLastTwoApprovers_DeadlockVictim (#35), without luck. The two last approvers
+// (plain seat holders, not admins) press together; the vote that finishes the step inserts the next
+// step's seat into idx_bt_visit, in the gap just before the seats of the instance whose id follows.
+// In CI that neighbour's own step write held the gap (next-key locks of its seat UPDATEs) and waited
+// for a primary-key gap the vote held; InnoDB rolled back the smaller transaction, the vote, and the
+// step never advanced ("open seat s2: Error 1213 … Deadlock", then "pending@0").
+//
+// A second connection plays the neighbour: it holds the neighbour's visit range, waits until the
+// finishing vote waits on it, then asks for a lock the vote holds (its instance row). It has written
+// more rows than any vote, so InnoDB rolls the vote back every time. The vote must run again, and
+// the step must still advance exactly once.
+func TestParallel_ConcurrentLastTwoApprovers_DeadlockVictim(t *testing.T) {
+	f := armCouncils(t, "parlock", "all", 2, users(seatAp1, seatAp2, seatAp3)...)
+	ctx := context.Background()
+	id, next := f.insts[0], f.insts[1] // next: the instance whose seats follow id's in idx_bt_visit
+	if next < id {
+		id, next = next, id
+	}
+	if _, err := f.decide(t, id, bpm.DecisionApprove, "", bpm.Actor{UserID: seatAp1}); err != nil {
+		t.Fatalf("first vote: %v", err)
+	}
+
+	if _, err := f.st.sdb.ExecContext(ctx, `CREATE TABLE it_deadlock_ballast (n INT NOT NULL PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	nb, err := f.st.sdb.BeginTxx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = nb.Rollback() }()
+	// InnoDB rolls back the transaction that wrote less: the ballast makes that the vote.
+	if _, err := nb.ExecContext(ctx, `INSERT INTO it_deadlock_ballast (n)
+		WITH RECURSIVE s (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 200) SELECT n FROM s`); err != nil {
+		t.Fatalf("ballast: %v", err)
+	}
+	var held []string
+	if err := nb.SelectContext(ctx, &held, `SELECT id FROM sys_bpm_tasks FORCE INDEX (idx_bt_visit)
+		WHERE tenant_id = ? AND instance_id = ? FOR UPDATE`, f.tenant, next); err != nil || len(held) != 3 {
+		t.Fatalf("hold the neighbour's visit: %d seats, err %v; want its 3 seats", len(held), err)
+	}
+
+	errs := make(chan error, 2)
+	for _, voter := range []string{seatAp2, seatAp3} {
+		go func(voter string) {
+			_, err := f.decide(t, id, bpm.DecisionApprove, "", bpm.Actor{UserID: voter})
+			errs <- err
+		}(voter)
+	}
+	// The first vote is partial and commits; the one that finishes the step waits on the neighbour.
+	waitUntil(t, "the finishing vote to wait on the neighbour's locks", func() bool {
+		var n int
+		err := f.st.sdb.GetContext(ctx, &n, `SELECT COUNT(*) FROM performance_schema.data_locks
+			WHERE object_schema = DATABASE() AND object_name = 'sys_bpm_tasks' AND lock_status = 'WAITING'`)
+		return err == nil && n > 0
+	})
+	// The neighbour now waits on the vote: a deadlock, and the vote is the smaller transaction.
+	var locked string
+	if err := nb.GetContext(ctx, &locked, `SELECT id FROM sys_approval_instances WHERE tenant_id = ? AND id = ? FOR UPDATE`, f.tenant, id); err != nil {
+		t.Fatalf("the neighbour lost the deadlock instead of the vote: %v", err)
+	}
+	if err := nb.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("a last vote failed: %v (a deadlock victim must vote again)", err)
 		}
 	}
+	wantAdvancedOnce(t, f, "after the deadlock", id)
 }
 
 // TestParallel_SameActorTwoSeats409_MySQL: the person named AND holding the seated role votes once.
