@@ -110,7 +110,7 @@ None of the first four feature PRs passed its first verifier round. What the ver
 
 What they missed, or needed another round for: #21 took three rounds, and round 2's finding came from round 1's fix;
 three paths that still reach a hidden table went to [#23][i23] unfixed; and a known same-second edge at the publish
-cutoff ([#19][i19]) failed CI twice. Low-severity findings earned their keep too: the
+cutoff ([#19][i19]) failed CI twice before its root cause, an engine bug, was fixed. Low-severity findings earned their keep too: the
 independent verifier that passed #20 also reported that a panicking tool would take the API down (the MCP SDK runs each
 call outside gin's recovery), that a retired workspace's keys kept working, and that the MCP eval passed a task whose
 connection had failed. All three were fixed before the merge.
@@ -174,8 +174,7 @@ from October. I would cap agents by quota, merge each item inside its own pipeli
 when its hash is on `main`. And I would measure the harness itself: [#5][i5], `claude plugin eval` with and without it,
 is not done.
 
-Open, in public: [#18][i18] (a record the rep can read but not edit answers `PUT` with 404, not 403), [#19][i19]
-(second-precision timestamps at the publish cutoff), [#22][i22] (no rate limit or turn cap on `/mcp`; its tool filter
+Open, in public: [#18][i18] (a record the rep can read but not edit answers `PUT` with 404, not 403), [#22][i22] (no rate limit or turn cap on `/mcp`; its tool filter
 is a naming rule), [#23][i23] (a hidden table is reachable through N-N links and `?expand`; role writes carry no
 version), and [#30][i30] (the engine gaps builder-bench found).
 

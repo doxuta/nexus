@@ -117,8 +117,9 @@ session ([`nexus-web/lib/aiApply.ts:1-5`]), and a draft-class change then needs 
   the MCP note misdescribes an access card.
 - **404 instead of 403 ([#18]).** A record the rep can read but not edit answers `PUT` with 404. Existence is not leaked,
   but the reason is misstated.
-- **The cutoff's second ([#19]).** Metadata timestamps have second precision, so a table born in the same second as a
-  publish can land on the wrong side of the cutoff.
+- **The cutoff's second ([#13]).** Metadata timestamps have second precision. Since [#19] a version's cutoff names the
+  newest definition it read, so a table born later in the same second stays hidden; a schema insert still uncommitted
+  when the publish re-reads can still slip past the cutoff.
 
 <!-- Links below are generated; each code link points at d300dfc, named in the first paragraph. -->
 
@@ -187,6 +188,7 @@ session ([`nexus-web/lib/aiApply.ts:1-5`]), and a draft-class change then needs 
 [`nexus-web/lib/aiApply.ts:251-253`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-web/lib/aiApply.ts#L251-L253
 [`AGENTS.md:33-34`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/AGENTS.md#L33-L34
 [#18]: https://github.com/doxuta/nexus/issues/18
+[#13]: https://github.com/doxuta/nexus/issues/13
 [#19]: https://github.com/doxuta/nexus/issues/19
 [#22]: https://github.com/doxuta/nexus/issues/22
 [#23]: https://github.com/doxuta/nexus/issues/23
