@@ -66,8 +66,8 @@ one engine for the UI, the API, reports and the assistant. The entity and row la
   [#18]).
 - The platform operator has deliberate cross-tenant paths, such as installing a pack into another tenant
   ([`internal/handlers/admin_vertical_handler.go:209-218`]).
-- The ACL bounds what the assistant reads, not what that data says. The threat model for prompt injection through
-  record data is still to be written ([#11]).
+- The ACL bounds what the assistant reads, not what that data says. Prompt injection through record data is
+  covered by the threat model in [SECURITY.md](../../SECURITY.md).
 
 **Stronger guarantees would need** one of: a database or schema per tenant, each with its own database user;
 enforcement below the application, which MySQL lacks natively and would take views keyed on a per-connection tenant
@@ -84,7 +84,7 @@ two-tenant test for every repository method.
   ([ADR 0004](0004-sqlx-for-dynamic-records-gorm-for-system-tables.md)). It lost.
 - **Access checks in the web client.** It lost: the API is the boundary.
 
-<!-- Links below are generated; each one points at the commit named under Status. -->
+<!-- Links below are generated; each code link points at the commit named under Recorded. -->
 
 [`internal/metaversion/context.go:55-59`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/metaversion/context.go#L55-L59
 [`scripts/acceptance-acl.py:1-7`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/scripts/acceptance-acl.py#L1-L7
@@ -124,5 +124,4 @@ two-tenant test for every repository method.
 [`internal/dynrepo/record.go:1169-1204`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/dynrepo/record.go#L1169-L1204
 [`internal/handlers/admin_vertical_handler.go:209-218`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/handlers/admin_vertical_handler.go#L209-L218
 [`internal/ddl/ddl.go:14-29`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/ddl/ddl.go#L14-L29
-[#11]: https://github.com/doxuta/nexus/issues/11
 [#18]: https://github.com/doxuta/nexus/issues/18

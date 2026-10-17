@@ -111,7 +111,7 @@ re-checked on every request ([`internal/auth/mcp_token.go:12-28`], [`internal/se
   touch records ([ADR 0002](0002-schema-cutoff-drafts-and-rollback.md)). It lost: review before is cheaper than repair
   after.
 
-<!-- Links below are generated; each one points at the commit named under Status. -->
+<!-- Links below are generated; each code link points at the commit named under Recorded. -->
 
 [`internal/ai/tools.go:23-45`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/ai/tools.go#L23-L45
 [`internal/ai/doc_readers.go:22-41`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/ai/doc_readers.go#L22-L41

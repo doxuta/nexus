@@ -61,9 +61,8 @@ tables come from the engine: `internal/ddl` builds the DDL from metadata, and an
   Custom logic, a custom screen, or an integration other than a webhook or an email is Go work for a human.
 - Someone has to maintain that engine. A new kind of document touches the class table, an adapter, the registry, a
   propose tool and the web apply path, which already branches on 15 kinds ([`nexus-web/lib/aiApply.ts:97-229`]). A test
-  ties the class table to a hand-kept copy of the registry; its comment says another test pins that copy to `main.go`,
-  but none does ([`internal/services/draft_class_test.go:15-37`]). Nothing ties the propose tools or the web client to
-  either.
+  ties the class table to the registry `main.go` wires, through one constructor, `services.NewMetaRegistry` ([#26]).
+  Nothing ties the propose tools or the web client to either.
 - Most propose-time checks are structural. `propose_entity` now refuses a name that is taken
   ([`internal/ai/tools.go:1060-1068`]), but other checks that need the database, such as a missing relation target, run
   when the card is applied ([`internal/ai/tools.go:1030-1038`]), so a valid card can still fail. One gap is open:
@@ -85,7 +84,7 @@ has it.
 - **A scripting language inside metadata.** It would close the expressiveness gap, but it brings code review back and
   needs a sandbox. Not chosen: gaps are closed by extending the engine.
 
-<!-- Links below are generated; each one points at the commit named under Status. -->
+<!-- Links below are generated; each code link points at the commit named under Recorded. -->
 
 [`internal/metadata/metadata.go:9-10`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/metadata/metadata.go#L9-L10
 [`cmd/server/main.go:423`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/cmd/server/main.go#L423
@@ -111,9 +110,9 @@ has it.
 [`internal/workflow/workflow.go:89-162`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/workflow/workflow.go#L89-L162
 [`internal/formula/formula.go:23-25`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/formula/formula.go#L23-L25
 [`nexus-web/lib/aiApply.ts:97-229`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-web/lib/aiApply.ts#L97-L229
-[`internal/services/draft_class_test.go:15-37`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/draft_class_test.go#L15-L37
 [`internal/ai/tools.go:1060-1068`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/ai/tools.go#L1060-L1068
 [`internal/ai/tools.go:1030-1038`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/ai/tools.go#L1030-L1038
 [`internal/ai/tools.go:1103`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/ai/tools.go#L1103
 [`internal/ddl/ddl.go:1-5`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/ddl/ddl.go#L1-L5
 [#22]: https://github.com/doxuta/nexus/issues/22
+[#26]: https://github.com/doxuta/nexus/pull/26

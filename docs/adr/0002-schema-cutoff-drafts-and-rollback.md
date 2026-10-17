@@ -122,7 +122,7 @@ path, and the history only grows.
 - **Sub-second timestamps.** They would shrink the edge, at the price of a migration and every comparison. Open until
   [#19] names the root cause.
 
-<!-- Links below are generated; each one points at the commit named under Status. -->
+<!-- Links below are generated; each code link points at the commit named under Recorded. -->
 
 [`internal/ddl/create_table.go:181-182`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/ddl/create_table.go#L181-L182
 [`internal/metadata/metadata.go:149-155`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/metadata/metadata.go#L149-L155

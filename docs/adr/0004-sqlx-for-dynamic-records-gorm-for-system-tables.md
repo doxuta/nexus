@@ -72,7 +72,7 @@ as users, roles and the metadata registry, have static shapes.
 - **sqlx for everything.** One style, and the code is drifting there already. Not done: it means rewriting the auth and
   registry repositories (18 files in `internal/auth` import GORM) for consistency alone.
 
-<!-- Links below are generated; each one points at the commit named under Status. -->
+<!-- Links below are generated; each code link points at the commit named under Recorded. -->
 
 [`internal/services/entity_management.go:102-107`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/entity_management.go#L102-L107
 [`internal/services/entity_orchestration.go:219-230`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/entity_orchestration.go#L219-L230
