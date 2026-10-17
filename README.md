@@ -167,8 +167,12 @@ fails any run where a test skips.
 - **MCP tool-use eval: 5 of 5.** Five plain requests to Claude Code connected over MCP, graded by code on the
   proposals that reach the Studio; one run each, `claude-opus-5-5`, recorded on 2026-10-17
   ([results](evals/mcp/README.md)).
-- **builder-bench: pass@k and tokens per app** for the in-app builder agent, in
-  [`evals/builder-bench/report.md`](evals/builder-bench/report.md). <!-- builder-bench numbers land with #4 -->
+- **builder-bench: 20 requests, scored in five stages by code** (the right kinds of change; the cards apply; the
+  version publishes; the gate passes as the non-admin rep; the rep opens the tables). `claude-haiku-5-5`: pass@1
+  0.85, pass@3 0.90 over 60 attempts. `claude-opus-5-5`: pass@1 0.85 over 20. When the proposal had the right kinds,
+  apply and publish each failed once in 66 attempts, and the rep's checks never failed. Each failure is explained from
+  its transcript; two of the three failing requests are engine gaps, not model errors
+  ([report](evals/builder-bench/report.md)). About 2,000–2,700 output tokens per working app.
 
 ## How it was built
 
@@ -193,8 +197,9 @@ on this repository's Security tab.
   drafts, publish and rollback; entity ACL and row scope; five installable packs (CRM, which the seed installs,
   Clinic, Ticketing, LMS, Project Management); the Studio's builder agent and the end-user assistant, which need a
   model gateway or a recorded cassette; and `/mcp`. There are no releases: `main` is the product.
-- **Next, in the open:** [builder-bench](https://github.com/doxuta/nexus/issues/4), an eval of the agent harness
-  ([#5](https://github.com/doxuta/nexus/issues/5)) and the rest of the [issues](https://github.com/doxuta/nexus/issues).
+- **Next, in the open:** an eval of the agent harness ([#5](https://github.com/doxuta/nexus/issues/5)), the
+  engine gaps builder-bench found ([#30](https://github.com/doxuta/nexus/issues/30)) and the rest of the
+  [issues](https://github.com/doxuta/nexus/issues).
 - **Frozen:** the packs beyond the demo, approvals (`internal/bpm`), work queues, dashboards, calendars, per-tenant
   backup (`internal/tenantbackup`) and the Doctor (`internal/doctor`) are in the tree and tested in CI, but no open
   issue extends them.
