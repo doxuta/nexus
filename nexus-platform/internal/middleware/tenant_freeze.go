@@ -37,6 +37,7 @@ var freezeExempt = map[freezeKey]bool{
 	{http.MethodPost, "/auth/mfa/disable"}:                          true,
 	{http.MethodPost, "/assistant/ask"}:                             true,
 	{http.MethodDelete, "/admin/api-keys/:id"}:                      true,
+	{http.MethodDelete, "/admin/mcp-tokens/:id"}:                    true, // issue #3: an agent key is revoked like an API key
 	{http.MethodDelete, "/admin/users/:id/sessions/:sessionId"}:     true,
 	{http.MethodPut, "/admin/users/:id"}:                            true,
 	{http.MethodPut, "/org-admin/users/:id"}:                        true, // the owner's lock-a-leaver (specs/065), same as the admin one above

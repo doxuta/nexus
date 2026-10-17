@@ -254,9 +254,12 @@ func (s *SessionStore) appendTurn(ctx context.Context, tenantID, userID, session
 		// USER-scoped ownership guard — the store no longer trusts the caller to have already
 		// checked ownership; this is the single source of truth for "may this (tenant,user) write
 		// this session". feature is pinned too: a ⌘K turn cannot land on a Builder thread.
+		// FOR UPDATE holds the session row until commit, so two turns written at once (an MCP agent
+		// calling tools in parallel, issue #3) take turns at MAX(seq)+1 instead of sharing a seq —
+		// the Studio keys a card by its seq. The read below runs after the lock, on a fresh snapshot.
 		var one int
 		const guard = `SELECT 1 FROM sys_ai_sessions
-			WHERE id = ? AND tenant_id = ? AND user_id = ? AND feature = ? AND deleted_at IS NULL`
+			WHERE id = ? AND tenant_id = ? AND user_id = ? AND feature = ? AND deleted_at IS NULL FOR UPDATE`
 		if err := tx.GetContext(ctx, &one, guard, sessionID, tenantID, userID, feature); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return "", ErrSessionNotFound

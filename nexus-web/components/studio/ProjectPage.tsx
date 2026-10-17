@@ -14,6 +14,7 @@ import { EmbeddedSurface } from "@/components/slds/EmbeddedSurface";
 import { listEntities } from "@/lib/api";
 import { t, tf } from "@/lib/i18n";
 import { ApiKeys } from "@/components/screens/admin/ApiKeys";
+import { McpConnect } from "@/components/screens/admin/McpConnect";
 import { CredentialsPage } from "./operate/CredentialsPage";
 import { AuditLog } from "@/components/screens/admin/AuditLog";
 import { BackgroundJobs } from "@/components/screens/admin/BackgroundJobs";
@@ -206,7 +207,8 @@ export const MOUNTED: Record<string, (c: Ctx) => ReactNode> = {
     </SubPage>
   ),
   WorkflowRunHistory: ({ slug, parsed }) => <RunsPage slug={slug} ruleId={parsed.query.luat} />,
-  ApiKeys: ({ slug }) => <SubPage back={backTo(slug, "van-hanh/tu-dong", "studio.route.operAuto")}><ApiKeys slug={slug} /></SubPage>,
+  // Issue #3: the agent connection (MCP) sits with the access keys — both hand a credential to something outside.
+  ApiKeys: ({ slug }) => <SubPage back={backTo(slug, "van-hanh/tu-dong", "studio.route.operAuto")}><ApiKeys slug={slug} /><McpConnect slug={slug} /></SubPage>,
   Credentials: ({ slug }) => <SubPage back={backTo(slug, "van-hanh/tu-dong", "studio.route.operAuto")}><CredentialsPage slug={slug} /></SubPage>,
   InboundLink: ({ slug, parsed }) => <SubPage back={backTo(slug, "van-hanh/tu-dong", "studio.route.operAuto")}><InboundDeliveriesPage slug={slug} cong={parsed.query.cong} /></SubPage>,
   // Bảo trì (kh4)

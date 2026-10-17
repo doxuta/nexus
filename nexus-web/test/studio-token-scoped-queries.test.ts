@@ -18,6 +18,8 @@ export const TOKEN_SCOPED_FETCHERS: readonly string[] = [
   "listDraftChanges",
   // specs/078 FR-002: the Vận hành reads that depend on the token tenant.
   "getTenantHealth", "getUsage", "listHookDeliveries", "listInboundHooks", "listApiKeys", "listRecentWorkflowRuns", "listBackgroundJobs", "listEmailLog",
+  // issue #3: the agent keys of "Kết nối agent (MCP)".
+  "listMcpTokens",
   // specs/079 f7-lich-su-dong-thoi-gian: the publish history of the customer project.
   "listVersions", "getVersion",
 ];
