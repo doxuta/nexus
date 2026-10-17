@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"nexus/platform/internal/auth"
 	"nexus/platform/internal/metadata"
 )
 
@@ -444,4 +445,45 @@ func TestRollbackRestoresTheRoleGrantsOfADeletedTable_Integration(t *testing.T) 
 			t.Errorf("grants after the rollback = %v; want %v (edit kept at all, view back to all)", got, want)
 		}
 	})
+}
+
+// Issue #2, verifier round 2 (LOW): the role-grants cache (30 s backstop) must not keep authorizing what a table delete
+// dropped, nor keep refusing what the rollback put back.
+func TestTableDeleteAndRollback_RefreshTheCachedGrants_Integration(t *testing.T) {
+	r := rrSetup(t)
+	role := rgSeedRole(t, r, r.tenant, "sales", [3]string{"hk_deals", "view", "all"})
+	cache := NewCachedACLLoader(auth.NewRoleRepository(r.gdb), DefaultACLTTL)
+	r.entities.WithACLCache(cache)
+	r.pub.WithACLCache(cache)
+	onDeals := func() int {
+		t.Helper()
+		acts, err := cache.LoadActionsForACL(context.Background(), r.tenant, role)
+		if err != nil {
+			t.Fatalf("LoadActionsForACL: %v", err)
+		}
+		n := 0
+		for _, a := range acts {
+			if a.EntityName == "hk_deals" {
+				n++
+			}
+		}
+		return n
+	}
+	if onDeals() != 1 { // also fills the cache
+		t.Fatal("setup: the role's grant on hk_deals is not loaded")
+	}
+	res := r.publishDeletes(t, func() {
+		if err := r.entities.SoftDeleteEntity(r.bctx, r.tenant, "hk_deals"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if n := onDeals(); n != 0 {
+		t.Errorf("after the table delete the cache still grants %d action(s) on it", n)
+	}
+	if _, _, err := r.rollbackTo(t, 1, res.VersionNo); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if n := onDeals(); n != 1 {
+		t.Errorf("after the rollback the cache serves %d grant(s) on the restored table; want the 1 put back", n)
+	}
 }

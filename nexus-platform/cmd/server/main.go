@@ -989,6 +989,10 @@ func main() {
 	roleSvc := services.NewRoleService(roleRepo).WithRecorder(directRec, services.NewRoleFootprint(sqlxDB)).WithACLCache(aclCache).WithAuditor(auditDispatcher).
 		WithUserFieldChecker(services.CatalogUserFields{Catalog: metaRepo}) // #283 "field:<name>" grants
 	aclSvc := services.NewACLService(aclCache)
+	// Issue #2: a table delete drops every role's grants on it and a rollback that brings the table back puts
+	// them back; both refresh the cache at once, not after the backstop.
+	entitySvc.WithACLCache(aclCache)
+	publishSvc.WithACLCache(aclCache)
 
 	// FILE-ACL: arm per-attachment authorization now that the ACL service exists. Download and
 	// delete live at /files/:id, a path with no :entity segment, so the route-level ACL stage
