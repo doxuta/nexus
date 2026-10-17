@@ -183,7 +183,8 @@ once to watch its test fail. Before merge, the verifier found a privilege-escala
 [#21](https://github.com/doxuta/nexus/pull/21) (a proposed table named after a live one let `propose_access` grant on
 the live table), a HIGH in [#20](https://github.com/doxuta/nexus/pull/20) (MCP agents read the published model, not
 the builder's drafts, so applying a card would have reverted pending edits), and a demo that contradicted its own
-prompt in [#16](https://github.com/doxuta/nexus/pull/16).
+prompt in [#16](https://github.com/doxuta/nexus/pull/16). The long version, with what it cost and what the verifiers
+missed: [Turning the lights back on](docs/writeup/turning-the-lights-back-on.md).
 
 ## Security
 
