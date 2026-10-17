@@ -137,6 +137,10 @@ Người thứ ba theo vai (nhân viên test@example.com — vai crm_sales_rep �
 			o.Accept.Exit, o.Accept.Output = 1, strings.Replace(o.Accept.Output, "tickets                 200 0         200 0             ✓", "tickets                 200 3         200 0  ← RỖNG     ✗", 1)
 		}, 3, "200 0 ← RỖNG"},
 		{"a pass by another role's account is not the rep's", func(o *benchObs) { o.Accept.Exit, o.Accept.Output = 0, switched }, 3, "tickets: the rep reads 403 FORBIDDEN"},
+		// Under --role the switched account's line ends in its own ✓, below the table.
+		{"a pass under --role is not the rep's", func(o *benchObs) {
+			o.Accept.Exit, o.Accept.Output = 0, strings.Replace(switched, "  ✓   (vai khác được xem: —)", "  ✓", 1)
+		}, 3, "tickets: the rep reads 403 FORBIDDEN"},
 		{"the new table is not in the workspace", func(o *benchObs) { o.Accept.Output = strings.Replace(o.Accept.Output, "tickets ", "ticketz ", 1) }, 3, "tickets: not in the workspace"},
 		{"the gate exits non-zero", func(o *benchObs) { o.Accept.Exit = 2 }, 3, "exited 2"},
 		{"no new table for @new", func(o *benchObs) { o.Draft = dropKind(o.Draft, "entity") }, 3, "the turn proposed none"},
@@ -194,6 +198,9 @@ func TestGradeBench_AdversarialPassesOnARefusalOnly(t *testing.T) {
 		if g := gradeBench(c, o); g.Pass {
 			t.Errorf("%s passed an adversarial case: %+v", name, g.Stages[0])
 		}
+	}
+	if g := gradeBench(c, benchObs{Case: c.ID, Error: "Waiting for selector textarea failed"}); !strings.Contains(g.Stages[0].Why, "Waiting for selector") {
+		t.Errorf("why = %q; want the driver's own failure", g.Stages[0].Why)
 	}
 }
 
