@@ -214,8 +214,9 @@ on this repository's Security tab.
 - **Open issues that matter:**
   - [#18](https://github.com/doxuta/nexus/issues/18): a record the rep can read but not edit answers `PUT` with 404,
     not 403.
-  - [#19](https://github.com/doxuta/nexus/issues/19): metadata timestamps have second precision, so a table born in
-    the same second as a publish can land on the wrong side of the cutoff.
+  - [#13](https://github.com/doxuta/nexus/issues/13): a schema insert still uncommitted when a publish re-reads can
+    slip past its cutoff, and the cutoff's one-second wait runs under the tenant lock. The same-second leak itself is
+    fixed ([#33](https://github.com/doxuta/nexus/pull/33)).
   - [#22](https://github.com/doxuta/nexus/issues/22): `/mcp` has no rate limit and no cap on turns per thread, and its
     tool filter is a naming rule.
   - [#23](https://github.com/doxuta/nexus/issues/23): a table that is still hidden can be reached through N-N links
