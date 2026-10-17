@@ -83,8 +83,11 @@ unknown. All in, about 742,600 tokens, under the 5M cap.
 
 ## The run
 
-- **Product under test:** origin/main `d300dfc` (#21). The bench's commits change no server or web app code; the
-  observations record the branch head at run time.
+- **Product under test:** origin/main `d300dfc` (#21), this branch's base. The bench's commits change no server or web
+  app code.
+- **Bench code:** all 80 attempts ran the driver as of `1853ae6`; later commits changed the report, the grader's
+  tables, the refusal rule (a stored turn is an answer) and one recorded field (finish reasons). The grades above
+  come from the final grader.
 - **Stack:** the one-command demo as project `nexus-bench` on port 8093, `AI_ENABLED=true`, `AI_GATEWAY_MODE=record`
   (live, with transcripts), the default AI settings (12 steps a turn, 45 s and 4,096 output tokens a model call),
   through a local OpenAI-compatible gateway.
