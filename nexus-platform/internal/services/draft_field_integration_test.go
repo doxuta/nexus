@@ -27,8 +27,8 @@ type s78Env struct {
 	layouts         *LayoutService
 }
 
-// s78Setup delivers a tenant (baseline) with the field adapter in the registry, then waits out the
-// second so fields created next are strictly newer than the cutoff (created_at has second precision).
+// s78Setup delivers a tenant (baseline) with the field adapter in the registry. Fields created next are
+// strictly newer than the cutoff: the baseline names the second of the newest definition and waits it out (#19).
 func s78Setup(t *testing.T) *s78Env {
 	t.Helper()
 	e := dpSetupWith(t, NewWorkflowDocAdapter(), NewLayoutDocAdapter(), NewFieldDocAdapter(), NewEntityDocAdapter())
@@ -37,7 +37,6 @@ func s78Setup(t *testing.T) *s78Env {
 	s.builder = uuid.NewString()
 	s.bctx, s.cctx = builderCtxOf(s.tenant, s.builder), legacyCtxOf(s.tenant)
 	e.deliver(t, s.tenant, s.builder)
-	time.Sleep(1100 * time.Millisecond)
 	s.fields = NewFieldService(e.dyn, e.meta).WithDraftFields(NewDraftFieldRepo(e.meta, e.drafts, e.gate))
 	s.layouts = NewLayoutService(e.meta, NewDraftLayoutRepo(metadata.NewLayoutRepository(e.gdb), e.drafts, e.gate), nil).WithSchemaCutoff(e.gate)
 	return s
