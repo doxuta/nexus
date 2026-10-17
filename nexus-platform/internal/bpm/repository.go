@@ -1124,6 +1124,9 @@ func visitSeatsOf(ctx context.Context, q sqlx.QueryerContext, tenantID, instance
 // finishing votes of neighbouring instances can wait on each other's seat-index gaps, and the vote
 // InnoDB picks would otherwise be lost, its step left open. The rolled-back run wrote nothing, so
 // the next one judges the visit afresh under the instance lock.
+//
+// ponytail: this re-runs the victim instead of removing the cycle (writeSeats keeps its next-key
+// range locks). Ceiling: a vote InnoDB picks voteAttempts times in a row still fails with 1213.
 func (r *SQLRepository) VoteTaskTx(ctx context.Context, tenantID, id string, g VoteGuard, onComplete InstanceTransition) (*VoteResult, error) {
 	for attempt := 1; ; attempt++ {
 		res, err := r.voteTaskTx(ctx, tenantID, id, g, onComplete)
