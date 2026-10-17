@@ -150,6 +150,20 @@ type ImportService struct {
 	// eventJobs parks the post-commit history job (specs/048 S7a). nil = imported rows get no
 	// "Tạo" history line. Production wires the jobs store via WithEventJobs.
 	eventJobs JobEnqueuer
+	// cutoff hides a table born after the last publish from the customer's import, as RecordService does for
+	// every other record call (issue #2). nil = every live table is reachable.
+	cutoff schemaCutoffer
+}
+
+// WithSchemaCutoff wires the S7-8 publish cutoff into the import's table lookups. Chainable.
+func (s *ImportService) WithSchemaCutoff(c schemaCutoffer) *ImportService {
+	s.cutoff = c
+	return s
+}
+
+// records is the table lookup the import shares with RecordService, publish cutoff included.
+func (s *ImportService) records() *RecordService {
+	return &RecordService{catalog: s.catalog, cutoff: s.cutoff}
 }
 
 // WithBeforeHooks arms the before_save rules on the import path (specs/048 S2): each row is judged
@@ -198,7 +212,7 @@ func (s *ImportService) ImportIdempotent(ctx context.Context, in ImportInput, ke
 			if serr != nil {
 				return false, ErrEntityNotFound
 			}
-			e, _, rerr := (&RecordService{catalog: s.catalog}).resolve(ctx, in.TenantID, sanitized)
+			e, _, rerr := s.records().resolve(ctx, in.TenantID, sanitized)
 			if rerr != nil {
 				return false, rerr
 			}
@@ -336,7 +350,7 @@ func (s *ImportService) Import(ctx context.Context, in ImportInput) (*ImportResu
 	if err != nil {
 		return nil, ErrEntityNotFound
 	}
-	e, specs, err := (&RecordService{catalog: s.catalog}).resolve(ctx, in.TenantID, sanitized)
+	e, specs, err := s.records().resolve(ctx, in.TenantID, sanitized)
 	if err != nil {
 		return nil, err
 	}

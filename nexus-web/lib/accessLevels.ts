@@ -4,6 +4,8 @@
 // "none" on another table (= "blocked by name" turns into "follows *" = a quiet privilege raise).
 // Effective grant of one action on a table follows ACLService.Authorize: exact table > "*" > nothing.
 import type { RoleAccessLevel, RoleActionVerb, RoleGrant } from "@/lib/api";
+import { t, tf } from "@/lib/i18n";
+import type { I18nKey } from "@/lib/i18n/vi";
 
 /** Not named AccessLevel: lib/admin already uses that for the row scope (none | owner | team | all). */
 export type MatrixTier = "none" | "view" | "edit" | "custom";
@@ -32,6 +34,46 @@ export function levelOf(grants: readonly RoleGrant[], entity: string): TableLeve
   // still delete must never read "Không thấy": it is "custom" and the role page shows the real grants.
   const tier: MatrixTier = !v && !c && !e ? (d ? "custom" : "none") : v && !c && !e ? "view" : v && c && e ? "edit" : "custom";
   return { tier, inherited };
+}
+
+/**
+ * What a role may do on one table, in words: "xem tất cả · tạo · sửa của mình" (each action's exact grant, else the "*" row;
+ * create has no scope worth saying). "không có quyền" when nothing is granted.
+ */
+export function accessText(grants: readonly RoleGrant[], entity: string): string {
+  const parts: string[] = [];
+  for (const action of [...WRITES, "delete" as const]) {
+    const g = find(grants, entity, action) ?? (entity === "*" ? undefined : find(grants, "*", action));
+    if (!g || g.accessLevel === "none") continue;
+    const verb = t(`studio.assistant.access.verb.${action}` as I18nKey);
+    const scope = g.accessLevel.startsWith("field:") ? "field" : g.accessLevel;
+    parts.push(action === "create" ? verb : tf(`studio.assistant.access.scope.${scope}` as I18nKey, { verb }));
+  }
+  return parts.length > 0 ? parts.join(" · ") : t("studio.assistant.access.none");
+}
+
+/** `have` already reaches every row `want` does (want is all | owner): owner is the narrowest level that sees anything. */
+const covers = (have: string, want: string) => have === "all" || (want === "owner" && have !== "none" && have !== "");
+
+/**
+ * The assistant's access proposal (propose_access) added to a role's grants: every grant stays as it is, a proposed
+ * (table, action) is added or raised, never lowered, and not added when the "*" row already gives as much. The one
+ * additive rule, twin of Go mergeAccessGrants (internal/ai/tools_access.go), both pinned by
+ * nexus-platform/internal/ai/testdata/access_merge_cases.json.
+ */
+export function mergeAccessGrants(current: readonly RoleGrant[], add: readonly RoleGrant[]): RoleGrant[] {
+  const out = current.map((g) => ({ ...g }));
+  for (const g of add) {
+    const i = out.findIndex((x) => x.entityName === g.entityName && x.action === g.action);
+    if (i >= 0) {
+      if (!covers(out[i].accessLevel, g.accessLevel)) out[i] = { ...out[i], accessLevel: g.accessLevel };
+      continue;
+    }
+    const star = find(out, "*", g.action);
+    if (star && covers(star.accessLevel, g.accessLevel)) continue;
+    out.push({ ...g });
+  }
+  return out;
 }
 
 /**

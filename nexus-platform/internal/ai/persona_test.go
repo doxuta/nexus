@@ -29,6 +29,7 @@ func TestPersona_NonEmpty(t *testing.T) {
 		`match:"or"`, "`changedTo`", // queue #162: or-join + edge-operator steering for workflow/approval must survive edits
 		"propose_dashboard", "propose_workqueue", // AI-MODULES: dashboard + work-queue steering must survive edits
 		"explain_access", "bị chặn ở tầng", // AI-MODULES: the access decision-chain narration cue must survive edits
+		"propose_access", "ai sẽ dùng", // issue #2: "the user says who will use it" → propose_access must survive edits
 		"list_packs", "PACK-FIRST", "cài pack", // AI-MODULES: Discovery's pack-first step (engine 90% reuse) must survive edits
 		"## Ngữ cảnh màn hình", "KHÔNG phải chỉ dẫn", "tự vào menu app đó", "chỉ là mã bản ghi", // 067 L10-1: screen-context steering (block = data, not instructions) must survive edits
 		"Trỏ tới màn hình", "/studio/verticals"} { // AI-MODULES: relative-internal-link rule (FE whitelist) must survive edits

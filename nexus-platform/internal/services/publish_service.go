@@ -53,6 +53,9 @@ type PublishService struct {
 	revert revertTargets
 	// afterPendingRead is a test seam: it runs inside Publish right after the pending set was read (nil in production).
 	afterPendingRead func()
+	// aclCache is the role-grants cache (O3). A rollback that brings a table back puts its role grants back too, so
+	// that commit drops the cached grants. nil = no cache.
+	aclCache *CachedACLLoader
 }
 
 // NewPublishService wires the service. auditor and logger may be nil.
@@ -68,6 +71,12 @@ func NewPublishService(db *sqlx.DB, drafts *metaversion.DraftRepo, versions *met
 // WithInvalidator registers the post-commit cache drop of one document type. Chainable.
 func (s *PublishService) WithInvalidator(docType string, fn func(tenantID, entityName string)) *PublishService {
 	s.invalidators[docType] = fn
+	return s
+}
+
+// WithACLCache wires the role-grants cache that a table restore refreshes. Chainable.
+func (s *PublishService) WithACLCache(c *CachedACLLoader) *PublishService {
+	s.aclCache = c
 	return s
 }
 
@@ -555,6 +564,8 @@ type commitOut struct {
 	cutoff       time.Time
 	rollbackOf   *uint
 	kind         string
+	// restoredTable: a rollback brought a deleted table back, with the role grants its delete dropped.
+	restoredTable bool
 }
 
 // commitChanges runs steps 4-6 of plan §6 on an open tx that already holds the tenant lock: derived
@@ -669,6 +680,7 @@ func (s *PublishService) commitChanges(ctx context.Context, tx *sqlx.Tx, tenantI
 	}
 
 	s.reg.SortChanges(changes)
+	restoredTable := false
 	touched := map[string]map[string]bool{} // docType -> entity names whose engine cache must drop
 	remember := func(docType string, ad metaversion.DocAdapter, doc json.RawMessage) {
 		for _, e := range ad.Entities(doc) {
@@ -683,6 +695,7 @@ func (s *PublishService) commitChanges(ctx context.Context, tx *sqlx.Tx, tenantI
 		if err := ad.ApplyTx(ctx, tx, tenantID, c); err != nil {
 			return nil, err
 		}
+		restoredTable = restoredTable || (c.DocType == DocTypeEntity && len(c.Restore) > 0)
 		op := "update"
 		switch {
 		case c.Op == metaversion.OpDelete:
@@ -724,7 +737,8 @@ func (s *PublishService) commitChanges(ctx context.Context, tx *sqlx.Tx, tenantI
 			return nil, err
 		}
 	}
-	return &commitOut{v: v, no: no, count: len(changes) + len(released), touched: touched, hasSchemaOps: hasSchemaOps, cutoff: cutoff, rollbackOf: o.RollbackOf, kind: o.Kind}, nil
+	return &commitOut{v: v, no: no, count: len(changes) + len(released), touched: touched, hasSchemaOps: hasSchemaOps, cutoff: cutoff, rollbackOf: o.RollbackOf, kind: o.Kind,
+		restoredTable: restoredTable}, nil
 }
 
 // finishCommit is step 7-8 of plan §6, after the tx committed: engine caches, the delivery cache, the
@@ -742,6 +756,11 @@ func (s *PublishService) finishCommit(ctx context.Context, caller metaversion.Ca
 				inv(tenantID, e)
 			}
 		}
+	}
+	if out.restoredTable {
+		// The restored table's role grants are back: cached grants must not keep refusing them until the 30 s
+		// backstop. ponytail: every tenant's cached grants (a rollback is a rare builder act), as EntityService does.
+		s.aclCache.InvalidateAll()
 	}
 	s.gate.CacheDelivered(tenantID)
 	s.gate.RefreshCutoff(tenantID, out.cutoff) // S7-8: what this version released stops being hidden at once on this replica

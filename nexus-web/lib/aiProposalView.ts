@@ -11,8 +11,10 @@ import {
   dashboardWidgetLines, draftRecordsRows, editFieldDiffRows, getApprovalDraft, getDashboardDraft, getDeleteEntityDraft,
   getDeleteFieldDraft, getEditFieldDraft, getRecordsDraft, getWorkQueueDraft, layoutViewLabel, recordCellText,
   recordsPreviewModel, reportSummaryText, reportTypeLabel, summarizeLayoutDraft, workflowActionText, workflowRuleText,
-  workflowTriggerPhrase, workQueueSummaryText, type AiDraftItem,
+  workflowTriggerPhrase, workQueueSummaryText, getAccessDraft, type AiDraftItem,
 } from "@/lib/aiBuilder";
+import { accessText } from "@/lib/accessLevels";
+import type { EntityMeta } from "@/lib/api";
 
 export type ProposalOp = "create" | "update" | "delete";
 
@@ -214,6 +216,19 @@ export function proposalView(item: AiDraftItem, ctx: Ctx = {}): ProposalView | n
       ],
     });
   }
+  const ac = item.kind === "access" ? getAccessDraft(item) : undefined;
+  if (ac) {
+    // The title is the whole sentence, so it wraps instead of being cut: "Nhân viên kinh doanh được xem tất cả · tạo · sửa
+    // của mình trên Phiếu hỗ trợ" (one clause per table); the list has one short "+" line per grant.
+    const role = ac.roleLabel || ac.role;
+    const label = (n: string) => ac.labels?.[n] || n;
+    const tables = [...new Set(ac.grants.map((g) => g.entityName))];
+    return base({
+      title: tables.map((n) => V("access.line", { role, actions: accessText(ac.grants, n), table: label(n) })).join("; "),
+      where: where(t("studio.assistant.where.access")),
+      changes: ac.grants.map((g) => ({ op: "add" as const, text: tf("studio.assistant.access.side", { table: label(g.entityName), actions: accessText([g], g.entityName) }) })),
+    });
+  }
   return null;
 }
 
@@ -234,6 +249,16 @@ function withChange(item: AiDraftItem, v: ProposalView): ProposalView {
   return out;
 }
 
+/** Every table an access card grants on is still hidden from the customer: born after the last publish, which the
+ * builder's own table list marks draftState "new". An unknown list answers false, so the question never claims a wait
+ * it cannot see. */
+export function accessTablesHidden(item: AiDraftItem, entities: readonly EntityMeta[] | undefined): boolean {
+  const ac = item.kind === "access" ? getAccessDraft(item) : undefined;
+  if (!ac || !entities || ac.grants.length === 0) return false;
+  const fresh = new Set(entities.filter((e) => e.draftState === "new").map((e) => e.name));
+  return ac.grants.every((g) => fresh.has(g.entityName));
+}
+
 // Where the applied card points (moved from the old page's DraftCard; same destinations and wording).
 export interface ProposalLink { text: string; href: string; label: string }
 type Link = (id: RouteId) => string;
@@ -245,12 +270,12 @@ export function proposalDone(item: AiDraftItem, createdId: string | undefined, l
     case "workflow": return studio("Đã tạo thành công.", "dung/tu-dong", "Mở Tự động");
     case "report": return { text: "Đã tạo thành công.", href: "/reports", label: "Mở Báo cáo" };
     case "app":
-      // Grants were seeded onto two NEW app roles, not the tenant's existing ones; until someone is put in one of them
-      // the app is empty for everyone but an admin (and an admin testing it cannot see that), so the line says it.
+      // Staff see an app's tables only through their own role's grants (an admin testing it cannot see that gap), so the
+      // line says how they get them: tell the assistant who uses the app (an access card), or tick it on the Access page.
       return {
-        text: "Đã tạo app. Còn một bước: gán người vào vai của app (Quản trị → Người dùng), nếu không nhân viên mở ra sẽ trống.",
+        text: t("studio.assistant.done.app"),
         href: `/home?app=${encodeURIComponent(item.app?.name ?? "")}`,
-        label: "Mở app vừa dựng",
+        label: t("studio.assistant.done.appLink"),
       };
     case "edit_field": return studio("Đã cập nhật trường.", "dung/du-lieu", "Mở Dữ liệu");
     case "delete_field": return studio("Đã xoá trường.", "dung/du-lieu", "Mở Dữ liệu");
@@ -260,6 +285,7 @@ export function proposalDone(item: AiDraftItem, createdId: string | undefined, l
     case "dashboard":
       return { text: "Đã tạo bảng điều khiển.", href: createdId ? `/dashboards/${createdId}` : "/dashboards", label: "Mở bảng điều khiển" };
     case "workqueue": return studio("Đã tạo hàng đợi.", "dung/tu-dong/hang-doi", "Mở Hàng đợi việc");
+    case "access": return studio(t("studio.assistant.done.access"), "dung/nguoi-dung-quyen", t("studio.assistant.done.accessLink"));
     default: return studio("Đã tạo thành công.", "dung/du-lieu", "Mở Dữ liệu");
   }
 }

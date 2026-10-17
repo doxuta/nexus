@@ -96,7 +96,7 @@ func (s *ImportService) planRelationMatches(ctx context.Context, in ImportInput,
 				"matchBy: %q không phải trường liên kết đang được ánh xạ", field)
 		}
 	}
-	lookup := &RecordService{catalog: s.catalog}
+	lookup := s.records()
 	plan := make(map[string]relationMatch)
 	for _, rel := range specs {
 		if rel.FieldType != "relation" {

@@ -24,7 +24,8 @@ import { ScopedNotification } from "@/components/slds/ScopedNotification";
 import { Spinner } from "@/components/slds/Spinner";
 import { AppFilter } from "../AppFilter";
 import { AclBackfillControl } from "../AclBackfillControl";
-import { AccessMatrix } from "../AccessMatrix";
+import { AccessMatrix, accessGhost } from "../AccessMatrix";
+import { useProposedChanges } from "../assistant/ProposalOverlay";
 import { useRoleViewAs } from "../AccessPages";
 import { RelatedLists, type RelatedSection } from "../RelatedLists";
 import { useProjectQuery } from "../useProjectQuery";
@@ -50,6 +51,9 @@ export function AccessPage({ slug, app: appParam, bang }: { slug: string; app?: 
   const apps = appsQ.data ?? [];
   const { visible, hidden } = splitByScope(entities, scope.entityNames, (e) => e.name);
   const tables = (bang ? visible.filter((e) => e.name === bang) : visible).map((e) => ({ name: e.name, label: e.label || e.name }));
+
+  // The assistant's access card being previewed ("Xem trước"): its role's cells, and the tables it names not built yet.
+  const ghost = accessGhost(useProposedChanges("role")[0] ?? null, roles, entities);
 
   // ── "+ Vai mới" strip ──
   const [open, setOpen] = useState(false);
@@ -135,7 +139,8 @@ export function AccessPage({ slug, app: appParam, bang }: { slug: string; app?: 
     body = (
       <AccessMatrix
         roles={roles}
-        tables={tables}
+        tables={[...tables, ...ghost.pending]}
+        proposed={ghost.proposed}
         viewAs={viewAs}
         roleHref={(id) => studioHref(slug, "dung/nguoi-dung-quyen/vai/:id", { id })}
         onSaved={(saved: RoleDetail) => qc.setQueryData<RoleDetail[]>(["project", slug, ...rolesKey], (list) => list?.map((r) => (r.id === saved.id ? saved : r)))}

@@ -46,7 +46,7 @@ const STEP_TOOLS = new Set([
 ]);
 const STEP_KINDS = new Set([
   "entity", "field", "relationship", "layout", "workflow", "report", "app", "edit_field", "delete_field",
-  "delete_entity", "records", "approval", "dashboard", "workqueue",
+  "delete_entity", "records", "approval", "dashboard", "workqueue", "access",
 ]);
 
 /** Business-language label for a tool the stream names (FR-116). Unknown tools keep their raw name. */

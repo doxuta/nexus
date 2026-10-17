@@ -5,6 +5,7 @@
 // blocks under the assistant's words; progress, Huỷ, errors and the disabled state use SLDS spinner / scoped notification.
 // All behaviour (stream, Huỷ, errors, scope gate, apply) lives in the hook and AssistantProvider: this file is markup.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Send } from "lucide-react";
 import { Button } from "@/components/slds/Button";
 import { Panel } from "@/components/slds/Panel";
@@ -16,7 +17,8 @@ import { hasDrafts, isDestructiveDraft, type AiDraftItem, type ChatTurn } from "
 import { cardMode, proposalKey, sealedVersion, type Delivery } from "@/lib/aiApply";
 import type { ApplyState } from "@/lib/aiApplyState";
 import { hasPublishReviewOpener, openPublishReview, watchPublishReviewOpener } from "@/lib/draftEvents";
-import { proposalView } from "@/lib/aiProposalView";
+import { accessTablesHidden, proposalView } from "@/lib/aiProposalView";
+import { listEntities } from "@/lib/api";
 import { resolveAssistantLink } from "@/lib/assistantLinks";
 import { setAssistantOpen, useAssistantOpen } from "@/lib/assistantOpen";
 import { t, tf } from "@/lib/i18n";
@@ -159,6 +161,10 @@ function Turn({ turn, summary }: { turn: ChatTurn; summary?: StepSummary }) {
   const user = turn.role === "user";
   const reviewCanOpen = useSyncExternalStore(watchPublishReviewOpener, hasPublishReviewOpener, () => false);
   const drafts: AiDraftItem[] = !user && hasDrafts(turn.draft) ? turn.draft : [];
+  // The Studio's own table list (the builder's draft-overlay read: draftState "new" = still hidden from the customer),
+  // so an access card's question says "the table stays hidden" only while it is. The same cache as the project frame.
+  const { data: entities } = useQuery({ queryKey: ["studio", "count", "entities"], queryFn: listEntities, staleTime: 60_000,
+    enabled: drafts.some((d) => d.kind === "access") });
   const bulk = drafts.filter((d, i) => {
     const st = a.applyMap[proposalKey(turn.id, i)]?.status;
     return !isDestructiveDraft(d) && cardMode(d, a.delivery, a.asSample).inApplyAll && proposalView(d) !== null && st !== "done" && st !== "warn" && st !== "discarded";
@@ -190,6 +196,7 @@ function Turn({ turn, summary }: { turn: ChatTurn; summary?: StepSummary }) {
               proposalKey={proposalKey(turn.id, i)}
               state={sealed(a.applyMap[proposalKey(turn.id, i)], a.delivery)}
               delivered={a.delivery.kind === "delivered" ? true : a.delivery.kind === "undelivered" ? false : undefined}
+              tableHidden={accessTablesHidden(item, entities)}
               draft={{
                 mode: cardMode(item, a.delivery, a.asSample),
                 onRecheck: a.recheck,

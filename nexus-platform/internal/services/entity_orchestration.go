@@ -128,6 +128,15 @@ type EntityService struct {
 	auditor audit.Auditor
 	// draftFields, when set, lets an entity delete drop its fields' pending S7-8 drafts (no orphans).
 	draftFields *DraftFieldRepo
+	// aclCache is the role-grants cache (O3). A table delete drops every role's grants on its name, so it drops
+	// the cached grants after it commits. nil = no cache.
+	aclCache *CachedACLLoader
+}
+
+// WithACLCache wires the role-grants cache that a table delete refreshes. Chainable.
+func (s *EntityService) WithACLCache(c *CachedACLLoader) *EntityService {
+	s.aclCache = c
+	return s
 }
 
 // WithDraftFields wires the field draft layer so SoftDeleteEntity drops the drafts of the fields it removes.

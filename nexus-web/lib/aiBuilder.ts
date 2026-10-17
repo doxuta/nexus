@@ -18,9 +18,11 @@
 
 import type {
   NewFieldInput, AdminRelationshipInput, AdminLayoutInput, CreateAppPayload, AppNavReplaceItem,
-  ApprovalStep, ApprovalParallelStep, ApprovalOnReject, DashboardWidgetDef, WorkQueueInput,
+  ApprovalStep, ApprovalParallelStep, ApprovalOnReject, DashboardWidgetDef, WorkQueueInput, RoleGrant,
 } from "@/lib/api";
 import { newWidgetId } from "@/lib/widgetAuthoring";
+import { accessText } from "@/lib/accessLevels";
+import { tf } from "@/lib/i18n";
 import type { I18nKey } from "@/lib/i18n/vi";
 
 // Only user/assistant roles ever exist in a conversation — the backend injects its own system persona
@@ -329,6 +331,17 @@ export interface AiDraftWorkQueue {
   showOnHome?: boolean;
 }
 
+// Who may use what the assistant built (kind:"access", propose_access): grants to ADD to ONE existing role, by NAME
+// (resolved to an id at apply, like a work queue's roleName). Only view/create/edit at all | owner. Applied by
+// lib/aiApply.ts: read the role, mergeAccessGrants (lib/accessLevels.ts), write the whole set back.
+export interface AiDraftAccess {
+  role: string;
+  roleLabel?: string;
+  grants: RoleGrant[];
+  /** table name → label, for the card */
+  labels?: Record<string, string>;
+}
+
 // One proposal in a turn. Exactly one payload key (entity/field/relationship/layout/workflow/
 // report/app/editField/deleteField/deleteEntity/records) is set, per kind. `draft` on the wire can
 // be null (the agent asked a question instead of proposing) — callers must treat null and [] alike.
@@ -354,7 +367,7 @@ export interface AiDraftItem {
   kind:
     | "entity" | "field" | "relationship" | "layout" | "workflow" | "report" | "app"
     | "edit_field" | "delete_field" | "delete_entity" | "records"
-    | "approval" | "dashboard" | "workqueue"
+    | "approval" | "dashboard" | "workqueue" | "access"
     | (string & {});
   entity?: AiDraftEntity;
   field?: AiDraftField;
@@ -370,6 +383,7 @@ export interface AiDraftItem {
   approval?: AiDraftApproval;
   dashboard?: AiDraftDashboard;
   workqueue?: AiDraftWorkQueue;
+  access?: AiDraftAccess;
 }
 
 export interface AiUsage {
@@ -535,6 +549,10 @@ export function getApprovalDraft(item: AiDraftItem): AiDraftApproval | undefined
 }
 export function getDashboardDraft(item: AiDraftItem): AiDraftDashboard | undefined {
   return draftPayload<AiDraftDashboard>(item, "dashboard", "dashboard");
+}
+export function getAccessDraft(item: AiDraftItem): AiDraftAccess | undefined {
+  const a = draftPayload<AiDraftAccess>(item, "access", "access");
+  return a && typeof a.role === "string" && Array.isArray(a.grants) ? a : undefined;
 }
 export function getWorkQueueDraft(item: AiDraftItem): AiDraftWorkQueue | undefined {
   // camelCase twin "workQueue" tolerated — the kind token itself is one word ("workqueue").
@@ -1517,6 +1535,12 @@ export function changeSideLines(
   if (docType === "report") {
     const line = reportSummaryText(str(side.type), side.config as AiDraftReportConfig | undefined);
     return line ? [line] : [];
+  }
+  if (docType === "role") {
+    // propose_access: the role's grants on the tables it touches (and its "*" rows), one line per table.
+    const grants = Array.isArray(side.grants) ? (side.grants as RoleGrant[]) : [];
+    const labels = (side.labels ?? {}) as Record<string, string>;
+    return Object.keys(labels).map((n) => tf("studio.assistant.access.side", { table: labels[n] || n, actions: accessText(grants, n) }));
   }
   return Object.entries(side)
     .filter(([, v]) => v !== "" && v != null && !(Array.isArray(v) && v.length === 0))

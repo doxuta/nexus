@@ -311,6 +311,42 @@ func TestReplay_UsedUpCassetteSaysStartAFreshStack(t *testing.T) {
 	}
 }
 
+// One call more than the recording on a FRESH stack is not a second run: the code now takes another
+// step, so the cassette is stale and must be re-recorded. A second run starts over with the first
+// recorded call (the case above); an extra step does not look like it.
+func TestReplay_ExtraStepPastTheEndIsStaleNotUsedUp(t *testing.T) {
+	step := func(req ChatRequest, tool string) ChatRequest {
+		req.Messages = append(slices.Clone(req.Messages),
+			ChatMessage{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_" + tool, Type: "function", Function: ToolCallFunc{Name: tool, Arguments: "{}"}}}},
+			ChatMessage{Role: "tool", ToolCallID: "call_" + tool, Name: tool, Content: `{"ok":true}`})
+		return req
+	}
+	first := ask("q1")
+	second := step(first, "list_entities")
+	path := recordCassette(t, []ChatRequest{first, second}, []ChatResponse{finalTextResp("a1"), finalTextResp("a2")})
+	c, err := NewCompleter(config.AIConfig{GatewayMode: config.AIGatewayReplay, Cassette: path})
+	if err != nil {
+		t.Fatalf("NewCompleter(replay): %v", err)
+	}
+	for i, req := range []ChatRequest{first, second} {
+		if _, err := c.Complete(context.Background(), req); err != nil {
+			t.Fatalf("call %d: %v; want it answered", i+1, err)
+		}
+	}
+	_, err = c.Complete(context.Background(), step(second, "propose_access"))
+	if !errors.Is(err, ErrGateway) {
+		t.Fatalf("error = %v; want ErrGateway", err)
+	}
+	for _, want := range []string{"cassette " + path + " is stale: call 3 ", "the cassette holds 2", "AI_GATEWAY_MODE=record AI_GATEWAY_CASSETTE=" + path} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "used up") || strings.Contains(err.Error(), "fresh stack") {
+		t.Errorf("error %q sends an extra step to a fresh stack; it is a stale cassette", err)
+	}
+}
+
 // The fingerprint holds what tells one turn from another — the tools offered (names, not schemas),
 // the user messages (hashed) and the conversation's shape — and leaves out what a fresh database
 // changes: grounding, tool results and their ids.

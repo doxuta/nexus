@@ -186,6 +186,10 @@ func (s *EntityService) SoftDeleteEntity(ctx context.Context, tenantID, entityNa
 	// (GetEntityByName → not-found) and drops its field list (O3).
 	s.cache.InvalidateEntityDef(tenantID, entityName)
 	s.cache.InvalidateFields(tenantID, entity.ID)
+	// The same commit dropped every role's grants on the table: cached grants must not keep authorizing them until
+	// the 30 s backstop. ponytail: this drops every tenant's cached grants (a table delete is a rare builder act);
+	// a tenant-scoped TTLCache invalidation is the upgrade if it ever shows in a profile.
+	s.aclCache.InvalidateAll()
 	// RM-19: audit the committed entity delete (before-only diff). Fail-open.
 	emitMetaAudit(ctx, s.auditor, tenantID, audit.EntityMeta, audit.ActionDelete, *entity, nil)
 	return nil

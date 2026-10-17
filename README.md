@@ -36,7 +36,7 @@ Workspace code: `northwind`. These credentials are for your laptop only; the com
 override. AI features stay off until you point `AI_GATEWAY_BASE_URL` at an OpenAI-compatible gateway and set
 `AI_ENABLED=true`.
 Without a model or key, `AI_ENABLED=true AI_GATEWAY_MODE=replay AI_GATEWAY_CASSETTE=/cassettes/<name>.jsonl docker compose up` answers from a cassette in `./cassettes`, recorded once the same way with `AI_GATEWAY_MODE=record` and a live gateway.
-The whole loop (the builder asks for a helpdesk, previews, publishes; the rep edits their own ticket and is refused the builder's; a layout change is rolled back) runs in Chrome on a fresh stack started that way with `cassettes/demo-loop.jsonl`: `npm ci` in `nexus-web/`, then `NEXUS_PORT=8080 node nexus-web/scripts/demo-loop.mjs <screenshot-dir>` (the stack's `NEXUS_PORT`; set `CHROME_PATH` if Chrome is not found). A replayed stack answers one run: `docker compose down -v` before the next.
+The whole loop (the builder asks for a helpdesk app and says who will use it; the assistant proposes the table, the app and the rep's access, which the builder previews, applies and publishes; the rep opens it from the app switcher, edits their own ticket and is refused the builder's; a layout change is rolled back) runs in Chrome on a fresh stack started that way with `cassettes/demo-loop.jsonl`: `npm ci` in `nexus-web/`, then `NEXUS_PORT=8080 node nexus-web/scripts/demo-loop.mjs <screenshot-dir>` (the stack's `NEXUS_PORT`; set `CHROME_PATH` if Chrome is not found). A replayed stack answers one run: `docker compose down -v` before the next.
 
 ## Connect Claude Code
 
