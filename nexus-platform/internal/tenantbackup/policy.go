@@ -147,7 +147,8 @@ func buildRules() map[string]Rule {
 	add(Skip, "",
 		"refresh_tokens", "password_reset_tokens", "mfa_pending_tokens", "sso_handoff_tokens", "user_mfa",
 		"mfa_backup_codes", "sys_api_keys", "sys_named_credentials", "sys_inbound_hooks", "sys_jobs",
-		"sys_tenant_backups", "sys_tenant_backup_schedules", "sys_workspace_sessions", "sys_preview_sessions")
+		"sys_tenant_backups", "sys_tenant_backup_schedules", "sys_workspace_sessions", "sys_preview_sessions",
+		"sys_mcp_tokens")
 
 	// --- Clear ---------------------------------------------------------------------------------
 	add(Clear, "", "sys_idempotency_keys")

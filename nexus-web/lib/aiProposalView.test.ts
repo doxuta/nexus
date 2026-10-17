@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { proposalView, proposalDone, proposalWarnLink } from "./aiProposalView";
+import { afterEach, describe, it, expect } from "vitest";
+import { accessTablesHidden, proposalView, proposalDone, proposalWarnLink } from "./aiProposalView";
 import type { AiDraftItem } from "./aiBuilder";
 
 const link = (id: string) => `/studio/${id}`;
@@ -20,6 +20,8 @@ const ITEMS: Record<string, AiDraftItem> = {
   approval: { kind: "approval", approval: { name: "Duyệt giảm giá", entityName: "bao_gia", steps: [{ approverRef: "role:sales_manager" } as never] } },
   dashboard: { kind: "dashboard", dashboard: { name: "Tổng quan", widgets: [{ title: "Doanh thu", type: "metric" }] } },
   workqueue: { kind: "workqueue", workqueue: { name: "cho_duyet", label: "Chờ duyệt", entityName: "bao_gia", filters: [{ field: "status", op: "eq", value: "moi" }] } },
+  access: { kind: "access", access: { role: "crm_sales_rep", roleLabel: "Nhân viên kinh doanh", labels: { tickets: "Phiếu hỗ trợ" },
+    grants: [{ entityName: "tickets", action: "view", accessLevel: "all" }, { entityName: "tickets", action: "create", accessLevel: "all" }, { entityName: "tickets", action: "edit", accessLevel: "owner" }] } },
 };
 
 describe("proposalView", () => {
@@ -113,4 +115,70 @@ describe("proposalDone / proposalWarnLink", () => {
     expect(proposalWarnLink(ITEMS.records, link)?.href).toBe("/benh_nhan");
     expect(proposalWarnLink(ITEMS.workflow, link)).toBeNull();
   });
+});
+
+// issue #2: the access card says, in human words, what the role may do on the table.
+describe("proposalView — access", () => {
+  const withChange: AiDraftItem = {
+    ...ITEMS.access,
+    change: { docType: "role", docKey: "r1", op: "update", label: "Vai", target: { name: "crm_sales_rep", entity: "tickets" },
+      before: { grants: [], labels: { tickets: "Phiếu hỗ trợ" } },
+      after: { grants: ITEMS.access.access!.grants, labels: { tickets: "Phiếu hỗ trợ" } } },
+  };
+  afterEach(() => localStorage.removeItem("nexus.prefs.v1"));
+
+  const LINES = ["add:Phiếu hỗ trợ: xem tất cả", "add:Phiếu hỗ trợ: tạo", "add:Phiếu hỗ trợ: sửa của mình"];
+
+  it("the title is the sentence: <role> được xem tất cả · tạo · sửa của mình trên <table>; one + line per grant", () => {
+    const v = proposalView(ITEMS.access)!;
+    expect(v.title).toBe("Nhân viên kinh doanh được xem tất cả · tạo · sửa của mình trên Phiếu hỗ trợ");
+    expect(texts(v)).toEqual(LINES);
+    expect(v.where).toBe("Người dùng & quyền");
+  });
+
+  it("in English: <Role label> can view all · create · edit their own <Table>", () => {
+    localStorage.setItem("nexus.prefs.v1", JSON.stringify({ locale: "en" }));
+    expect(proposalView(ITEMS.access)!.title).toBe("Nhân viên kinh doanh can view all · create · edit their own Phiếu hỗ trợ");
+  });
+
+  it("two tables: one clause each", () => {
+    const two: AiDraftItem = { kind: "access", access: { role: "r", roleLabel: "Lễ tân", labels: { a: "A", b: "B" },
+      grants: [{ entityName: "a", action: "view", accessLevel: "all" }, { entityName: "b", action: "edit", accessLevel: "owner" }] } };
+    expect(proposalView(two)!.title).toBe("Lễ tân được xem tất cả trên A; Lễ tân được sửa của mình trên B");
+  });
+
+  it("with the server's role change: Sửa, the lines stay, Trước/Sau name the table's access", () => {
+    const v = proposalView(withChange)!;
+    expect(v.op).toBe("update");
+    expect(texts(v)).toEqual(LINES);
+    expect(v.before).toEqual(["Phiếu hỗ trợ: không có quyền"]);
+    expect(v.after).toEqual(["Phiếu hỗ trợ: xem tất cả · tạo · sửa của mình"]);
+  });
+
+  it("applied, it points at Người dùng & quyền", () => {
+    expect(proposalDone(ITEMS.access, undefined, link)).toMatchObject({ href: "/studio/dung/nguoi-dung-quyen", label: "Mở Người dùng & quyền" });
+  });
+
+  // Verifier round 2: nobody is moved into an app's roles any more (staff keep their role and it gains access), so the
+  // app card's done line says how staff get access instead.
+  it("an applied app card says how staff get access, not 'put people in the app's roles'", () => {
+    const d = proposalDone(ITEMS.app, undefined, link);
+    expect(d.text).toBe("Đã tạo app. Nhân viên chỉ thấy dữ liệu khi vai của họ có quyền: nói với trợ lý ai sẽ dùng app này, hoặc tick quyền ở Người dùng & quyền.");
+    expect(d.text).not.toMatch(/gán người vào vai/);
+    expect(d).toMatchObject({ href: "/home?app=phong_kham", label: "Mở app vừa dựng" });
+  });
+});
+
+// Verifier round 2: "the table stays hidden until Xuất bản" only while every table of the access card still is.
+describe("accessTablesHidden", () => {
+  const two: AiDraftItem = { kind: "access", access: { role: "r", grants: [
+    { entityName: "a", action: "view", accessLevel: "all" }, { entityName: "b", action: "view", accessLevel: "all" }] } };
+  const list = (b?: "new") => [{ name: "a", label: "A", tableName: "obj_a", draftState: "new" as const }, { name: "b", label: "B", tableName: "obj_b", draftState: b }];
+  it("every table still new: hidden", () => expect(accessTablesHidden(two, list("new"))).toBe(true));
+  it("one table published already: not hidden", () => expect(accessTablesHidden(two, list())).toBe(false));
+  it("a table not in the list yet, or no list at all: not claimed hidden", () => {
+    expect(accessTablesHidden(two, list("new").slice(0, 1))).toBe(false);
+    expect(accessTablesHidden(two, undefined)).toBe(false);
+  });
+  it("not an access card: false", () => expect(accessTablesHidden(ITEMS.entity, list("new"))).toBe(false));
 });

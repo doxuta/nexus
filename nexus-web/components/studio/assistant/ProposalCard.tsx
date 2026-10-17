@@ -42,6 +42,8 @@ export interface ProposalCardProps {
   state?: ProposalState;
   /** The project is known to be undelivered ⇒ the where line says the customer cannot see it yet. */
   delivered?: boolean;
+  /** An access card: every table it grants on is still hidden from the customer (lib/aiProposalView accessTablesHidden). */
+  tableHidden?: boolean;
   asSample: boolean;
   onAsSampleChange: (v: boolean) => void;
   onApply: () => void;
@@ -60,7 +62,7 @@ const OP_WORD: Record<ProposalOp, I18nKey> = {
   delete: "studio.assistant.change.delete",
 };
 
-export function ProposalCard({ item, state, delivered, asSample, onAsSampleChange, onApply, onDiscard, reopened, link, proposalKey, draft }: ProposalCardProps) {
+export function ProposalCard({ item, state, delivered, tableHidden, asSample, onAsSampleChange, onApply, onDiscard, reopened, link, proposalKey, draft }: ProposalCardProps) {
   const st = state?.status ?? "idle";
   const view = proposalView(item, { delivered });
   const cardRef = useRef<HTMLElement>(null);
@@ -284,7 +286,10 @@ export function ProposalCard({ item, state, delivered, asSample, onAsSampleChang
           <div className="slds-m-top_small">
             <InlineConfirm
               tone="warning"
-              message={realRows ? t("studio.assistant.sample.confirmReal") : tf("studio.assistant.draft.confirmNow", { desc: view.title })}
+              message={realRows ? t("studio.assistant.sample.confirmReal")
+                // Access applies at once; a table still hidden from the customer waits for Publish itself.
+                : item.kind === "access" ? tf(tableHidden ? "studio.assistant.access.confirmHidden" : "studio.assistant.access.confirm", { desc: view.title })
+                : tf("studio.assistant.draft.confirmNow", { desc: view.title })}
               confirmLabel={realRows ? t("studio.assistant.sample.confirmRealAction") : t("studio.assistant.draft.confirmNowAction")}
               onConfirm={doApply}
               onCancel={cancelConfirm}

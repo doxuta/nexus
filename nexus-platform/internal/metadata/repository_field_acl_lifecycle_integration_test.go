@@ -138,3 +138,44 @@ func TestRepo_SoftDeleteEntity_DropsFieldACLRows_IT(t *testing.T) {
 		t.Fatalf("other tenant's ACL rows = %d; want 2 (tenant-pinned)", n)
 	}
 }
+
+// Issue #2, verifier round 1: acl_role_actions rows are keyed by the entity NAME too. A table deleted
+// and re-created under that name (Studio, vertical pack, the assistant) silently inherited every role's
+// view/create/edit/delete on it. SoftDeleteEntity drops them in the SAME transaction; the role is pinned
+// to the tenant through acl_roles, so the other tenant's grants on the same name stay.
+func TestRepo_SoftDeleteEntity_DropsRoleGrants_IT(t *testing.T) {
+	repo, gdb := newRepinRepo(t)
+	entA, _, _ := seedFieldACLFixture(t, gdb)
+	grant := func(id, roleID, entity, action string) {
+		t.Helper()
+		if err := gdb.Exec(`INSERT INTO acl_role_actions (id, role_id, entity_name, action, access_level) VALUES (?, ?, ?, ?, 'all')`,
+			id, roleID, entity, action).Error; err != nil {
+			t.Fatalf("seed grant: %v", err)
+		}
+	}
+	grant("facl-ga-1", "facl-role-it-facl-a", faclEntity, "view")
+	grant("facl-ga-2", "facl-role-it-facl-a", faclEntity, "edit")
+	grant("facl-ga-3", "facl-role-it-facl-a", "it_facl_other", "view")
+	grant("facl-gb-1", "facl-role-it-facl-b", faclEntity, "view")
+	count := func(roleID, entity string) int64 {
+		t.Helper()
+		var n int64
+		if err := gdb.Table("acl_role_actions").Where("role_id = ? AND entity_name = ?", roleID, entity).Count(&n).Error; err != nil {
+			t.Fatalf("count grants: %v", err)
+		}
+		return n
+	}
+
+	if err := repo.SoftDeleteEntity(context.Background(), faclTenantA, entA); err != nil {
+		t.Fatalf("SoftDeleteEntity: %v", err)
+	}
+	if n := count("facl-role-it-facl-a", faclEntity); n != 0 {
+		t.Fatalf("grants on the deleted table = %d; want 0 (a re-created table of that name would inherit them)", n)
+	}
+	if n := count("facl-role-it-facl-a", "it_facl_other"); n != 1 {
+		t.Fatalf("the role's grant on another table = %d; want 1 (untouched)", n)
+	}
+	if n := count("facl-role-it-facl-b", faclEntity); n != 1 {
+		t.Fatalf("the other tenant's grant on the same name = %d; want 1 (tenant-pinned)", n)
+	}
+}

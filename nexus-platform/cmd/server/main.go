@@ -43,6 +43,7 @@ import (
 	"nexus/platform/internal/inboundhook"
 	"nexus/platform/internal/janitor"
 	"nexus/platform/internal/jobs"
+	"nexus/platform/internal/mcpserver"
 	"nexus/platform/internal/metadata"
 	"nexus/platform/internal/metaversion"
 	"nexus/platform/internal/metrics"
@@ -584,7 +585,10 @@ func main() {
 		WithBeforeHooks(workflowCache, beforeRunSink).
 		// specs/054: on create, a required field the edit form hides by a visibleWhen condition
 		// is not demanded. Read only when a required field is actually missing.
-		WithLayoutReader(layoutRepo)
+		WithLayoutReader(layoutRepo).
+		// S7-8 on the data path (issue #2): a table born after the last publish is absent for the
+		// customer's reads and writes too, not only from the metadata reads (same DraftGate decision).
+		WithSchemaCutoff(draftGate)
 	// specs/083: stored roll-up totals follow automation writes, and a new/"Tính lại" stored roll-up
 	// is backfilled over the rows that already exist. Both closures need recordSvc, built after them.
 	workflowMutator.WithAfterWrite(recordSvc.RefreshStoredRollups)
@@ -811,6 +815,7 @@ func main() {
 	// WithIdempotencyStore: Idempotency-Key on POST /:entity/import (specs/047 FR-12) — a resend of
 	// the same file replays the first summary instead of inserting the rows again.
 	importSvc := services.NewImportService(metaRepo, dynRepo, logger).WithSequenceClaimer(dynRepo).
+		WithSchemaCutoff(draftGate). // issue #2: a table born after the last publish is absent for the customer's import too
 		WithBeforeHooks(workflowCache, beforeRunSink).
 		WithIdempotencyStore(idempotency.NewSQLRepository(sqlxDB)).
 		WithAfterInsert(recordSvc.RefreshStoredRollups) // specs/083: stored roll-up totals follow an import
@@ -985,6 +990,10 @@ func main() {
 	roleSvc := services.NewRoleService(roleRepo).WithRecorder(directRec, services.NewRoleFootprint(sqlxDB)).WithACLCache(aclCache).WithAuditor(auditDispatcher).
 		WithUserFieldChecker(services.CatalogUserFields{Catalog: metaRepo}) // #283 "field:<name>" grants
 	aclSvc := services.NewACLService(aclCache)
+	// Issue #2: a table delete drops every role's grants on it and a rollback that brings the table back puts
+	// them back; both refresh the cache at once, not after the backstop.
+	entitySvc.WithACLCache(aclCache)
+	publishSvc.WithACLCache(aclCache)
 
 	// FILE-ACL: arm per-attachment authorization now that the ACL service exists. Download and
 	// delete live at /files/:id, a path with no :entity segment, so the route-level ACL stage
@@ -1285,9 +1294,18 @@ func main() {
 		Records:  recordSvc,
 		// queue #319: propose_edit_field judges FIELD_REQUIRED_WHILE_LOCKED at propose time.
 		FieldLocks: fieldACLRepo,
+		// issue #2: propose_access grants only on a table the customer does not have yet.
+		Published: draftGate,
 	}), &ai.DocReaders{Layouts: layoutSvc, Workflows: workflowSvc, Reports: reportSvc, Apps: appSvc}, aiRunRepo, logger).
 		WithDelivery(draftGate) // specs/067 L10-5: one grounding line once the project is delivered
 	aiContextResolver := ai.NewContextResolver(aiMeta, appSvc, userRepo)
+	// Issue #3: MCP tokens let an outside agent call the builder agent's read and propose tools at /mcp,
+	// as the builder who issued them; proposals land in that builder's thread (aiSessionStore).
+	mcpTokenSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(database), aiSessionStore, userRepo).
+		WithAuditor(auditDispatcher).WithLogger(logger)
+	// A credential-level event (logout-all, a password change or reset, the reuse alarm) ends the user's
+	// agent keys with their sessions: a key minted from a stolen session must not outlive them.
+	authSvc.WithAgentKeys(mcpTokenSvc)
 
 	// ⌘K end-user data assistant (read-only ask-data): reuses the E9 plumbing (gateway, ledger,
 	// session store) with its OWN tool registry — query/aggregate/list only, ZERO propose_*. The
@@ -1495,6 +1513,9 @@ func main() {
 			"version": "1.0.0",
 		})
 	})
+	// MCP (issue #3): agents propose, humans dispose. Outside /api/v1: its own bearer (nxm_ tokens
+	// only, refused everywhere else) and the SDK's stateless streamable HTTP transport.
+	r.Any("/mcp", gin.WrapH(mcpserver.New(mcpTokenSvc, aiAgent, aiSessionStore, tenantFreeze, logger)))
 
 	// API v1 routes. RegisterAPIRoutes is the single wiring point shared with the integration
 	// tests: it mounts the PUBLIC /auth/* endpoints, then a PROTECTED sub-group fronted by
@@ -1666,6 +1687,8 @@ func main() {
 		Doctor: handlers.NewAdminDoctorHandler(doctorSvc, logger),
 		// Machine identity (APIKEY-1): /admin/api-keys — issue (secret shown once), list, revoke.
 		APIKey: handlers.NewAdminAPIKeyHandler(apiKeySvc, logger),
+		// "Connect an agent (MCP)" (issue #3): /admin/mcp-tokens — issue (token shown once), list, revoke.
+		MCPToken: handlers.NewAdminMCPTokenHandler(mcpTokenSvc, logger),
 		// Business-hours calendars (CALENDAR-1): /admin/business-calendars CRUD (admin-gated).
 		Calendar: handlers.NewAdminCalendarHandler(calendarSvc, logger),
 		// "Việc nền" (DAILY-QUEUE #31/#32): /admin/jobs — the tenant's background-job log over

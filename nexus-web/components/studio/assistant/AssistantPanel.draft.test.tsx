@@ -2,7 +2,7 @@
 // Seams mocked: the stream client, the identity/scope module and the write APIs. The chat hook, the provider, the
 // panel and ProposalCard are the REAL ones.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let search = "";
@@ -26,11 +26,11 @@ vi.mock("@/lib/aiBuilderStream", async (importOriginal) => {
 });
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, aiHealth: vi.fn(async () => true), addField: vi.fn(async () => ({})), listAiSessions: vi.fn(async () => []) };
+  return { ...actual, aiHealth: vi.fn(async () => true), addField: vi.fn(async () => ({})), listAiSessions: vi.fn(async () => []), listEntities: vi.fn(async () => []) };
 });
 
 import { aiBuilderChatStream } from "@/lib/aiBuilderStream";
-import { addField, aiHealth, ApiError, listAiSessions } from "@/lib/api";
+import { addField, aiHealth, ApiError, listAiSessions, listEntities } from "@/lib/api";
 import { resetAssistantOpenForTests } from "@/lib/assistantOpen";
 import { parseStudioPath } from "@/lib/studioRoutes";
 import { AssistantMount } from "./AssistantMount";
@@ -98,5 +98,38 @@ describe("AssistantPanel on a delivered project (ai9)", () => {
     await say("sửa luật nhắc hẹn");
     expect(await screen.findByRole("button", { name: "Áp dụng" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Áp dụng vào bản nháp" })).toBeNull();
+  });
+});
+
+// Verifier round 2: the access card's question says "the table stays hidden until Xuất bản" only while its table is
+// still hidden from the customer (the Studio's table list: draftState "new"), not whenever the project is delivered.
+describe("AssistantPanel — the access card's question follows its table", () => {
+  const ACCESS = {
+    kind: "access",
+    access: { role: "crm_sales_rep", roleLabel: "Nhân viên kinh doanh", labels: { tickets: "Phiếu hỗ trợ" },
+      grants: [{ entityName: "tickets", action: "view", accessLevel: "all" }] },
+    change: { docType: "role", docKey: "r1", op: "update", label: "Vai", target: { name: "crm_sales_rep", entity: "tickets" },
+      before: { grants: [], labels: { tickets: "Phiếu hỗ trợ" } }, after: { grants: [], labels: { tickets: "Phiếu hỗ trợ" } } },
+  };
+  async function ask(tickets: Record<string, unknown>) {
+    pub.q = { data: STATE };
+    vi.mocked(listEntities).mockResolvedValue([{ name: "tickets", label: "Phiếu hỗ trợ", tableName: "obj_tickets", ...tickets }]);
+    stream.mockResolvedValue(reply("Cấp quyền.", [ACCESS]));
+    mount();
+    await say("nhân viên kinh doanh dùng bảng này");
+    await waitFor(() => expect(listEntities).toHaveBeenCalled());
+    await act(async () => {});
+    fireEvent.click(await screen.findByRole("button", { name: "Áp ngay" }));
+  }
+
+  it("its table is still new: the question says it stays hidden until Xuất bản", async () => {
+    await ask({ draftState: "new" });
+    expect(await screen.findByText("Quyền này áp ngay cho người dùng thật: Nhân viên kinh doanh được xem tất cả trên Phiếu hỗ trợ. Bảng vẫn ẩn với khách cho tới khi anh Xuất bản.")).toBeTruthy();
+  });
+
+  it("its table is published already: the grant goes live, the question says nothing of a wait", async () => {
+    await ask({});
+    expect(await screen.findByText("Quyền này áp ngay cho người dùng thật: Nhân viên kinh doanh được xem tất cả trên Phiếu hỗ trợ.")).toBeTruthy();
+    expect(screen.queryByText(/Bảng vẫn ẩn/)).toBeNull();
   });
 });

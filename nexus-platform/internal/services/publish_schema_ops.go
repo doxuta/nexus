@@ -139,6 +139,14 @@ func schemaDeleteMeta(ctx context.Context, q sqlx.QueryerContext, tenantID strin
 				return nil, err
 			}
 			m["fieldAcl"] = acl
+			// The delete drops every role's grants on the name too (a new table of that name must inherit none): keep
+			// them, or a rollback would bring the table back with nobody but an admin allowed to use it.
+			grants, err := rowsAsJSON(ctx, q, `SELECT ara.role_id, ara.entity_name, ara.action, ara.access_level FROM acl_role_actions ara
+				JOIN acl_roles r ON r.id = ara.role_id WHERE r.tenant_id = ? AND ara.entity_name = ? ORDER BY ara.role_id, ara.action`, tenantID, name)
+			if err != nil {
+				return nil, err
+			}
+			m["roleGrants"] = grants
 			// A rollback restores "deleted_at = sweptAt": a record the staff binned within the same second would be
 			// brought back with the rest. Move the instant forward until no record of this tenant carries it.
 			at, err := freeSweepInstant(ctx, q, tenantID, name, sweptAt)

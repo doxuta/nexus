@@ -344,7 +344,7 @@ export function routeForChange(change: ChangeForRoute, current: ParsedStudioPath
     case "report":
     case "dashboard":
       return done("dung/bao-cao", here("dung/bao-cao", "dung/bao-cao/:id", "dung/bao-cao/tong-quan/:id"));
-    case "access":
+    case "role":
       return done("dung/nguoi-dung-quyen", here("dung/nguoi-dung-quyen"));
     case "branding":
       return done("dung/thuong-hieu", here("dung/thuong-hieu"));

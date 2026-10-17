@@ -99,8 +99,9 @@ func (r *recorder) Complete(ctx context.Context, req ChatRequest) (ChatResponse,
 // replayer is replay mode: it answers each call with the next exchange of the cassette, strictly in
 // order, without network. A call whose fingerprint differs from the recorded one — another agent,
 // another prompt, another number of steps — fails as ErrGateway (502) with the way to re-record,
-// instead of answering with another turn's exchange; a call past the end fails as ErrGateway too,
-// saying to start again from a fresh stack.
+// instead of answering with another turn's exchange; a call past the end fails as ErrGateway too:
+// "used up, start from a fresh stack" when it is the first call of a second run, "stale" when it is
+// one step more than the recording.
 type replayer struct {
 	path    string
 	mu      sync.Mutex
@@ -132,7 +133,11 @@ func (r *replayer) Complete(_ context.Context, req ChatRequest) (ChatResponse, e
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.next >= len(r.entries) {
-		// Every call matched and the recording ran out: not stale, just a second run on the same stack.
+		// Past the end. A second run on the same stack starts over with the first recorded call; any
+		// other call is one more step than the recording holds, so the code changed: stale.
+		if len(r.entries) == 0 || got.mismatch(r.entries[0].Fingerprint) != "" {
+			return ChatResponse{}, r.stale("call %d is one step more than the cassette holds (the cassette holds %d), and it is not the first call of a new run", r.next+1, len(r.entries))
+		}
 		return ChatResponse{}, fmt.Errorf("ai.replayer.Complete: %w: cassette %s is used up: no exchange left for call %d (the cassette holds %d) — a replayed server answers one run of the recorded steps, so start again from a fresh stack (the one-command demo: docker compose down -v, then up); re-record only if the steps changed (AI_GATEWAY_MODE=record with a live gateway)",
 			ErrGateway, r.path, r.next+1, len(r.entries))
 	}

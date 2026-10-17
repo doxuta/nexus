@@ -12,7 +12,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     "listWorkflows", "createReport", "listReports", "updateReport", "createApp", "replaceAppNav", "appAclBackfill",
     "adminApps", "adminApp", "listEntities", "listFields", "updateField", "deleteField", "deleteEntity",
     "createRecordsBulk", "createSampleRecords", "createApprovalProcess", "createDashboard", "createWorkQueue",
-    "listRoles", "listUserDirectory",
+    "listRoles", "listUserDirectory", "getRole", "updateRolePermissions",
   ];
   return { ...actual, ...Object.fromEntries(fns.map((f) => [f, vi.fn()])) };
 });
@@ -130,6 +130,79 @@ describe("applyProposal — errors", () => {
     const wq = item({ kind: "workqueue", workqueue: { name: "q", label: "Q", entityName: "x", filters: [], roleName: "ghost" } });
     expect((await applyProposal(wq, DEPS)).message).toMatch(/Không tìm thấy vai "ghost"/);
     expect(api.createWorkQueue).not.toHaveBeenCalled();
+  });
+});
+
+// propose_access (issue #2): read the role, add the proposal with the one additive rule, write the whole set back.
+describe("applyProposal — access", () => {
+  const g = (entityName: string, action: "view" | "create" | "edit" | "delete", accessLevel: "all" | "owner" = "all") => ({ entityName, action, accessLevel });
+  const CRM = [g("crm_accounts", "view"), g("crm_accounts", "edit", "owner"), g("crm_accounts", "delete", "owner")];
+  const ADD = [g("tickets", "view"), g("tickets", "create"), g("tickets", "edit", "owner")];
+  // The card's before-image is what the server read when it proposed: the role's grants on the card's tables (+ "*" rows).
+  const card = (before: ReturnType<typeof g>[]) => item({ kind: "access", access: { role: "crm_sales_rep", roleLabel: "Nhân viên kinh doanh", grants: ADD, labels: { tickets: "Phiếu hỗ trợ" } },
+    change: { docType: "role", docKey: "r1", op: "update", label: "Vai", target: { name: "crm_sales_rep", entity: "tickets" },
+      before: { grants: before, labels: { tickets: "Phiếu hỗ trợ" } }, after: { grants: ADD, labels: { tickets: "Phiếu hỗ trợ" } } } });
+  const ACCESS = card([]);
+  beforeEach(() => {
+    vi.mocked(api.listRoles).mockResolvedValue([{ id: "r1", name: "crm_sales_rep", label: "Nhân viên kinh doanh" }]);
+    vi.mocked(api.listEntities).mockResolvedValue([{ name: "crm_accounts" }, { name: "tickets" }] as never);
+    vi.mocked(api.getRole).mockResolvedValue({ id: "r1", name: "crm_sales_rep", label: "Nhân viên kinh doanh", tenantId: "t", actions: CRM });
+    vi.mocked(api.updateRolePermissions).mockResolvedValue({} as never);
+  });
+
+  it("writes the role's grants back with the proposal added: the other tables untouched", async () => {
+    expect(await applyProposal(ACCESS, DEPS)).toMatchObject({ status: "done" });
+    expect(api.updateRolePermissions).toHaveBeenCalledTimes(1);
+    expect(api.updateRolePermissions).toHaveBeenCalledWith("r1", { name: "crm_sales_rep", label: "Nhân viên kinh doanh",
+      actions: [...CRM, g("tickets", "view"), g("tickets", "create"), g("tickets", "edit", "owner")] });
+  });
+
+  it("a role that is gone is an honest error, nothing written", async () => {
+    vi.mocked(api.listRoles).mockResolvedValue([]);
+    expect((await applyProposal(ACCESS, DEPS)).message).toMatch(/Không tìm thấy vai "Nhân viên kinh doanh"/);
+    expect(api.updateRolePermissions).not.toHaveBeenCalled();
+  });
+
+  it("a table not built yet is an error naming it: apply the table first, nothing written", async () => {
+    vi.mocked(api.listEntities).mockResolvedValue([{ name: "crm_accounts" }] as never);
+    expect((await applyProposal(ACCESS, DEPS)).message).toMatch(/Phiếu hỗ trợ/);
+    expect(api.getRole).not.toHaveBeenCalled();
+    expect(api.updateRolePermissions).not.toHaveBeenCalled();
+  });
+
+  it("nothing to add: done, says so, no write", async () => {
+    const all = [g("*", "view"), g("*", "create"), g("*", "edit")];
+    vi.mocked(api.getRole).mockResolvedValue({ id: "r1", name: "crm_sales_rep", tenantId: "t", actions: all });
+    expect(await applyProposal(card(all), DEPS)).toMatchObject({ status: "done", message: expect.stringMatching(/đã có đủ/) });
+    expect(api.updateRolePermissions).not.toHaveBeenCalled();
+  });
+
+  // Verifier round 1, LOW: read-merge-PUT has no concurrency token, so a change made since the proposal would be lost
+  // and its Trước/Sau would lie. The role's grants on the card's tables are compared with the card's before-image first.
+  it("the role changed on the card's tables since the proposal: refused, nothing written", async () => {
+    vi.mocked(api.getRole).mockResolvedValue({ id: "r1", name: "crm_sales_rep", tenantId: "t", actions: [...CRM, g("tickets", "view", "owner")] });
+    const out = await applyProposal(ACCESS, DEPS);
+    expect(out).toMatchObject({ status: "error", message: expect.stringMatching(/đã đổi/) });
+    expect(api.updateRolePermissions).not.toHaveBeenCalled();
+  });
+
+  it("a change on the role's OTHER tables is not the card's business: written, kept", async () => {
+    const moved = [g("crm_accounts", "view"), g("crm_leads", "view")];
+    vi.mocked(api.getRole).mockResolvedValue({ id: "r1", name: "crm_sales_rep", tenantId: "t", actions: moved });
+    expect(await applyProposal(ACCESS, DEPS)).toMatchObject({ status: "done" });
+    expect(vi.mocked(api.updateRolePermissions).mock.calls[0][1].actions).toEqual([...moved, ...ADD]);
+  });
+
+  it("no before-image to compare with: refused (fail closed)", async () => {
+    const bare = item({ kind: "access", access: { role: "crm_sales_rep", grants: ADD, labels: { tickets: "Phiếu hỗ trợ" } } });
+    expect((await applyProposal(bare, DEPS)).status).toBe("error");
+    expect(api.updateRolePermissions).not.toHaveBeenCalled();
+  });
+
+  it("a project switch before the write stops it", async () => {
+    let calls = 0;
+    expect((await applyProposal(ACCESS, { asSample: true, assertScope: () => calls++ < 0 })).status).toBe("warn");
+    expect(api.updateRolePermissions).not.toHaveBeenCalled();
   });
 });
 

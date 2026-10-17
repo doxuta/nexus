@@ -196,9 +196,10 @@ func TestTools_NoTenantParamInSchemas(t *testing.T) {
 	// milestone that adds a tool without bumping this expectation fails here, forcing the author
 	// to confirm the new schema is tenant-free (M5 → 6 tools, M6 → 8 tools, M7 → 9 tools,
 	// M8 → 10 tools, M10 → 11 tools, Apps Phase 3 → 12 tools, EASE Nước 7 edit/delete/records
-	// → 16 tools, AI-MODULES approval/dashboard/workqueue/explain_access/list_packs → 21, +list_roles → 22).
-	if n := len(ToolDefinitions()); n != 25 {
-		t.Fatalf("expected 25 tool definitions (22 -1 list_layouts +get_layout +list_workflows +list_reports +get_app, specs/067 L10-3), got %d — update this invariant scan deliberately", n)
+	// → 16 tools, AI-MODULES approval/dashboard/workqueue/explain_access/list_packs → 21, +list_roles → 22,
+	// specs/067 L10-3 → 25, issue #2 +propose_access → 26).
+	if n := len(ToolDefinitions()); n != 26 {
+		t.Fatalf("expected 26 tool definitions (22 -1 list_layouts +get_layout +list_workflows +list_reports +get_app, specs/067 L10-3, +propose_access), got %d — update this invariant scan deliberately", n)
 	}
 	for _, tool := range ToolDefinitions() {
 		blob, _ := json.Marshal(tool.Function.Parameters)

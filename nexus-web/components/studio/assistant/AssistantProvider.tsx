@@ -14,13 +14,13 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode,
 } from "react";
 import { Sparkles } from "lucide-react";
-import { adminApp, adminApps, aiHealth, listEntities } from "@/lib/api";
+import { adminApp, adminApps, aiHealth, getAiSession, listEntities } from "@/lib/api";
 import { emitDraftsChanged } from "@/lib/draftEvents";
-import { hasDrafts, newTurnId, draftApplyRank, isDestructiveDraft, type AiDraftItem, type ChatTurn } from "@/lib/aiBuilder";
+import { hasDrafts, newTurnId, draftApplyRank, isDestructiveDraft, serverMessagesToTurns, type AiDraftItem, type ChatTurn } from "@/lib/aiBuilder";
 import { applyTracked, cardMode, deliveryOf, planUndo, proposalKey, undoProposal, type Delivery } from "@/lib/aiApply";
-import { saveApplyState, type ApplyState } from "@/lib/aiApplyState";
+import { loadApplyState, saveApplyState, type ApplyState } from "@/lib/aiApplyState";
 import { invalidateAfterApply } from "@/lib/aiInvalidate";
-import { ASSISTANT_OPEN_EVENT, toggleAssistant, useAssistantOpen } from "@/lib/assistantOpen";
+import { ASSISTANT_OPEN_EVENT, setAssistantOpen, toggleAssistant, useAssistantOpen } from "@/lib/assistantOpen";
 import { t } from "@/lib/i18n";
 import { getPreviewToken } from "@/lib/previewSession";
 import { homeSlug, sessionReadable, transitionPhase, useStudioIdentity, workspaceOf } from "@/lib/studioContext";
@@ -33,6 +33,11 @@ type Ask = (entity: string, recordId: string) => void;
 const AskCtx = createContext<Ask | null>(null);
 /** null = no assistant on this page (outside the project frame, or the assistant is off) ⇒ callers must not draw the button. */
 export const useAskAssistant = (): Ask | null => useContext(AskCtx);
+
+type OpenThread = (sessionId: string) => Promise<void>;
+const OpenCtx = createContext<OpenThread | null>(null);
+/** Opens a saved conversation in the panel (an MCP agent's thread: issue #3); null where no panel mounts. Rejects when it cannot be read. */
+export const useOpenThread = (): OpenThread | null => useContext(OpenCtx);
 
 export type Attention = "working" | "proposal" | null;
 
@@ -208,6 +213,16 @@ export function AssistantProvider({ slug, projectName, route, params, panel, chi
 
   const newChat = useCallback(() => { chat.reset(); setApplyMap({}); }, [chat]);
 
+  // A saved conversation as a resumed session: its turns and cards, and what this browser already applied of it.
+  const openThread = useCallback<OpenThread>(async (id) => {
+    const s = await getAiSession(id);
+    chat.reset();
+    chat.setTurns(serverMessagesToTurns(s.messages));
+    chat.setActiveSession(s.id);
+    setApplyMap(loadApplyState(slug, s.id));
+    setAssistantOpen(true);
+  }, [chat, slug]);
+
   // ── the dot on the header button while the panel is closed ──
   const open = useAssistantOpen();
   const proposalTurns = turns.filter((x) => x.role === "assistant" && hasDrafts(x.draft)).length;
@@ -224,15 +239,17 @@ export function AssistantProvider({ slug, projectName, route, params, panel, chi
   return (
     <AssistantCtx.Provider value={value}>
       <AskCtx.Provider value={eligible && !off && route?.aiPanel ? ask : null}>
-        {eligible && (
-          <div className="slds-grid slds-grid_align-end slds-m-bottom_x-small">
-            <AssistantToggle attention={attention} open={open} />
+        <OpenCtx.Provider value={eligible ? openThread : null}>
+          {eligible && (
+            <div className="slds-grid slds-grid_align-end slds-m-bottom_x-small">
+              <AssistantToggle attention={attention} open={open} />
+            </div>
+          )}
+          <div className="flex flex-col lg:flex-row">
+            <div className="min-w-0 flex-1">{children}</div>
+            {eligible && panel}
           </div>
-        )}
-        <div className="flex flex-col lg:flex-row">
-          <div className="min-w-0 flex-1">{children}</div>
-          {eligible && panel}
-        </div>
+        </OpenCtx.Provider>
       </AskCtx.Provider>
     </AssistantCtx.Provider>
   );

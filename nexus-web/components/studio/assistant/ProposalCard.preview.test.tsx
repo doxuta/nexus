@@ -19,6 +19,13 @@ const ENTITY: AiDraftItem = {
   entity: { name: "bn", label: "Bệnh nhân", appName: "Phòng khám", fields: [{ name: "ten", label: "Tên", fieldType: "text" }] },
   change: { docType: "entity", op: "create", label: "Bệnh nhân", target: { entity: "bn" } },
 };
+const ACCESS: AiDraftItem = {
+  kind: "access",
+  access: { role: "crm_sales_rep", roleLabel: "Nhân viên kinh doanh", labels: { tickets: "Phiếu hỗ trợ" },
+    grants: [{ entityName: "tickets", action: "view", accessLevel: "all" }, { entityName: "tickets", action: "edit", accessLevel: "owner" }] },
+  change: { docType: "role", docKey: "3f2b8a10-5c1d-4e2f-9a7b-0c1d2e3f4a5b", op: "update", label: "Vai “Nhân viên kinh doanh”", target: { name: "crm_sales_rep", entity: "tickets" },
+    before: { grants: [], labels: { tickets: "Phiếu hỗ trợ" } }, after: { grants: [], labels: { tickets: "Phiếu hỗ trợ" } } },
+};
 const link = (id: string) => `/studio/${id}`;
 const mount = (item: AiDraftItem, painted: { docType: string; op: "create" | "update" | "delete" }[], state?: { status: "done" }) =>
   render(
@@ -64,5 +71,18 @@ describe("ProposalCard preview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Xem trước" }));
     fireEvent.click(screen.getByRole("button", { name: "Bỏ" }));
     expect(screen.queryByText(/Đang tô sáng/)).toBeNull();
+  });
+
+  // issue #2: the access card, in the real PAINTED table, previews on Người dùng & quyền.
+  it("an access card says it in words and previews on the access matrix", () => {
+    render(
+      <ProposalOverlayProvider slug="demo">
+        <ProposalCard item={ACCESS} asSample onAsSampleChange={() => {}} onApply={() => {}} onDiscard={() => {}} link={link} proposalKey="t:2" />
+      </ProposalOverlayProvider>,
+    );
+    expect(screen.getByRole("heading", { name: "Nhân viên kinh doanh được xem tất cả · sửa của mình trên Phiếu hỗ trợ" })).toBeInTheDocument();
+    expect(screen.getByText("Phiếu hỗ trợ: sửa của mình")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Xem trước" }));
+    expect(push).toHaveBeenCalledWith("/studio/du-an/demo/dung/nguoi-dung-quyen", { scroll: false });
   });
 });

@@ -475,6 +475,51 @@ export async function revokeApiKey(id: string): Promise<void> {
 }
 
 // ──────────────────────────────────────────────
+// MCP — connect an outside agent (issue #3)
+// BE contract (nexus-platform/internal/handlers/admin_mcp_token_handler.go, builderGated):
+//   GET    /admin/mcp-tokens     → { data: { tokens } } — the caller's live tokens, never a secret/hash.
+//   POST   /admin/mcp-tokens     → 201 { data: { token, secret: "nxm_..." } } — secret here ONLY; at most 8 h.
+//   DELETE /admin/mcp-tokens/:id → 204, idempotent; 404 MCP_TOKEN_NOT_FOUND for someone else's.
+// The token works on /mcp only; the agent's proposals land in token.sessionId, the caller's assistant thread.
+// ──────────────────────────────────────────────
+
+export interface McpToken {
+  id: string;
+  /** The assistant thread the agent's proposals land in (GET /admin/ai/builder/sessions/:id). */
+  sessionId: string;
+  /** Public start of the token, shown as `nxm_<prefix>…`; not a secret. */
+  tokenPrefix: string;
+  expiresAt: string;
+  lastUsedAt?: string;
+  createdAt: string;
+}
+
+export async function listMcpTokens(): Promise<McpToken[]> {
+  const r = await adminReq<{ data: { tokens: McpToken[] } }>("GET", "/admin/mcp-tokens");
+  return r.data?.tokens ?? [];
+}
+
+/** The secret is in this answer only: call with a plain await, never a useMutation. */
+export async function createMcpToken(): Promise<{ token: McpToken; secret: string }> {
+  const r = await adminReq<{ data: { token: McpToken; secret: string } }>("POST", "/admin/mcp-tokens", {});
+  return r.data;
+}
+
+export async function revokeMcpToken(id: string): Promise<void> {
+  await adminReq<unknown>("DELETE", `/admin/mcp-tokens/${encodeURIComponent(id)}`);
+}
+
+/** Where an agent connects: the API's origin + /mcp (the one-command demo serves both on one origin). */
+export function mcpEndpoint(): string {
+  return `${new URL(BASE, window.location.origin).origin}/mcp`;
+}
+
+/** The exact Claude Code line that connects this workspace's MCP endpoint with `secret`. */
+export function claudeMcpAddCommand(secret: string, endpoint = mcpEndpoint()): string {
+  return `claude mcp add --transport http nexus ${endpoint} --header "Authorization: Bearer ${secret}"`;
+}
+
+// ──────────────────────────────────────────────
 // KHO KHOÁ KẾT NỐI — named credentials (specs/050 S8a)
 // BE contract (nexus-platform/internal/handlers/admin_credential_handler.go, adminGated):
 //   GET    /admin/credentials      → { data: { credentials } } — KHÔNG BAO GIỜ secret/envelope.
