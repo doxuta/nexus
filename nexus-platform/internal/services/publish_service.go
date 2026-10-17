@@ -397,7 +397,10 @@ func (s *PublishService) Baseline(ctx context.Context, tenantID, note string) (*
 	covered, _ := json.Marshal(types)
 	v := &metaversion.Version{TenantID: tenantID, Seq: seq, VersionNo: &no, Kind: metaversion.KindBaseline, Note: note, CoveredTypes: covered,
 		CreatedBy: caller.UserID, CreatedByLabel: s.versions.ActorLabel(ctx, tx, caller.HomeTenantID, caller.UserID)}
-	cutoff := time.Now().UTC().Truncate(time.Second)
+	cutoff, err := s.releaseCutoff(ctx, tx, tenantID, nil) // it releases every definition there is
+	if err != nil {
+		return nil, s.fail("Baseline", err)
+	}
 	v.SchemaCutoffAt = &cutoff
 	v.ID = uuid.NewString() // the snapshot docs hang from it; the row itself goes in once the count is known (append-only)
 	count, err := s.snapshotTypes(ctx, tx, types, tenantID, v, caller.UserID)
@@ -468,13 +471,7 @@ func (s *PublishService) Publish(ctx context.Context, tenantID string, req Publi
 	}
 	_, hidden := splitHidden(pending)
 	// Same snapshot as the pending read: everything the new cutoff will uncover, listed or folded into a listed row.
-	var born []bornRow
-	if headCut != nil {
-		if born, err = schemaRowsBetween(ctx, tx, tenantID, *headCut, nil); err != nil {
-			return nil, s.fail("Publish", err)
-		}
-	}
-	cutoff, err := s.releaseCutoff(ctx, tenantID, born, headCut)
+	cutoff, err := s.releaseCutoff(ctx, tx, tenantID, headCut)
 	if err != nil {
 		return nil, s.fail("Publish", err)
 	}

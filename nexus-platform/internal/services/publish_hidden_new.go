@@ -108,8 +108,8 @@ func schemaRowsBetween(ctx context.Context, q sqlx.QueryerContext, tenantID stri
 }
 
 // releasedBy keeps the hidden-new rows the cutoff actually uncovers. A row stamped after it (the inserting
-// process's clock runs ahead of the publisher's, releaseCutoff clamps to now) stays hidden and pending, so it is
-// not recorded as released.
+// process's clock runs ahead of the publisher's, releaseCutoff does not wait for it) stays hidden and pending, so
+// it is not recorded as released.
 func releasedBy(hidden []metaversion.DraftRow, cutoff time.Time) []metaversion.DraftRow {
 	out := make([]metaversion.DraftRow, 0, len(hidden))
 	for _, r := range hidden {
@@ -193,40 +193,40 @@ func splitHidden(rows []metaversion.DraftRow) (drafts, hidden []metaversion.Draf
 	return drafts, hidden
 }
 
-// releaseCutoff is the schema cutoff a publish writes: the newest of ALL the definitions it read as born after
-// the head (schemaRowsBetween — listed or folded into a listed row, so it releases what the builder was shown
-// and everything that hangs from it), never later than now; the head's own when nothing new was read. The
-// publish reads a REPEATABLE READ snapshot and AddField / CreateEntity / RegisterRelationship do not take the
-// tenant lock, so a definition committed after that snapshot with a created_at at or before the cutoff would go
-// out unseen: once the cutoff's second is over, re-read the window on the pool (latest committed rows) and
-// refuse DRAFTS_CHANGED when it differs from what the publish read.
+// releaseCutoff is the schema cutoff a version writes, read on its tx q: the second of the newest of ALL the
+// definitions it read as born after the head (schemaRowsBetween — listed or folded into a listed row, so it
+// releases what the builder was shown and everything that hangs from it); the head's own when it read none.
+// Never the clock (#19): the cutoff's own second counts as released, so a cutoff naming the running second
+// released a table born later in it that no version read. The version reads a REPEATABLE READ snapshot and
+// AddField / CreateEntity / RegisterRelationship do not take the tenant lock, so while that second still runs,
+// wait it out, then re-read the window on the pool (latest committed rows) and refuse DRAFTS_CHANGED when it
+// differs from what the version read. A row stamped further ahead (another process's clock) is not waited for
+// past a second: it stays hidden and pending. head nil (the baseline, or a head written before cutoffs) hid
+// nothing: every live definition is released, and a tenant with none gets the last second that is over.
 // ponytail: an INSERT still uncommitted at the re-read, stamped at or before the cutoff, can slip through;
 // closing that needs the schema writers to take the tenant lock FOR SHARE. The wait (≤ 1 s) runs under the
 // tenant lock, which also holds back that tenant's draft saves for that second.
-func (s *PublishService) releaseCutoff(ctx context.Context, tenantID string, born []bornRow, head *time.Time) (time.Time, error) {
-	now := time.Now().UTC().Truncate(time.Second)
-	if head == nil {
-		return now, nil // legacy head without a cutoff: nothing is hidden, nothing to release
+func (s *PublishService) releaseCutoff(ctx context.Context, q sqlx.QueryerContext, tenantID string, head *time.Time) (time.Time, error) {
+	after := time.Unix(0, 0).UTC() // before every TIMESTAMP: with no head cutoff, all is born after it
+	if head != nil {
+		after = head.UTC().Truncate(time.Second)
 	}
-	cut := head.UTC().Truncate(time.Second)
-	for _, r := range born {
-		if c := r.CreatedAt.UTC().Truncate(time.Second); c.After(cut) {
-			cut = c
+	born, err := schemaRowsBetween(ctx, q, tenantID, after, nil)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if wait := time.Until(newestBorn(born, after, nil).Add(time.Second)); len(born) > 0 && wait > 0 { // a sibling may still be born in that second
+		time.Sleep(min(wait, time.Second)) // never longer: a row stamped further ahead stays pending
+	}
+	last := time.Now().UTC().Truncate(time.Second).Add(-time.Second) // the newest second that is over
+	cut := newestBorn(born, after, &last)
+	if !cut.After(after) {
+		if head == nil {
+			return last, nil
 		}
+		return after, nil
 	}
-	if !cut.After(*head) {
-		return cut, nil
-	}
-	if wait := time.Until(cut.Add(time.Second)); wait > 0 { // a sibling may still be born in the cutoff's own second
-		if wait > time.Second {
-			wait = time.Second // clock skew between the DB and this process: never stall a publish longer
-		}
-		time.Sleep(wait)
-	}
-	if now = time.Now().UTC().Truncate(time.Second); cut.After(now) {
-		cut = now
-	}
-	fresh, err := schemaRowsBetween(ctx, s.db, tenantID, *head, &cut)
+	fresh, err := schemaRowsBetween(ctx, s.db, tenantID, after, &cut)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -234,6 +234,17 @@ func (s *PublishService) releaseCutoff(ctx context.Context, tenantID string, bor
 		return time.Time{}, &ValidationError{Code: "DRAFTS_CHANGED", Msg: "Bản nháp đã đổi, đã tải lại danh sách"}
 	}
 	return cut, nil
+}
+
+// newestBorn is the second of the newest row stamped after `after` (and not after upTo, when set); `after` if none is.
+func newestBorn(rows []bornRow, after time.Time, upTo *time.Time) time.Time {
+	cut := after
+	for _, r := range rows {
+		if c := r.CreatedAt.UTC().Truncate(time.Second); c.After(cut) && (upTo == nil || !c.After(*upTo)) {
+			cut = c
+		}
+	}
+	return cut
 }
 
 // bornKeys is the sorted "type/id" set of the rows born at or before cut.

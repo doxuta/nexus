@@ -694,12 +694,16 @@ func (s *PublishService) Rollback(ctx context.Context, tenantID, id string, req 
 	if len(p.Changes) == 0 && len(p.View.Rehides) == 0 {
 		return nil, invalid("NOTHING_TO_PUBLISH", "Bản đang chạy đã giống phiên bản này")
 	}
-	cutoff := time.Now().UTC().Truncate(time.Second)
-	switch { // a legacy version without a cutoff hides nothing: fall back to the head's, then to now
+	var cutoff time.Time
+	switch { // a legacy version without a cutoff hides nothing: fall back to the head's, then to a fresh one
 	case target.SchemaCutoffAt != nil:
 		cutoff = *target.SchemaCutoffAt
 	case head.SchemaCutoffAt != nil:
 		cutoff = *head.SchemaCutoffAt
+	default:
+		if cutoff, err = s.releaseCutoff(ctx, tx, tenantID, nil); err != nil {
+			return nil, s.fail("Rollback", err)
+		}
 	}
 	of := *target.VersionNo
 	out, err := s.commitChanges(ctx, tx, tenantID, p.Changes, commitOpts{Caller: caller, Kind: metaversion.KindRollback, Note: req.Note, RollbackOf: &of, Cutoff: cutoff})

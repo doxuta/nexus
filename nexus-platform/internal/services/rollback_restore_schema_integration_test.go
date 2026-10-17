@@ -279,7 +279,7 @@ func TestFreeSweepInstant_SkipsASecondTheBinAlreadyUses_Integration(t *testing.T
 	}
 }
 
-// T135: a live table that took the name meanwhile refuses the rollback, and so does a unique value two
+// T135: a published table that took the name meanwhile refuses the rollback, and so does a unique value two
 // live records now share; in both cases nothing is half-restored.
 func TestRollbackRestoreTableRefusals_Integration(t *testing.T) {
 	t.Run("name taken", func(t *testing.T) {
@@ -289,9 +289,15 @@ func TestRollbackRestoreTableRefusals_Integration(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-		r.createDeals(t, r.tenant) // a new, live hk_deals
-		versions := r.versionCount(t, r.tenant)
+		r.createDeals(t, r.tenant) // a new, live hk_deals: born after the last publish, so pending (#19)
 		_, _, err := r.rollbackTo(t, 1, res.VersionNo)
+		wantRollbackCode(t, err, "DRAFTS_PENDING")
+		pub, err := r.publishWithCurrentHash(r.bctx, r.tenant, false)
+		if err != nil {
+			t.Fatalf("Publish of the new table: %v", err)
+		}
+		versions := r.versionCount(t, r.tenant)
+		_, _, err = r.rollbackTo(t, 1, pub.VersionNo)
 		wantRollbackCode(t, err, "ROLLBACK_NAME_TAKEN")
 		if r.liveRows(t, r.tenant) != 0 || r.versionCount(t, r.tenant) != versions {
 			t.Errorf("a refused rollback changed something: live rows=%d versions=%d (was %d)", r.liveRows(t, r.tenant), r.versionCount(t, r.tenant), versions)
