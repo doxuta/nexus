@@ -373,6 +373,7 @@ function transcript(file) {
     calls: lines.length,
     sentBytes: lines.reduce((n, e) => n + Buffer.byteLength(JSON.stringify(e.request)), 0),
     tools: lines.flatMap((e) => (e.response?.choices?.[0]?.message?.tool_calls ?? []).map((c) => c.function?.name)),
+    stops: lines.map((e) => e.response?.choices?.[0]?.finish_reason ?? ""), // "refusal" leaves the panel with no text
   };
 }
 const KEY = process.env.AI_GATEWAY_API_KEY ?? "";

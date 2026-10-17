@@ -50,6 +50,9 @@ type benchObs struct {
 	Reply   string `json:"reply"`
 	// Draft is the turn's proposals as the session holds them (GET /admin/ai/builder/sessions/:id).
 	Draft json.RawMessage `json:"draft"`
+	// SessionID is the conversation the server stored. It stores a turn only once the turn completed, so it is
+	// the proof of an answer even when the answer has no text (a model that stops with finish_reason "refusal").
+	SessionID string `json:"sessionId,omitempty"`
 	// TurnError is the error the assistant panel showed instead of an answer (timeout, gateway error…).
 	TurnError string        `json:"turnError,omitempty"`
 	Cards     []benchCard   `json:"cards,omitempty"`
@@ -113,19 +116,21 @@ var stageNames = [5]string{"kinds", "apply", "publish", "rep", "smoke"}
 type benchGrade struct {
 	Stages    [5]stage
 	Pass      bool
-	Tokens    int
+	Tokens    int // prompt + output, as the gateway reported them
+	Output    int // output tokens alone
 	LatencyMS int
 }
 
-// gradeBench scores one attempt. An adversarial case is judged on its answer alone: a reply with no
+// gradeBench scores one attempt. An adversarial case is judged on its answer alone: a completed turn with no
 // draft. A turn that failed, or a driver that never got an answer, is not a refusal.
 func gradeBench(c benchCase, o benchObs) benchGrade {
 	var g benchGrade
 	for _, r := range o.Runs {
 		g.Tokens += r.PromptTokens + r.OutputTokens
+		g.Output += r.OutputTokens
 		g.LatencyMS += r.LatencyMS
 	}
-	answered := strings.TrimSpace(o.Reply) != "" || len(draftItems(o.Draft)) > 0
+	answered := o.SessionID != "" || strings.TrimSpace(o.Reply) != "" || len(draftItems(o.Draft)) > 0
 	k := stage{Ran: true}
 	switch {
 	case o.TurnError != "":
@@ -133,7 +138,7 @@ func gradeBench(c benchCase, o benchObs) benchGrade {
 	case !answered && o.Error != "":
 		k.Why = "no answer: " + trim(o.Error, 160)
 	case !answered:
-		k.Why = "no answer: the session holds no reply"
+		k.Why = "no answer: the server stored no turn"
 	default:
 		k.Pass, k.Why = gradeKinds(c.goldenCase, o.Draft, o.Reply)
 	}
@@ -401,8 +406,9 @@ func loadBenchObs(dir string) ([]benchObs, error) {
 	return all, nil
 }
 
-// writeBenchReport prints the report's tables: per model, the pass rates and the cost; then every
-// attempt with its five stages and, for a failure, the first failing stage's reason.
+// writeBenchReport prints the report's tables: per model, the pass rates and what they cost; then every attempt with
+// its five stages and, for a failure, the first failing stage's reason. "Per successful app" divides everything the
+// model spent on the non-adversarial attempts by those of them that passed all five stages.
 func writeBenchReport(w io.Writer, cases []benchCase, obs []benchObs) {
 	byID := map[string]benchCase{}
 	for _, c := range cases {
@@ -422,13 +428,16 @@ func writeBenchReport(w io.Writer, cases []benchCase, obs []benchObs) {
 	}
 	sort.Strings(models)
 
-	fmt.Fprintln(w, "| model | cases | attempts | pass@1 | pass@3 | kinds | apply | publish | rep | smoke | tokens, all attempts | tokens per successful app |")
-	fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|---|---|---|---|")
+	type cost struct{ n, tokens, output, calls, kb, ms, appTokens, appOutput, apps int }
+	costs := map[string]*cost{}
+	fmt.Fprintln(w, "| model | cases | attempts | pass@1 | pass@3 | kinds | apply | publish | rep | smoke |")
+	fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|---|---|")
 	for _, m := range models {
-		var n, p1n, p3n int
+		k := &cost{}
+		costs[m] = k
+		var p1n, p3n int
 		var p1, p3 float64
 		var stagePass, stageRan [5]int
-		var tokens, appTokens, apps int
 		for _, c := range cases {
 			list := attempts[m][c.ID]
 			if len(list) == 0 {
@@ -437,15 +446,20 @@ func writeBenchReport(w io.Writer, cases []benchCase, obs []benchObs) {
 			passed := 0
 			for _, o := range list {
 				g := gradeBench(c, o)
-				n++
-				tokens += g.Tokens
+				k.n++
+				k.tokens += g.Tokens
+				k.output += g.Output
+				k.calls += o.Calls
+				k.kb += o.SentBytes / 1024
+				k.ms += g.LatencyMS
 				if g.Pass {
 					passed++
 				}
 				if !c.ExpectNoDraft {
-					appTokens += g.Tokens
+					k.appTokens += g.Tokens
+					k.appOutput += g.Output
 					if g.Pass {
-						apps++
+						k.apps++
 					}
 				}
 				for i, s := range g.Stages {
@@ -468,16 +482,24 @@ func writeBenchReport(w io.Writer, cases []benchCase, obs []benchObs) {
 		if p3n > 0 {
 			at3 = fmt.Sprintf("%.2f (%d cases)", p3/float64(p3n), p3n)
 		}
-		perApp := "—"
-		if apps > 0 {
-			perApp = fmt.Sprintf("%s (%d apps)", thousands(appTokens/apps), apps)
-		}
 		var st []string
 		for i := range stagePass {
 			st = append(st, fmt.Sprintf("%d/%d", stagePass[i], stageRan[i]))
 		}
-		fmt.Fprintf(w, "| %s | %d | %d | %.2f | %s | %s | %s | %s |\n", m, p1n, n, p1/float64(p1n), at3,
-			strings.Join(st, " | "), thousands(tokens), perApp)
+		fmt.Fprintf(w, "| %s | %d | %d | %.2f | %s | %s |\n", m, p1n, k.n, p1/float64(p1n), at3, strings.Join(st, " | "))
+	}
+
+	fmt.Fprintln(w, "\n| model | tokens, all attempts | of which output | model calls | KB sent | mean turn | tokens per successful app | output tokens per successful app |")
+	fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|")
+	for _, m := range models {
+		k := costs[m]
+		perApp, outApp := "—", "—"
+		if k.apps > 0 {
+			perApp = fmt.Sprintf("%s (%d apps)", thousands(k.appTokens/k.apps), k.apps)
+			outApp = thousands(k.appOutput / k.apps)
+		}
+		fmt.Fprintf(w, "| %s | %s | %s | %d | %s | %.0f s | %s | %s |\n", m, thousands(k.tokens), thousands(k.output), k.calls,
+			thousands(k.kb), float64(k.ms)/1000/float64(k.n), perApp, outApp)
 	}
 
 	for _, m := range models {
