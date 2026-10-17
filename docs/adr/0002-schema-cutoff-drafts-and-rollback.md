@@ -1,8 +1,9 @@
 # 0002. Drafts, a schema cutoff, and a rollback that re-hides
 
 - **Status:** Accepted
-- **Recorded:** 2026-10-17, after the fact. Citations are pinned to `d300dfc`, main after #20 (MCP) and #21 (access).
-- **Paths:** `internal/` and `cmd/` are under `nexus-platform/`. Every link is pinned to the commit.
+- **Recorded:** 2026-10-17, after the fact. Citations are pinned to `d300dfc`, main after #20 (MCP) and #21 (access);
+  those that "The second-precision edge" gained with [#19] to `164ce69`.
+- **Paths:** `internal/` and `cmd/` are under `nexus-platform/`. Every link is pinned to a commit named above.
 
 ## Context
 
@@ -77,13 +78,21 @@ Rollback is refused while anything is pending, or when the head or the plan move
 
 `created_at` and the cutoff are floored to the second ([`internal/metadata/metadata.go:149-155`],
 [`internal/services/draft_gate_cutoff.go:31-55`]), and the cutoff's own second counts as released
-([`internal/services/schema_visibility.go:18-27`]): a definition created later in that second would count as
-published. A publish that releases something waits the second out and re-reads, refusing `DRAFTS_CHANGED` if the set
-moved ([`internal/services/publish_hidden_new.go:196-237`]). Open: an insert still uncommitted at the re-read slips
-through, and the wait holds the tenant lock ([#13]); the baseline takes the current second with no wait
-([`internal/services/publish_service.go:400`]), and a rollback to it reuses that second
-([`internal/services/publish_rollback.go:697-703`]). [#19] records a rollback test that passes only when its new table
-is stamped in the cutoff's second, that is, when a publish that never saw the table counts it as released.
+([`internal/services/schema_visibility.go:18-27`]). So a cutoff never names a second the version did not read in full.
+Every version, the baseline included, names the second of the newest definition it read, or keeps the head's cutoff
+when it read none (a tenant with no definition at all gets the last second that is over). While that second still
+runs, the version waits it out and re-reads, refusing `DRAFTS_CHANGED` if the set moved; a definition stamped ahead of
+its clock is not waited for past a second, and stays hidden and pending
+([`internal/services/publish_hidden_new.go:209-248`], [`internal/services/publish_service.go:400-403`]). A rollback
+writes its target's cutoff, a second the target read in full ([`internal/services/publish_rollback.go:697-707`]).
+Until [#19] the baseline, and a publish whose newest definition was stamped ahead of its clock, named the running
+second: a table born later in it reached the customer with no publish, was never pending, and stayed visible after a
+rollback to the baseline. The rollback test that relied on it now gets `DRAFTS_PENDING` for such a table, and
+`ROLLBACK_NAME_TAKEN` once it is published ([`internal/services/rollback_restore_schema_integration_test.go:285-305`]);
+one test stamps such a table in the version's own second for the baseline, a publish and a rollback
+([`internal/services/publish_cutoff_second_integration_test.go:103-175`]). Open ([#13]): an insert still uncommitted at
+the re-read slips through, and the wait (at most a second) holds the tenant lock, now in a baseline too when its newest
+definition was born in the running second.
 
 ## Consequences
 
@@ -119,8 +128,10 @@ path, and the history only grows.
   rows cannot be snapshotted, while the customer's read path pays no query for drafts today
   ([`internal/services/draft_gate.go:86-96`]). It lost.
 - **Rollback deletes what a later publish created.** It destroys rows customers wrote. It lost to re-hiding.
-- **Sub-second timestamps.** They would shrink the edge, at the price of a migration and every comparison. Open until
-  [#19] names the root cause.
+- **Sub-second timestamps, or a monotonic id.** Either needs a migration and changes every comparison, and neither is
+  exact on its own: a cutoff read from the clock still covers an insert the version never read, and an id is allotted
+  at insert, not at commit. A cutoff taken from the definitions read is exact at second precision, but for the
+  uncommitted insert above, with no migration ([#19]). They lost.
 
 <!-- Links below are generated; each code link points at the commit named under Recorded. -->
 
@@ -160,9 +171,11 @@ path, and the history only grows.
 [`internal/services/publish_rollback.go:457-462`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/publish_rollback.go#L457-L462
 [`internal/services/draft_gate_cutoff.go:31-55`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/draft_gate_cutoff.go#L31-L55
 [`internal/services/schema_visibility.go:18-27`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/schema_visibility.go#L18-L27
-[`internal/services/publish_hidden_new.go:196-237`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/publish_hidden_new.go#L196-L237
-[`internal/services/publish_service.go:400`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/publish_service.go#L400
-[`internal/services/publish_rollback.go:697-703`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/publish_rollback.go#L697-L703
+[`internal/services/publish_hidden_new.go:209-248`]: https://github.com/doxuta/nexus/blob/164ce69212f68c138142d6ed111ec7e40094cbd2/nexus-platform/internal/services/publish_hidden_new.go#L209-L248
+[`internal/services/publish_service.go:400-403`]: https://github.com/doxuta/nexus/blob/164ce69212f68c138142d6ed111ec7e40094cbd2/nexus-platform/internal/services/publish_service.go#L400-L403
+[`internal/services/publish_rollback.go:697-707`]: https://github.com/doxuta/nexus/blob/164ce69212f68c138142d6ed111ec7e40094cbd2/nexus-platform/internal/services/publish_rollback.go#L697-L707
+[`internal/services/rollback_restore_schema_integration_test.go:285-305`]: https://github.com/doxuta/nexus/blob/164ce69212f68c138142d6ed111ec7e40094cbd2/nexus-platform/internal/services/rollback_restore_schema_integration_test.go#L285-L305
+[`internal/services/publish_cutoff_second_integration_test.go:103-175`]: https://github.com/doxuta/nexus/blob/164ce69212f68c138142d6ed111ec7e40094cbd2/nexus-platform/internal/services/publish_cutoff_second_integration_test.go#L103-L175
 [`internal/services/relation_service.go:264-295`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/relation_service.go#L264-L295
 [`internal/services/relation_service.go:481-505`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/relation_service.go#L481-L505
 [`internal/services/record_expand_label.go:69-74`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/record_expand_label.go#L69-L74
