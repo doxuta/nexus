@@ -26,12 +26,12 @@ test: ## Run all tests
 # when unset and appends clientFoundRows=true, the matched-rows semantics production runs
 # under — specs/057-found-rows-dsn). Suites SKIP, not fail, when MySQL or the migrate CLI
 # is missing, so a bare `go test` printed `ok` on a dead database. Run through the wrapper: any `--- SKIP` or
-# zero `--- PASS` exits non-zero (#160). -timeout 25m matches CI: under parallel-worktree load
+# zero `--- PASS` exits non-zero (#160). -timeout 50m matches CI (ci.yml): under parallel-worktree load
 # handlers (919s) and services (836s) both ran past Go's 10m per-package default (2026-09-30).
 # CI (ci.yml, job integration) runs the same wrapper (#244), so a dead MySQL service or a missing
 # migrate CLI turns the job red instead of an all-SKIP green.
 test-integration: ## Run integration tests (-tags=integration -race; SKIP = fail; needs MySQL up + migrated)
-	bash scripts/run-integration.sh -race -timeout 25m ./...
+	bash scripts/run-integration.sh -race -timeout 50m ./...
 
 vet: ## Static analysis
 	go vet ./...

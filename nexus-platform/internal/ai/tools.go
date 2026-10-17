@@ -101,7 +101,7 @@ type DraftField struct {
 	Required  bool           `json:"required"`
 }
 
-// ToolDefinitions returns the 21 function tools advertised to the model on every completion (spec
+// ToolDefinitions returns the function tools advertised to the model on every completion (spec
 // §4; M5 adds list_relationships + propose_relationship, M6 adds propose_layout (+ get_layout/list_workflows/list_reports/get_app, specs/067),
 // M7 adds propose_workflow, M8 adds propose_report, M10 adds snapshot_model, Apps Phase 3 adds
 // propose_app, EASE Nước 7 adds propose_edit_field + propose_delete_field + propose_delete_entity

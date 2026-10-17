@@ -420,7 +420,7 @@ func main() {
 	// specs/063-draft-publish: the admin workflow service gets the DRAFT-AWARE repo. The engine's loader
 	// (workflowCache above), the scheduler, the timer and webhook handlers keep the raw workflowRepo, so a
 	// draft is never executed by construction (FR-016) and the customer's hot path gains no query.
-	metaRegistry := metaversion.NewRegistry(services.NewLayoutDocAdapter(), services.NewWorkflowDocAdapter(), services.NewReportDocAdapter(), services.NewDashboardDocAdapter(), services.NewBrandingDocAdapter(), services.NewAppDocAdapter(), services.NewFieldDocAdapter(), services.NewEntityDocAdapter())
+	metaRegistry := services.NewMetaRegistry()
 	draftRepo := metaversion.NewDraftRepo(sqlxDB, metaRegistry)
 	versionRepo := metaversion.NewVersionRepo(sqlxDB)
 	draftGate := services.NewDraftGate(versionRepo)

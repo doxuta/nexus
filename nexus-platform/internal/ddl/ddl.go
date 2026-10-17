@@ -89,9 +89,8 @@ var reservedWords = map[string]struct{}{
 	"admin": {}, "metadata": {}, "health": {}, "auth": {}, "api": {},
 }
 
-// SanitizeIdentifier normalizes an entity/field name to lowercase and validates it
-// against the allowlist. It returns the normalized identifier or an error explaining
-// the rejection. A name that fails here must never reach a DDL statement.
+// SanitizeIdentifier validates an entity/field name as given (it never lowercases) against
+// the allowlist. It returns the identifier or an error explaining the rejection. A name that fails here must never reach a DDL statement.
 func SanitizeIdentifier(name string) (string, error) {
 	if strings.TrimSpace(name) != name {
 		// Reject surrounding whitespace rather than silently trimming, so callers are
