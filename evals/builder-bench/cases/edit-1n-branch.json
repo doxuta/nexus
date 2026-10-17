@@ -1,0 +1,20 @@
+{
+  "id": "edit-1n-branch",
+  "group": "edit",
+  "lang": "vi",
+  "prompt": "Tạo bảng Chi nhánh (tên chi nhánh, địa chỉ) và nối crm_accounts vào Chi nhánh theo kiểu mỗi khách hàng thuộc một chi nhánh. Nhân viên kinh doanh được xem chi nhánh.",
+  "expectAllKinds": [
+    "entity",
+    "field",
+    "access"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "@new",
+    "crm_accounts"
+  ],
+  "note": "golden.json replay-inverse-taken: 1-N is a relation field on the child, plus who reads the new table."
+}

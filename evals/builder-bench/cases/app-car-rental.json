@@ -1,0 +1,19 @@
+{
+  "id": "app-car-rental",
+  "group": "app",
+  "lang": "vi",
+  "prompt": "Dựng app quản lý cho thuê xe: entity Xe (biển số, hãng, trạng thái), entity Hợp đồng thuê (xe, ngày bắt đầu, ngày trả, giá thuê tiền tệ VND), gói thành app Cho thuê xe. Nhân viên kinh doanh được xem cả hai bảng, tạo và sửa hợp đồng thuê của mình.",
+  "expectAllKinds": [
+    "entity",
+    "app",
+    "access"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "@new"
+  ],
+  "note": "golden.json demo-app-batch, plus who uses it."
+}

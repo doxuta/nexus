@@ -1,0 +1,18 @@
+{
+  "id": "app-event-signups",
+  "group": "app",
+  "lang": "vi",
+  "prompt": "Tạo app Đăng ký sự kiện: bảng Sự kiện (tên sự kiện, thời gian, địa điểm, số chỗ) và bảng Lượt đăng ký (sự kiện, họ tên khách, email, số điện thoại, trạng thái: đã đăng ký / đã đến / đã huỷ), gom vào một app. Nhân viên kinh doanh được xem và tạo dữ liệu trong cả hai bảng.",
+  "expectAllKinds": [
+    "entity",
+    "app",
+    "access"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "@new"
+  ]
+}

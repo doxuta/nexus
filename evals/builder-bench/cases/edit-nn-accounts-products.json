@@ -1,0 +1,18 @@
+{
+  "id": "edit-nn-accounts-products",
+  "group": "edit",
+  "lang": "en",
+  "prompt": "Link CRM accounts and CRM products many-to-many, so an account can list the products it uses.",
+  "expectAllKinds": [
+    "relationship"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "crm_accounts",
+    "crm_products"
+  ],
+  "note": "The pack has no N-N between these two (its own N-N is contacts × opportunities)."
+}

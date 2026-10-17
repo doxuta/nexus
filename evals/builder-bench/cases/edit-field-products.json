@@ -1,0 +1,16 @@
+{
+  "id": "edit-field-products",
+  "group": "edit",
+  "lang": "en",
+  "prompt": "Add a warranty period in months, a number from 0 to 60, to the CRM products table (crm_products).",
+  "expectAllKinds": [
+    "field"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "crm_products"
+  ]
+}

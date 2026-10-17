@@ -1,0 +1,19 @@
+{
+  "id": "app-inventory",
+  "group": "app",
+  "lang": "vi",
+  "prompt": "Dựng app Kho linh kiện: bảng Linh kiện (mã linh kiện, tên, số lượng tồn, đơn giá VND, vị trí kệ) và bảng Phiếu xuất kho (linh kiện, số lượng xuất, ngày xuất, người nhận), gom vào một menu app. Nhân viên kinh doanh được xem và tạo dữ liệu trong cả hai bảng, sửa phiếu xuất kho của mình.",
+  "expectAllKinds": [
+    "entity",
+    "app",
+    "access"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "@new"
+  ],
+  "note": "Two tables joined by a relation field; the CRM pack already has crm_products, so the parts table must be a new one."
+}

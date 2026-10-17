@@ -1,0 +1,17 @@
+{
+  "id": "edit-form-layout",
+  "group": "edit",
+  "lang": "vi",
+  "prompt": "Sắp lại form nhập của bảng crm_products: tên và mã lên đầu, giá và đơn vị ở giữa, mô tả xuống cuối.",
+  "expectAllKinds": [
+    "layout"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "crm_products"
+  ],
+  "note": "golden.json demo-layout, on the products table."
+}

@@ -1,0 +1,19 @@
+{
+  "id": "app-helpdesk",
+  "group": "app",
+  "lang": "en",
+  "prompt": "Build a small helpdesk app: a Tickets table with a title, a description, a priority (low/medium/high) and a status (open/closed), and a menu entry for it. Our sales reps (Nhân viên kinh doanh) can see all tickets, create them, and edit their own; nobody but managers deletes.",
+  "expectAllKinds": [
+    "entity",
+    "app",
+    "access"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "@new"
+  ],
+  "note": "The demo loop's prompt (nexus-web/scripts/demo-loop.mjs), word for word."
+}

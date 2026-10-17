@@ -1,0 +1,19 @@
+{
+  "id": "app-clinic-visits",
+  "group": "app",
+  "lang": "en",
+  "prompt": "Build a clinic visits app here, not from a pack: a Patients table (full name, date of birth, phone) and a Visits table (the patient, visit date, reason, diagnosis, fee in VND), both in one app menu. Our sales reps (Nhân viên kinh doanh) work the front desk: they can view and create patients and visits, and edit what they created.",
+  "expectAllKinds": [
+    "entity",
+    "app",
+    "access"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "@new"
+  ],
+  "note": "A clinic pack exists; the prompt asks for the app itself, so a pack recommendation alone is no proposal."
+}
