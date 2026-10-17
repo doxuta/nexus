@@ -1,0 +1,17 @@
+{
+  "id": "edit-workflow-notify",
+  "group": "edit",
+  "lang": "vi",
+  "prompt": "Khi tạo mới khách hàng crm_accounts thì gửi thông báo trong app cho người phụ trách.",
+  "expectAllKinds": [
+    "workflow"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "crm_accounts"
+  ],
+  "note": "golden.json demo-workflow-notify, on accounts."
+}

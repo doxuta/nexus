@@ -1,0 +1,17 @@
+{
+  "id": "edit-report",
+  "group": "edit",
+  "lang": "vi",
+  "prompt": "Tạo báo cáo đếm số khách hàng crm_accounts theo ngành.",
+  "expectAllKinds": [
+    "report"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "crm_accounts"
+  ],
+  "note": "golden.json demo-report-summary, on accounts (industry is an indexed pick list)."
+}

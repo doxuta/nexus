@@ -1,0 +1,18 @@
+{
+  "id": "access-warranty",
+  "group": "access",
+  "lang": "vi",
+  "prompt": "Tạo bảng Đơn bảo hành có trường trạng thái là picklist gồm: tiếp nhận, đang sửa, chờ linh kiện, hoàn tất. Cho nhân viên kinh doanh xem và tạo đơn bảo hành, sửa đơn của mình.",
+  "expectAllKinds": [
+    "entity",
+    "access"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "@new"
+  ],
+  "note": "golden.json demo-entity-picklist, plus who uses it."
+}

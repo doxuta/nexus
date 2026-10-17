@@ -1,0 +1,17 @@
+{
+  "id": "edit-field-accounts",
+  "group": "edit",
+  "lang": "vi",
+  "prompt": "Thêm field so_dien_thoai_phu vào bảng crm_accounts.",
+  "expectAllKinds": [
+    "field"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "crm_accounts"
+  ],
+  "note": "golden.json additive_never_deletes."
+}

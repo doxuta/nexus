@@ -1,0 +1,17 @@
+{
+  "id": "access-expenses",
+  "group": "access",
+  "lang": "en",
+  "prompt": "Add an Expenses table: a title, an amount in VND, the expense date and a receipt photo. Let the sales reps (Nhân viên kinh doanh) view and create expenses, and edit their own.",
+  "expectAllKinds": [
+    "entity",
+    "access"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "@new"
+  ]
+}

@@ -82,7 +82,14 @@ func main() {
 	// The shape run is the cheap gate you can fire after any prompt change; the apply run is the
 	// expensive one that answers "is the proposal actually buildable", and it must be asked for.
 	apply := flag.Bool("apply", false, "cases with a `probe` block: APPLY the draft's backbone and verify the result is usable (writes schema, then cleans up)")
+	// builder-bench (bench.go): grade a recorded run of nexus-web/scripts/builder-bench.mjs. No server.
+	bench := flag.String("bench", "", "builder-bench dir (holds cases/): print the report tables of a recorded run")
+	obs := flag.String("obs", "", "with -bench: the driver's observations dir (<out-dir>/obs)")
 	flag.Parse()
+	if *bench != "" {
+		runBench(*bench, *obs)
+		return
+	}
 
 	raw, err := os.ReadFile(*golden)
 	if err != nil {
@@ -169,9 +176,30 @@ func runCase(client *http.Client, base, token string, c goldenCase, apply bool) 
 		return false, fmt.Sprintf("HTTP %d %s", resp.StatusCode, out.Code)
 	}
 
+	ok, detail := gradeKinds(c, out.Data.Draft, out.Data.Reply)
+	if !ok || c.ExpectNoDraft {
+		return ok, detail
+	}
+	// The shape checks above all passed. Under -apply, that is no longer the whole question: a
+	// well-shaped proposal can still build a table nobody can write a row into, and THAT is what
+	// the customer means by "the app works".
+	if apply && c.Probe != nil {
+		ok, pd := applyAndProbe(client, base, token, out.Data.Draft, *c.Probe)
+		return ok, detail + " · " + pd
+	}
+	if c.Probe != nil {
+		return true, detail + " (probe bỏ qua — chạy với -apply để đo 'dùng được thật')"
+	}
+	return true, detail
+}
+
+// gradeKinds scores the SHAPE of one turn's draft: the kinds it holds against the case's expected,
+// all-of and forbidden kinds, "no draft at all" for adversarial cases, and the pinned entity. The
+// live run above and builder-bench's recorded turns (bench.go) share it, so the two cannot drift.
+func gradeKinds(c goldenCase, draft json.RawMessage, reply string) (bool, string) {
 	var items []draftItem
-	if len(out.Data.Draft) > 0 {
-		_ = json.Unmarshal(out.Data.Draft, &items)
+	if len(draft) > 0 {
+		_ = json.Unmarshal(draft, &items)
 	}
 	kinds := make([]string, 0, len(items))
 	for _, d := range items {
@@ -186,7 +214,7 @@ func runCase(client *http.Client, base, token string, c goldenCase, apply bool) 
 		return false, detail + " — adversarial case must NOT draft"
 	}
 	if len(items) == 0 {
-		return false, detail + " — expected a draft, got none. reply: " + trim(out.Data.Reply, 120)
+		return false, detail + " — expected a draft, got none. reply: " + trim(reply, 120)
 	}
 	if len(c.ExpectKinds) > 0 {
 		hit := false
@@ -224,19 +252,9 @@ func runCase(client *http.Client, base, token string, c goldenCase, apply bool) 
 		}
 	}
 	if c.ExpectEntity != "" {
-		if !strings.Contains(strings.ToLower(string(out.Data.Draft)), strings.ToLower(c.ExpectEntity)) {
+		if !strings.Contains(strings.ToLower(string(draft)), strings.ToLower(c.ExpectEntity)) {
 			return false, detail + " — expected entity " + c.ExpectEntity
 		}
-	}
-	// The shape checks above all passed. Under -apply, that is no longer the whole question: a
-	// well-shaped proposal can still build a table nobody can write a row into, and THAT is what
-	// the customer means by "the app works".
-	if apply && c.Probe != nil {
-		ok, pd := applyAndProbe(client, base, token, out.Data.Draft, *c.Probe)
-		return ok, detail + " · " + pd
-	}
-	if c.Probe != nil {
-		return true, detail + " (probe bỏ qua — chạy với -apply để đo 'dùng được thật')"
 	}
 	return true, detail
 }

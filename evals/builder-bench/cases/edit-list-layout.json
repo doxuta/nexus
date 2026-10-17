@@ -1,0 +1,17 @@
+{
+  "id": "edit-list-layout",
+  "group": "edit",
+  "lang": "en",
+  "prompt": "Propose a list layout for CRM accounts (crm_accounts) that shows the name, the industry and the phone, sorted by name.",
+  "expectAllKinds": [
+    "layout"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "crm_accounts"
+  ],
+  "note": "evals/mcp task 4, on the accounts table the rep reads."
+}

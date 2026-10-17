@@ -1,0 +1,20 @@
+{
+  "id": "app-recruiting",
+  "group": "app",
+  "lang": "vi",
+  "prompt": "Dựng cho tôi phần quản lý tuyển dụng: bảng ứng viên (họ tên, email, vị trí ứng tuyển, trạng thái), màn hình nhập liệu gọn, và gom vào một app tên 'Tuyển dụng'. Nhân viên kinh doanh được xem và tạo ứng viên, sửa ứng viên của mình.",
+  "expectAllKinds": [
+    "entity",
+    "layout",
+    "app",
+    "access"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "@new"
+  ],
+  "note": "golden.json whole_app_all_kinds, plus who uses it: the entry screen is a layout proposal."
+}

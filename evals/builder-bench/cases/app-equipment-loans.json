@@ -1,0 +1,18 @@
+{
+  "id": "app-equipment-loans",
+  "group": "app",
+  "lang": "en",
+  "prompt": "Build an equipment loans app: an Equipment table (name, serial number, condition: good / needs repair / retired) and a Loans table (the equipment, the borrower as a user, loan date, due date, returned yes/no), both in one app menu. The sales reps (Nhân viên kinh doanh) borrow equipment: they can view both tables, create loans and edit their own loans.",
+  "expectAllKinds": [
+    "entity",
+    "app",
+    "access"
+  ],
+  "forbidKinds": [
+    "delete_entity",
+    "delete_field"
+  ],
+  "repTables": [
+    "@new"
+  ]
+}

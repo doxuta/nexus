@@ -22,9 +22,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import puppeteer from "puppeteer-core";
+import { ASSISTANT as assistant, attr, button, cards, clickInCard, connect, findChrome, openFromMenu, t, waitApplied, waitPath, waitText } from "./studio-driver.mjs";
 
 const BASE = (process.env.NEXUS_URL ?? `http://localhost:${process.env.NEXUS_PORT || 8080}`).replace(/\/$/, "");
-const API = `${BASE}/api/v1`;
 const TENANT = "northwind";
 const PERSONAS = {
   builder: { email: "admin@example.com", password: "Demo-Admin-2026!" },
@@ -63,53 +63,13 @@ if (!outDir) {
   process.exit(2);
 }
 
-// The system Chrome (puppeteer-core downloads none): CHROME_PATH, else the macOS app, else the first one on PATH.
-function findChrome() {
-  if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
-  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
-  return ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    ...["google-chrome", "chromium", "chromium-browser"].flatMap((name) => dirs.map((d) => path.join(d, name)))]
-    .find((p) => fs.existsSync(p)) ?? null;
-}
 const CHROME = findChrome();
 if (!CHROME) {
   console.error("FAIL setup: no Chrome found — set CHROME_PATH to a Chrome or Chromium binary");
   process.exit(1);
 }
 
-// Labels come from the UI's own catalog by key (the UI renders t(key) in its default locale, Vietnamese), so a reworded
-// label cannot silently break a selector.
-const VI = Object.fromEntries(
-  [...fs.readFileSync(new URL("../lib/i18n/vi.ts", import.meta.url), "utf8").matchAll(/^\s*"([\w.]+)":\s*("(?:[^"\\]|\\.)*"),?\s*$/gm)]
-    .map(([, k, v]) => [k, JSON.parse(v)]),
-);
-function t(key, vars = {}) {
-  if (!(key in VI)) throw new Error(`lib/i18n/vi.ts has no key ${key}`);
-  return VI[key].replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
-}
-const attr = (v) => JSON.stringify(v); // a CSS attribute value
-
 // ── API reads (to learn ids and names, and to check what the screen claims); every action goes through the browser ──
-async function login({ email, password }) {
-  const r = await fetch(`${API}/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tenant: TENANT, email, password }),
-  });
-  const j = await r.json();
-  if (!j.data?.accessToken) throw new Error(`login ${email}: ${JSON.stringify(j)}`);
-  return j.data;
-}
-let adminToken;
-async function api(p, init = {}) {
-  const r = await fetch(`${API}${p}`, { ...init, headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json", ...init.headers } });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`${init.method ?? "GET"} ${p}: ${r.status} ${JSON.stringify(j).slice(0, 300)}`);
-  return j;
-}
-const headVersion = async () => (await api("/admin/publish/state")).data.headVersion?.versionNo ?? 0;
-const drafts = async () => (await api("/admin/publish/changes")).data ?? [];
-
 // The cassette answers one run, and the run builds the table it then uses: refuse a stack that has been used.
 async function preflight() {
   const why = [];
@@ -126,60 +86,8 @@ const browser = await puppeteer.launch({
   defaultViewport: { width: 1440, height: 900 },
   args: process.env.CI ? ["--no-sandbox"] : [], // CI runners only: the sandbox needs user namespaces they may not grant
 });
-const errors = new Map(); // page → its page errors, printed when a step fails
-
-// Signs in through the real API and seeds the session the way lib/api.ts login() stores it (remember-me →
-// localStorage), in a browser context of its own, so the builder and the rep never share storage (same as ui-shots.mjs).
-async function signIn(persona) {
-  const s = await login(persona);
-  const ctx = await browser.createBrowserContext();
-  const page = await ctx.newPage();
-  page.setDefaultTimeout(30_000);
-  errors.set(page, []);
-  page.on("pageerror", (err) => errors.get(page).push(String(err.message ?? err)));
-  await page.evaluateOnNewDocument((s, tenant) => {
-    localStorage.setItem("nexus_remember", "1");
-    localStorage.setItem("nexus_token", s.accessToken);
-    if (s.refreshToken) localStorage.setItem("nexus_refresh", s.refreshToken);
-    if (s.user) localStorage.setItem("nexus_user", JSON.stringify(s.user));
-    localStorage.setItem("nexus_tenant", tenant);
-  }, s, TENANT);
-  return page;
-}
-
-const go = (page, p) => page.goto(`${BASE}${p}`, { waitUntil: "networkidle2", timeout: 60_000 });
-const studio = (p) => `/studio/du-an/${TENANT}/${p}`;
-
-/** The first enabled button under `scope` whose text is exactly `text` (waits for it). */
-async function button(page, text, scope = "body") {
-  const h = await page.waitForFunction(
-    (scope, text) => [...document.querySelectorAll(`${scope} button`)].find((b) => b.textContent.trim() === text && !b.disabled && b.getAttribute("aria-disabled") !== "true"),
-    {},
-    scope,
-    text,
-  );
-  return h.asElement();
-}
-const waitText = (page, text, scope = "body") =>
-  page.waitForFunction((scope, text) => document.querySelector(scope)?.innerText.includes(text), {}, scope, text);
-const waitPath = (page, p) => page.waitForFunction((p) => location.pathname === p, {}, p);
-
-/** Header → Xuất bản → the review lists the drafts → Xuất bản; returns the new version number. */
-async function publishFromHeader(page, route) {
-  const before = await headVersion();
-  if ((await drafts()).length === 0) throw new Error("nothing to publish: no drafts");
-  await go(page, route); // the header reads the publish state on load
-  await (await button(page, t("studio.publish.open"), '[data-testid="project-header"]')).click();
-  await page.waitForSelector('[data-testid="publish-submit"]:not([disabled])');
-  await waitText(page, t("studio.publish.count", { n: (await drafts()).length }), '[role="dialog"]');
-  return before + 1;
-}
-async function submitPublish(page, want) {
-  await page.click('[data-testid="publish-submit"]');
-  await waitText(page, t("studio.publish.status.live", { n: want }), '[data-testid="project-header"]');
-  const now = await headVersion();
-  if (now !== want) throw new Error(`the server's head version is ${now}; want ${want}`);
-}
+const nx = connect({ base: BASE, tenant: TENANT, browser });
+const { API, api, drafts, errors, go, headVersion, login, publishFromHeader, signIn, studio, submitPublish } = nx;
 
 /** "Tạo mới" on the list, as `page`'s user: every required text gets `title`, every required pick list its first value. */
 async function createTicket(page, title, { onList = false } = {}) {
@@ -223,13 +131,6 @@ async function repList(page) {
   return listColumns(page);
 }
 
-/** The assistant's cards: title, state (from the aria-label "<state>: <title>") and the visible text of each. */
-const cards = (page) =>
-  page.$$eval(`${assistant} article`, (arts) => arts.map((a) => ({
-    title: a.querySelector("h3")?.textContent.trim() ?? "",
-    label: a.getAttribute("aria-label") ?? "",
-    text: a.innerText,
-  })));
 /** The index of the access card: the one whose "where" line is Người dùng & quyền (fails the step when there is none). */
 async function accessCard(page) {
   const all = await cards(page);
@@ -237,50 +138,14 @@ async function accessCard(page) {
   if (i < 0) throw new Error(`no access card: ${JSON.stringify(all.map((c) => c.title))}`);
   return i;
 }
-/** Clicks the button labelled `text` inside card `i`. */
-async function clickInCard(page, i, text) {
-  const h = await page.waitForFunction(
-    (scope, i, text) => [...(document.querySelectorAll(`${scope} article`)[i]?.querySelectorAll("button") ?? [])]
-      .find((b) => b.textContent.trim() === text && !b.disabled),
-    {}, assistant, i, text,
-  );
-  await h.asElement().click();
-}
-/** Waits until card `i` leaves the open/applying states; it must be fully applied ("Áp dụng một phần" fails too). */
-async function waitApplied(page, i) {
-  const state = await page.waitForFunction(
-    (scope, i, done, open, applying) => {
-      const a = document.querySelectorAll(`${scope} article`)[i];
-      const l = a?.getAttribute("aria-label") ?? "";
-      if (l.startsWith(`${open}: `) || l.startsWith(`${applying}: `)) return false;
-      return l.startsWith(`${done}: `) ? "done" : `not applied: ${l} — ${a?.innerText.slice(-200)}`;
-    },
-    { timeout: 120_000, polling: 300 },
-    assistant, i, t("studio.assistant.card.state.done"), t("studio.assistant.card.state.open"), t("studio.assistant.card.state.applying"),
-  );
-  const got = await state.jsonValue();
-  if (got !== "done") throw new Error(got);
-}
 /** The rep's grants on one table, as {view, create, edit, delete} → access level ("none" when absent). */
 async function grantsOn(roleId, table) {
   const grants = (await api(`/admin/roles/${roleId}`)).data.role.actions.filter((a) => a.entityName === table);
   return Object.fromEntries(["view", "create", "edit", "delete"].map((a) => [a, grants.find((g) => g.action === a)?.accessLevel ?? "none"]));
 }
-/** The app's menu tab for the table (the context bar), clicked as a person does (never a typed URL). */
-async function openFromMenu(page) {
-  const tab = await page.waitForFunction(
-    (label) => [...document.querySelectorAll(".slds-context-bar__secondary a")].find((a) => a.textContent.trim().endsWith(label)),
-    {}, entity.label,
-  );
-  await tab.asElement().click();
-  await waitPath(page, `/${entity.name}`);
-  await page.waitForSelector("main table thead th");
-}
-
 // ── the loop ──
 let builder, rep, entity, repRole, recordId, builderRecordId, titleField, hidden, publishedV2, app, crmBefore;
 let active; // the page the current step works in: the runner screenshots it
-const assistant = '[data-testid="assistant-dock"]';
 const steps = [
   ["builder-asks-the-assistant", async () => {
     active = builder = await signIn(PERSONAS.builder);
@@ -424,7 +289,7 @@ const steps = [
       {}, app.label,
     );
     await tile.asElement().click();
-    await openFromMenu(rep);
+    await openFromMenu(rep, entity);
     await waitText(rep, BUILDER_TICKET, "main table tbody");
     return `"${app.label}" → "${entity.label}": the list shows "${BUILDER_TICKET}"`;
   }],
@@ -435,7 +300,7 @@ const steps = [
   }],
 
   ["rep-sees-both-tickets", async () => {
-    await openFromMenu(rep);
+    await openFromMenu(rep, entity);
     for (const title of [TICKET, BUILDER_TICKET]) await waitText(rep, title, "main table tbody");
     return `"${TICKET}" (theirs) and "${BUILDER_TICKET}" (the builder's) are listed`;
   }],
@@ -545,7 +410,7 @@ const steps = [
 fs.mkdirSync(outDir, { recursive: true });
 let failed = null;
 try {
-  adminToken = (await login(PERSONAS.builder)).accessToken;
+  await nx.asAdmin(PERSONAS.builder);
   await preflight();
   for (const [i, [name, run]] of steps.entries()) {
     const file = path.join(outDir, `${String(i + 1).padStart(2, "0")}-${name}.png`);
