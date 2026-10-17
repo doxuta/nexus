@@ -43,6 +43,19 @@ const TICKET_EDITED = `${TICKET} (toner replaced)`;
 const BUILDER_TICKET = "Projector in room 3 flickers"; // the builder's: the rep sees it and may not edit it
 const AI_TIMEOUT = 10 * 60_000; // a live model may take minutes; a replay answers at once
 const RECORD = process.env.DEMO_LOOP_RECORD;
+if (RECORD) fs.mkdirSync(RECORD, { recursive: true });
+const timeline = []; // each step's start and end, and whose page it ends on: written for DEMO_LOOP_RECORD
+
+/** DEMO_LOOP_RECORD only: saves every frame `page` paints (a CDP screencast) as <who>-<epoch ms>.jpg. */
+async function recordFrames(page, who) {
+  const cdp = await page.createCDPSession();
+  cdp.on("Page.screencastFrame", ({ data, metadata, sessionId }) => {
+    const ms = Math.round((metadata.timestamp ?? Date.now() / 1000) * 1000);
+    fs.writeFileSync(path.join(RECORD, `${who}-${ms}.jpg`), data, "base64");
+    cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+  });
+  await cdp.send("Page.startScreencast", { format: "jpeg", quality: 90 });
+}
 
 const outDir = process.argv[2];
 if (!outDir) {
@@ -114,18 +127,6 @@ const browser = await puppeteer.launch({
   args: process.env.CI ? ["--no-sandbox"] : [], // CI runners only: the sandbox needs user namespaces they may not grant
 });
 const errors = new Map(); // page → its page errors, printed when a step fails
-const timeline = []; // each step's start and end, and whose page it ends on: written for DEMO_LOOP_RECORD
-
-/** DEMO_LOOP_RECORD only: saves every frame `page` paints (a CDP screencast) as <who>-<epoch ms>.jpg. */
-async function recordFrames(page, who) {
-  const cdp = await page.createCDPSession();
-  cdp.on("Page.screencastFrame", ({ data, metadata, sessionId }) => {
-    const ms = Math.round((metadata.timestamp ?? Date.now() / 1000) * 1000);
-    fs.writeFileSync(path.join(RECORD, `${who}-${ms}.jpg`), data, "base64");
-    cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
-  });
-  await cdp.send("Page.startScreencast", { format: "jpeg", quality: 90 });
-}
 
 // Signs in through the real API and seeds the session the way lib/api.ts login() stores it (remember-me →
 // localStorage), in a browser context of its own, so the builder and the rep never share storage (same as ui-shots.mjs).
@@ -136,7 +137,6 @@ async function signIn(persona) {
   page.setDefaultTimeout(30_000);
   errors.set(page, []);
   page.on("pageerror", (err) => errors.get(page).push(String(err.message ?? err)));
-  if (RECORD) await recordFrames(page, persona === PERSONAS.rep ? "rep" : "builder");
   await page.evaluateOnNewDocument((s, tenant) => {
     localStorage.setItem("nexus_remember", "1");
     localStorage.setItem("nexus_token", s.accessToken);
@@ -284,6 +284,7 @@ const assistant = '[data-testid="assistant-dock"]';
 const steps = [
   ["builder-asks-the-assistant", async () => {
     active = builder = await signIn(PERSONAS.builder);
+    if (RECORD) await recordFrames(builder, "builder");
     await go(builder, studio("dung/du-lieu"));
     const toggle = await builder.waitForSelector('[data-testid="assistant-toggle"]');
     if ((await toggle.evaluate((b) => b.getAttribute("aria-pressed"))) !== "true") await toggle.click();
@@ -406,6 +407,7 @@ const steps = [
   ["rep-opens-the-app-switcher", async () => {
     // Not by URL: the app launcher lists the new app for the rep, as they can see one of its menu entries.
     active = rep = await signIn(PERSONAS.rep);
+    if (RECORD) await recordFrames(rep, "rep");
     await go(rep, "/home");
     await rep.click(`button[title=${attr(t("slds.appLauncher.open"))}]`);
     await rep.waitForFunction(
@@ -541,7 +543,6 @@ const steps = [
 ];
 
 fs.mkdirSync(outDir, { recursive: true });
-if (RECORD) fs.mkdirSync(RECORD, { recursive: true });
 let failed = null;
 try {
   adminToken = (await login(PERSONAS.builder)).accessToken;
