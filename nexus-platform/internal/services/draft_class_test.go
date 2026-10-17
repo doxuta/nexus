@@ -13,8 +13,7 @@ import (
 )
 
 func productionTypes() *metaversion.Registry {
-	// Keep in step with cmd/server/main.go (metaRegistry); main_wiring_test pins that line.
-	return metaversion.NewRegistry(NewWorkflowDocAdapter(), NewReportDocAdapter(), NewDashboardDocAdapter(), NewLayoutDocAdapter(), NewBrandingDocAdapter(), NewAppDocAdapter(), NewFieldDocAdapter(), NewEntityDocAdapter())
+	return NewMetaRegistry() // the registry cmd/server wires
 }
 
 func TestClassOf_AgreesWithRegistry(t *testing.T) {
