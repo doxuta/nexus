@@ -243,6 +243,8 @@ const en = {
   "studio.assistant.access.confirmHidden": "This access applies at once to real users: {desc}. The table stays hidden from customers until you publish.",
   "studio.assistant.done.access": "Access granted to the role.",
   "studio.assistant.done.accessLink": "Open Users & access",
+  "studio.assistant.done.app": "App created. Staff see its data only once their role has access: tell the assistant who will use this app, or tick it on Users & access.",
+  "studio.assistant.done.appLink": "Open the new app",
 } as const;
 
 export type I18nKeyEn = keyof typeof en;

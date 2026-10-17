@@ -158,6 +158,15 @@ describe("proposalView — access", () => {
   it("applied, it points at Người dùng & quyền", () => {
     expect(proposalDone(ITEMS.access, undefined, link)).toMatchObject({ href: "/studio/dung/nguoi-dung-quyen", label: "Mở Người dùng & quyền" });
   });
+
+  // Verifier round 2: nobody is moved into an app's roles any more (staff keep their role and it gains access), so the
+  // app card's done line says how staff get access instead.
+  it("an applied app card says how staff get access, not 'put people in the app's roles'", () => {
+    const d = proposalDone(ITEMS.app, undefined, link);
+    expect(d.text).toBe("Đã tạo app. Nhân viên chỉ thấy dữ liệu khi vai của họ có quyền: nói với trợ lý ai sẽ dùng app này, hoặc tick quyền ở Người dùng & quyền.");
+    expect(d.text).not.toMatch(/gán người vào vai/);
+    expect(d).toMatchObject({ href: "/home?app=phong_kham", label: "Mở app vừa dựng" });
+  });
 });
 
 // Verifier round 2: "the table stays hidden until Xuất bản" only while every table of the access card still is.

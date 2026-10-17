@@ -270,12 +270,12 @@ export function proposalDone(item: AiDraftItem, createdId: string | undefined, l
     case "workflow": return studio("Đã tạo thành công.", "dung/tu-dong", "Mở Tự động");
     case "report": return { text: "Đã tạo thành công.", href: "/reports", label: "Mở Báo cáo" };
     case "app":
-      // Grants were seeded onto two NEW app roles, not the tenant's existing ones; until someone is put in one of them
-      // the app is empty for everyone but an admin (and an admin testing it cannot see that), so the line says it.
+      // Staff see an app's tables only through their own role's grants (an admin testing it cannot see that gap), so the
+      // line says how they get them: tell the assistant who uses the app (an access card), or tick it on the Access page.
       return {
-        text: "Đã tạo app. Còn một bước: gán người vào vai của app (Quản trị → Người dùng), nếu không nhân viên mở ra sẽ trống.",
+        text: t("studio.assistant.done.app"),
         href: `/home?app=${encodeURIComponent(item.app?.name ?? "")}`,
-        label: "Mở app vừa dựng",
+        label: t("studio.assistant.done.appLink"),
       };
     case "edit_field": return studio("Đã cập nhật trường.", "dung/du-lieu", "Mở Dữ liệu");
     case "delete_field": return studio("Đã xoá trường.", "dung/du-lieu", "Mở Dữ liệu");

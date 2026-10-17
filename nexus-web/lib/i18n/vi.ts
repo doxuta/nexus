@@ -4841,6 +4841,8 @@ const vi = {
   "studio.assistant.access.confirmHidden": "Quyền này áp ngay cho người dùng thật: {desc}. Bảng vẫn ẩn với khách cho tới khi anh Xuất bản.",
   "studio.assistant.done.access": "Đã cấp quyền cho vai.",
   "studio.assistant.done.accessLink": "Mở Người dùng & quyền",
+  "studio.assistant.done.app": "Đã tạo app. Nhân viên chỉ thấy dữ liệu khi vai của họ có quyền: nói với trợ lý ai sẽ dùng app này, hoặc tick quyền ở Người dùng & quyền.",
+  "studio.assistant.done.appLink": "Mở app vừa dựng",
   // ── specs/073 kh1a: route labels (also the page title and the screen-reader name of each page) ──
   "studio.route.dataList": "Dữ liệu",
   "studio.route.dataTable": "Bảng",
