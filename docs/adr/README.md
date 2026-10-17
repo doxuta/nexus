@@ -9,7 +9,7 @@ reviewer would raise and why the current design wins or loses against them.
 |---|---|
 | [0001](0001-metadata-is-the-agent-action-space.md) | Agents edit typed, versioned metadata through validated tools, never code, SQL or DDL. |
 | [0002](0002-schema-cutoff-drafts-and-rollback.md) | Drafts until publish; new schema hidden by a cutoff; rollback re-hides it and never drops a table, field or record. |
-| [0003](0003-agent-boundary-from-change-classes.md) | Agents only propose; how an applied change reaches users, and whether it needs a confirm, follows its class. |
+| [0003](0003-agent-boundary-from-change-classes.md) | Agents only propose, access and MCP included; how an applied change reaches users, and whether it needs a confirm, follows its class. |
 | [0004](0004-sqlx-for-dynamic-records-gorm-for-system-tables.md) | sqlx with allowlisted identifiers for the shared `obj_*` tables; GORM for fixed-shape system tables. |
 | [0005](0005-tenant-isolation-and-row-level-access.md) | `tenant_id` on every query, ACL before the handler, row scope in the repository; a convention plus tests, not database security. |
 
