@@ -11,6 +11,7 @@ package services
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -343,4 +344,104 @@ func TestRollbackRestoresFieldACL_Integration(t *testing.T) {
 	if n := r.count(t, q, r.tenant, role); n != 1 {
 		t.Errorf("restriction rows after rollback = %d, want 1: the field would be visible to the role again", n)
 	}
+}
+
+// rgSeedRole inserts a role of the tenant with grants given as {entity, action, level} and returns its id.
+func rgSeedRole(t *testing.T, r *rrEnv, tenant, name string, grants ...[3]string) string {
+	t.Helper()
+	id := uuid.NewString()
+	r.exec2(t, `INSERT INTO acl_roles (id, tenant_id, name, label) VALUES (?, ?, ?, ?)`, id, tenant, name, name)
+	for _, g := range grants {
+		r.exec2(t, `INSERT INTO acl_role_actions (id, role_id, entity_name, action, access_level) VALUES (?, ?, ?, ?, ?)`,
+			uuid.NewString(), id, g[0], g[1], g[2])
+	}
+	return id
+}
+
+// rgGrantsOn lists the tenant's role grants on one table as "role:action:level", sorted.
+func rgGrantsOn(t *testing.T, r *rrEnv, tenant, entity string) []string {
+	t.Helper()
+	out := []string{}
+	if err := r.sdb.Select(&out, `SELECT CONCAT(ro.name, ':', ara.action, ':', ara.access_level) FROM acl_role_actions ara
+		JOIN acl_roles ro ON ro.id = ara.role_id WHERE ro.tenant_id = ? AND ara.entity_name = ? ORDER BY 1`, tenant, entity); err != nil {
+		t.Fatalf("grants on %s: %v", entity, err)
+	}
+	return out
+}
+
+// Issue #2, verifier round 2: a table delete drops every role's grants on its name (a new table of that name must
+// inherit nothing), so the published delete records them in its meta and a rollback that brings the table back puts
+// them back: exactly as they were, for this tenant's roles only, skipping a role deleted meanwhile, and never
+// lowering a grant the role holds again on that table and action. (On a workspace never delivered there is no
+// version to roll back to: there the drop is final.)
+func TestRollbackRestoresTheRoleGrantsOfADeletedTable_Integration(t *testing.T) {
+	deleteDeals := func(t *testing.T, r *rrEnv) *PublishResult {
+		t.Helper()
+		res := r.publishDeletes(t, func() {
+			if err := r.entities.SoftDeleteEntity(r.bctx, r.tenant, "hk_deals"); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if got := rgGrantsOn(t, r, r.tenant, "hk_deals"); len(got) != 0 {
+			t.Fatalf("setup: the published delete left the grants %v", got)
+		}
+		return res
+	}
+	rollback := func(t *testing.T, r *rrEnv, res *PublishResult) {
+		t.Helper()
+		if _, _, err := r.rollbackTo(t, 1, res.VersionNo); err != nil {
+			t.Fatalf("Rollback: %v", err)
+		}
+		if !r.entityLive(t, r.tenant) {
+			t.Fatal("the table did not come back")
+		}
+	}
+
+	t.Run("back exactly as they were", func(t *testing.T) {
+		r := rrSetup(t)
+		other := r.newTenant(t)
+		rgSeedRole(t, r, r.tenant, "sales", [3]string{"hk_deals", "view", "all"}, [3]string{"hk_deals", "edit", "owner"}, [3]string{"hk_accts", "view", "all"})
+		rgSeedRole(t, r, r.tenant, "mgr", [3]string{"hk_deals", "view", "team"}, [3]string{"hk_deals", "delete", "all"})
+		rgSeedRole(t, r, other, "sales", [3]string{"hk_deals", "view", "all"})
+		want := rgGrantsOn(t, r, r.tenant, "hk_deals")
+		res := deleteDeals(t, r)
+		if got, _ := metaOf(t, r.schemaDoc(t, res.VersionNo, DocTypeEntity).Meta)["roleGrants"].([]any); len(got) != len(want) {
+			t.Errorf("the published delete recorded %d role grants %v; want this tenant's %d", len(got), got, len(want))
+		}
+		rollback(t, r, res)
+		if got := rgGrantsOn(t, r, r.tenant, "hk_deals"); !slices.Equal(got, want) {
+			t.Errorf("grants on the restored table = %v; want them back exactly: %v", got, want)
+		}
+		if got := rgGrantsOn(t, r, r.tenant, "hk_accts"); !slices.Equal(got, []string{"sales:view:all"}) {
+			t.Errorf("grants on another table = %v; want them untouched", got)
+		}
+		if got := rgGrantsOn(t, r, other, "hk_deals"); !slices.Equal(got, []string{"sales:view:all"}) {
+			t.Errorf("the other tenant's grants on the same name = %v; want them untouched", got)
+		}
+	})
+
+	t.Run("a role deleted meanwhile is skipped", func(t *testing.T) {
+		r := rrSetup(t)
+		rgSeedRole(t, r, r.tenant, "sales", [3]string{"hk_deals", "view", "all"})
+		mgr := rgSeedRole(t, r, r.tenant, "mgr", [3]string{"hk_deals", "view", "team"})
+		res := deleteDeals(t, r)
+		r.exec2(t, `DELETE FROM acl_roles WHERE id = ?`, mgr)
+		rollback(t, r, res)
+		if got := rgGrantsOn(t, r, r.tenant, "hk_deals"); !slices.Equal(got, []string{"sales:view:all"}) {
+			t.Errorf("grants after the rollback = %v; want sales back and nothing for the deleted role", got)
+		}
+	})
+
+	t.Run("a grant the role holds again is never lowered", func(t *testing.T) {
+		r := rrSetup(t)
+		sales := rgSeedRole(t, r, r.tenant, "sales", [3]string{"hk_deals", "view", "all"}, [3]string{"hk_deals", "edit", "owner"})
+		res := deleteDeals(t, r)
+		// Meanwhile the role holds edit at a WIDER level than recorded, and view at a narrower one.
+		r.exec2(t, `INSERT INTO acl_role_actions (id, role_id, entity_name, action, access_level) VALUES (?, ?, 'hk_deals', 'edit', 'all'), (?, ?, 'hk_deals', 'view', 'owner')`,
+			uuid.NewString(), sales, uuid.NewString(), sales)
+		rollback(t, r, res)
+		if got, want := rgGrantsOn(t, r, r.tenant, "hk_deals"), []string{"sales:edit:all", "sales:view:all"}; !slices.Equal(got, want) {
+			t.Errorf("grants after the rollback = %v; want %v (edit kept at all, view back to all)", got, want)
+		}
+	})
 }

@@ -700,7 +700,10 @@ func (r *Repository) SoftDeleteEntity(ctx context.Context, tenantID, entityID st
 		}
 		// 6. Role-grant cascade (issue #2): acl_role_actions rows are keyed by the entity NAME as well, so
 		//    a table re-created under it would silently inherit every role's view/create/edit/delete.
-		//    Same transaction, ORIGINAL name; the rows carry no tenant, so the role pins it.
+		//    Same transaction, ORIGINAL name; the rows carry no tenant, so the role pins it. On a delivered
+		//    workspace the publish that runs this delete recorded the grants first ("roleGrants" in the
+		//    version's meta) and a rollback puts them back; on a workspace never delivered there is no
+		//    version to roll back to, so there the drop is final.
 		if err := tx.Exec(`DELETE ara FROM acl_role_actions ara JOIN acl_roles r ON r.id = ara.role_id
 			WHERE r.tenant_id = ? AND ara.entity_name = ?`, tenantID, existing.Name).Error; err != nil {
 			return fmt.Errorf("drop role grants: %w", err)

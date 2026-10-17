@@ -6,8 +6,9 @@ package services
 //
 //	field : un-delete the row, un-tombstone its sys_relationships, put the target attributes back,
 //	        rebuild the unique pivot (specs/019) from the values still in obj_*.data
-//	table : un-tombstone the name, un-tombstone every relationship, bring back EXACTLY the records the
-//	        delete trashed (deleted_at = the recorded sweptAt), rebuild the pivot of every unique field
+//	table : un-tombstone the name, un-tombstone every relationship, put back the field restrictions and the
+//	        role grants it dropped, bring back EXACTLY the records the delete trashed (deleted_at = the
+//	        recorded sweptAt), rebuild the pivot of every unique field
 //
 // A name a live table / relationship holds meanwhile is MySQL 1062 -> ROLLBACK_NAME_TAKEN (mapped by
 // PublishService.Rollback); a unique value two live records now share is ROLLBACK_UNIQUE_CONFLICT. Both
@@ -37,6 +38,7 @@ type schemaRestoreMeta struct {
 	EntityDef     map[string]any   `json:"entityDef"`
 	Relationships []map[string]any `json:"relationships"`
 	FieldACL      []map[string]any `json:"fieldAcl"`
+	RoleGrants    []map[string]any `json:"roleGrants"`
 }
 
 func parseRestoreMeta(raw json.RawMessage) (*schemaRestoreMeta, error) {
@@ -96,6 +98,35 @@ func restoreFieldACL(ctx context.Context, tx *sqlx.Tx, tenantID string, rows []m
 			ON DUPLICATE KEY UPDATE can_view = VALUES(can_view), can_edit = VALUES(can_edit)`,
 			entity, field, truthy(r["can_view"]), truthy(r["can_edit"]), role, tenantID); err != nil {
 			return fmt.Errorf("services.restoreFieldACL: %w", err)
+		}
+	}
+	return nil
+}
+
+// restoreGrantSQL puts one recorded grant back. The role must still exist in the tenant (a role deleted meanwhile is
+// skipped). A grant the role holds again on the same (table, action) is only ever raised to the recorded level: the
+// ranks follow the access lattice none < owner < team, field:<f> < all, and team and field:<f> rank alike because
+// neither covers the other, so neither replaces the other.
+const restoreGrantSQL = `INSERT INTO acl_role_actions (id, role_id, entity_name, action, access_level)
+	SELECT UUID(), r.id, ?, ?, ? FROM acl_roles r WHERE r.id = ? AND r.tenant_id = ?
+	ON DUPLICATE KEY UPDATE access_level = IF(
+		(CASE WHEN access_level = 'all' THEN 3 WHEN access_level = 'team' OR access_level LIKE 'field:%' THEN 2 WHEN access_level = 'owner' THEN 1 ELSE 0 END) <
+		(CASE WHEN VALUES(access_level) = 'all' THEN 3 WHEN VALUES(access_level) = 'team' OR VALUES(access_level) LIKE 'field:%' THEN 2 WHEN VALUES(access_level) = 'owner' THEN 1 ELSE 0 END),
+		VALUES(access_level), access_level)`
+
+// restoreRoleGrants puts back the role grants a table delete dropped (metadata.Repository.SoftDeleteEntity drops
+// them so a new table of that name inherits none), as the published delete recorded them.
+func restoreRoleGrants(ctx context.Context, tx *sqlx.Tx, tenantID string, rows []map[string]any) error {
+	for _, g := range rows {
+		role, _ := g["role_id"].(string)
+		entity, _ := g["entity_name"].(string)
+		action, _ := g["action"].(string)
+		level, _ := g["access_level"].(string)
+		if role == "" || entity == "" || action == "" || level == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, restoreGrantSQL, entity, action, level, role, tenantID); err != nil {
+			return fmt.Errorf("services.restoreRoleGrants: %w", err)
 		}
 	}
 	return nil
@@ -205,6 +236,9 @@ func restoreEntity(ctx context.Context, tx *sqlx.Tx, tenantID string, c metavers
 		return fmt.Errorf("services.restoreEntity: %w", err)
 	}
 	if err := restoreFieldACL(ctx, tx, tenantID, m.FieldACL); err != nil {
+		return err
+	}
+	if err := restoreRoleGrants(ctx, tx, tenantID, m.RoleGrants); err != nil {
 		return err
 	}
 	if _, err := dynrepo.RestoreRecordsSweptAt(ctx, tx, name, tenantID, at); err != nil {
