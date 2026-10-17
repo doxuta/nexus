@@ -67,6 +67,7 @@ requests.
 - `docker-compose.yml`, `deploy/` — the one-command demo and a Caddy reverse proxy.
 - `AGENTS.md` and `.claude/` — how the code is built with coding agents here: vertical slices, a builder agent, a
   verifier agent that tries to refute every change, and checks instead of prose rules.
+- [`docs/adr/`](docs/adr/) — five decision records: why the design is shaped this way, what it costs, and its known gaps.
 
 Good first files to read:
 `nexus-platform/internal/ddl/ddl.go` (identifiers from metadata),
