@@ -14,6 +14,7 @@ import {
   workflowTriggerPhrase, workQueueSummaryText, getAccessDraft, type AiDraftItem,
 } from "@/lib/aiBuilder";
 import { accessText } from "@/lib/accessLevels";
+import type { EntityMeta } from "@/lib/api";
 
 export type ProposalOp = "create" | "update" | "delete";
 
@@ -246,6 +247,16 @@ function withChange(item: AiDraftItem, v: ProposalView): ProposalView {
   if (op !== "create") out.before = changeSideLines(c.docType, c.before);
   if (op === "update") out.after = changeSideLines(c.docType, c.after, c.before);
   return out;
+}
+
+/** Every table an access card grants on is still hidden from the customer: born after the last publish, which the
+ * builder's own table list marks draftState "new". An unknown list answers false, so the question never claims a wait
+ * it cannot see. */
+export function accessTablesHidden(item: AiDraftItem, entities: readonly EntityMeta[] | undefined): boolean {
+  const ac = item.kind === "access" ? getAccessDraft(item) : undefined;
+  if (!ac || !entities || ac.grants.length === 0) return false;
+  const fresh = new Set(entities.filter((e) => e.draftState === "new").map((e) => e.name));
+  return ac.grants.every((g) => fresh.has(g.entityName));
 }
 
 // Where the applied card points (moved from the old page's DraftCard; same destinations and wording).

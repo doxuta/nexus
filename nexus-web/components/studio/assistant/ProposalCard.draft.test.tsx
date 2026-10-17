@@ -145,21 +145,30 @@ describe("ProposalCard — access card question", () => {
     change: { docType: "role", docKey: "r1", op: "update", label: "Vai", target: { name: "crm_sales_rep", entity: "tickets" },
       before: { grants: [], labels: { tickets: "Phiếu hỗ trợ" } }, after: { grants: [], labels: { tickets: "Phiếu hỗ trợ" } } },
   };
-  const ask = (delivery: Delivery, delivered: boolean) => {
+  const ask = (delivery: Delivery, delivered: boolean, tableHidden?: boolean) => {
     const onApply = vi.fn();
     render(<ProposalCard item={ACCESS} asSample onAsSampleChange={() => {}} onApply={onApply} onDiscard={() => {}} link={(id) => `/studio/${id}`}
-      delivered={delivered} draft={{ mode: cardMode(ACCESS, delivery), onRecheck: vi.fn(), onUndoPlan: vi.fn(), onUndo: vi.fn(), canOpenDrafts: false, onOpenDrafts: vi.fn() }} />);
+      delivered={delivered} tableHidden={tableHidden}
+      draft={{ mode: cardMode(ACCESS, delivery), onRecheck: vi.fn(), onUndoPlan: vi.fn(), onUndo: vi.fn(), canOpenDrafts: false, onOpenDrafts: vi.fn() }} />);
     fireEvent.click(screen.getByRole("button", { name: "Áp ngay" }));
     return onApply;
   };
   const delivered: Delivery = { kind: "delivered", state: { ...(DELIVERED as Extract<Delivery, { kind: "delivered" }>).state, directTypes: ["role"] } };
 
-  it("published project: applies now, the table stays hidden from customers until Xuất bản", () => {
-    const onApply = ask(delivered, true);
+  it("its table is still hidden from customers: applies now, the table stays hidden until Xuất bản", () => {
+    const onApply = ask(delivered, true, true);
     expect(screen.getByText("Quyền này áp ngay cho người dùng thật: Nhân viên kinh doanh được xem tất cả trên Phiếu hỗ trợ. Bảng vẫn ẩn với khách cho tới khi anh Xuất bản.")).toBeInTheDocument();
     expect(onApply).not.toHaveBeenCalled();
     fireEvent.click(screen.getAllByRole("button", { name: "Áp ngay" }).at(-1)!);
     expect(onApply).toHaveBeenCalledTimes(1);
+  });
+
+  // Verifier round 2: the question followed the project's delivery, so a card applied after its table was published
+  // still said "Bảng vẫn ẩn…" while the grant went live on a table the customer has.
+  it("delivered, but its table is published already: no 'stays hidden'", () => {
+    ask(delivered, true, false);
+    expect(screen.getByText("Quyền này áp ngay cho người dùng thật: Nhân viên kinh doanh được xem tất cả trên Phiếu hỗ trợ.")).toBeInTheDocument();
+    expect(screen.queryByText(/Bảng vẫn ẩn/)).toBeNull();
   });
 
   it("never published: asked too, without a publish to wait for", () => {

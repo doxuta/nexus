@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from "vitest";
-import { proposalView, proposalDone, proposalWarnLink } from "./aiProposalView";
+import { accessTablesHidden, proposalView, proposalDone, proposalWarnLink } from "./aiProposalView";
 import type { AiDraftItem } from "./aiBuilder";
 
 const link = (id: string) => `/studio/${id}`;
@@ -158,4 +158,18 @@ describe("proposalView — access", () => {
   it("applied, it points at Người dùng & quyền", () => {
     expect(proposalDone(ITEMS.access, undefined, link)).toMatchObject({ href: "/studio/dung/nguoi-dung-quyen", label: "Mở Người dùng & quyền" });
   });
+});
+
+// Verifier round 2: "the table stays hidden until Xuất bản" only while every table of the access card still is.
+describe("accessTablesHidden", () => {
+  const two: AiDraftItem = { kind: "access", access: { role: "r", grants: [
+    { entityName: "a", action: "view", accessLevel: "all" }, { entityName: "b", action: "view", accessLevel: "all" }] } };
+  const list = (b?: "new") => [{ name: "a", label: "A", tableName: "obj_a", draftState: "new" as const }, { name: "b", label: "B", tableName: "obj_b", draftState: b }];
+  it("every table still new: hidden", () => expect(accessTablesHidden(two, list("new"))).toBe(true));
+  it("one table published already: not hidden", () => expect(accessTablesHidden(two, list())).toBe(false));
+  it("a table not in the list yet, or no list at all: not claimed hidden", () => {
+    expect(accessTablesHidden(two, list("new").slice(0, 1))).toBe(false);
+    expect(accessTablesHidden(two, undefined)).toBe(false);
+  });
+  it("not an access card: false", () => expect(accessTablesHidden(ITEMS.entity, list("new"))).toBe(false));
 });
