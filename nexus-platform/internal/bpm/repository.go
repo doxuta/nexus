@@ -913,7 +913,27 @@ func (r seatReadRow) seat() Seat {
 //
 // ponytail: one open seat per step until S4, so the instance lock + seq serialize everything and
 // the seat is closed by status; the per-seat `version` CAS arrives with parallel seats (S4).
+//
+// A write InnoDB rolls back as a deadlock victim is run again, up to voteAttempts times, like a vote
+// (#37, #35): it shares writeSeats, whose seat writes can wait on a neighbouring instance's seats
+// while that instance's writer waits on this instance row. The rolled-back run wrote nothing, and
+// its inputs are data the caller built before the call (the one function among them, the actor's
+// QueueView, only reads), so the next run judges the instance afresh under its lock.
+//
+// ponytail: re-runs the victim instead of removing the cycle. Ceiling: a write InnoDB picks
+// voteAttempts times in a row still fails with 1213.
 func (r *SQLRepository) DecideTaskTx(ctx context.Context, tenantID, id string, g TaskGuard, next InstanceTransition, historyJSON []byte) error {
+	for attempt := 1; ; attempt++ {
+		err := r.decideTaskTx(ctx, tenantID, id, g, next, historyJSON)
+		var me *mysql.MySQLError
+		if attempt == voteAttempts || !errors.As(err, &me) || me.Number != mysqlDeadlock {
+			return err
+		}
+	}
+}
+
+// decideTaskTx is one run of DecideTaskTx.
+func (r *SQLRepository) decideTaskTx(ctx context.Context, tenantID, id string, g TaskGuard, next InstanceTransition, historyJSON []byte) error {
 	tx, err := r.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("bpm.SQLRepository.DecideTaskTx: begin: %w", err)
@@ -1141,7 +1161,7 @@ func (r *SQLRepository) VoteTaskTx(ctx context.Context, tenantID, id string, g V
 // it back whole.
 const mysqlDeadlock = 1213
 
-// voteAttempts bounds the runs of a vote InnoDB keeps choosing as a deadlock victim.
+// voteAttempts bounds the runs of a vote or a decision InnoDB keeps choosing as a deadlock victim.
 const voteAttempts = 3
 
 // voteTaskTx is one run of VoteTaskTx.

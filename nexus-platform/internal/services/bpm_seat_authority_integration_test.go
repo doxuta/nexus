@@ -56,6 +56,13 @@ func (s *bpmStack) racyDecider(onRead func(*bpm.Instance)) (*bpm.Decider, *racyS
 // entity and arms one instance on it through the real after-create path.
 func armTwoStep(t *testing.T, st *bpmStack, entity string) (tenant, instID string) {
 	t.Helper()
+	tenant, ids := armTwoStepN(t, st, entity, 1)
+	return tenant, ids[0]
+}
+
+// armTwoStepN is armTwoStep for n records of the entity, armed together.
+func armTwoStepN(t *testing.T, st *bpmStack, entity string, n int) (tenant string, instIDs []string) {
+	t.Helper()
 	ctx := context.Background()
 	tenant = o3aTenantA
 	st.createEntity(t, ctx, tenant, entity, []FieldInput{{Name: "status", Label: "Status", FieldType: "text"}})
@@ -69,12 +76,19 @@ func armTwoStep(t *testing.T, st *bpmStack, entity string) (tenant, instID strin
 	}); err != nil {
 		t.Fatalf("CreateProcess: %v", err)
 	}
-	rid, err := st.recordSvc.Create(ctx, bpmAdmin(seatSubmitter), tenant, seatSubmitter, entity, map[string]any{"status": "draft"})
-	if err != nil {
-		t.Fatalf("create record: %v", err)
+	var rids []string
+	for range n {
+		rid, err := st.recordSvc.Create(ctx, bpmAdmin(seatSubmitter), tenant, seatSubmitter, entity, map[string]any{"status": "draft"})
+		if err != nil {
+			t.Fatalf("create record: %v", err)
+		}
+		rids = append(rids, rid)
 	}
 	st.drain(t)
-	return tenant, st.onlyPendingInstance(t, tenant, entity, rid).ID
+	for _, rid := range rids {
+		instIDs = append(instIDs, st.onlyPendingInstance(t, tenant, entity, rid).ID)
+	}
+	return tenant, instIDs
 }
 
 func approvedEntries(inst *bpm.Instance) int {
@@ -177,6 +191,82 @@ func TestDecide_SameSeatTwoTabs_SecondGets409(t *testing.T) {
 	assertMirror(t, st.sdb, tenant, id, "two-tabs")
 	if got := instState(t, st.sdb, tenant, id).Seq; got != 2 {
 		t.Fatalf("seq = %d; want 2 (the arm + the one decision that won)", got)
+	}
+}
+
+// TestDecide_SingleSeatDeadlockVictim (#37) is TestParallel_ConcurrentLastTwoApprovers_DeadlockVictim
+// for a single-seat approval. DecideTaskTx shares writeSeats with the vote, so its seat writes can
+// wait on the seat of the instance whose id follows (an UPDATE that reads it, or the next step's
+// seat going into the gap just before it in idx_bt_visit) while that instance's own writer waits on
+// this instance's row. InnoDB rolls one of them back (1213), and the approver, a plain seat holder,
+// got a 500 and had to click again.
+//
+// A second connection plays the neighbour: it locks the neighbour's seat, waits until the approval
+// waits on it, then asks for a lock the approval holds (its instance row). It has written more rows,
+// so InnoDB rolls the approval back every time. The approval must run again, and the step must
+// advance exactly once.
+func TestDecide_SingleSeatDeadlockVictim(t *testing.T) {
+	st := bpmWire(t)
+	ctx := context.Background()
+	tenant, ids := armTwoStepN(t, st, "seatlock", 2)
+	id, next := ids[0], ids[1] // next: the instance whose seats follow id's in idx_bt_visit
+	if next < id {
+		id, next = next, id
+	}
+
+	if _, err := st.sdb.ExecContext(ctx, `CREATE TABLE it_deadlock_ballast (n INT NOT NULL PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	nb, err := st.sdb.BeginTxx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = nb.Rollback() }()
+	// InnoDB rolls back the transaction that wrote less: the ballast makes that the approval.
+	if _, err := nb.ExecContext(ctx, `INSERT INTO it_deadlock_ballast (n)
+		WITH RECURSIVE s (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 200) SELECT n FROM s`); err != nil {
+		t.Fatalf("ballast: %v", err)
+	}
+	var held []string
+	if err := nb.SelectContext(ctx, &held, `SELECT id FROM sys_bpm_tasks FORCE INDEX (idx_bt_visit)
+		WHERE tenant_id = ? AND instance_id = ? FOR UPDATE`, tenant, next); err != nil || len(held) != 1 {
+		t.Fatalf("hold the neighbour's visit: %d seats, err %v; want its 1 seat", len(held), err)
+	}
+
+	errs := make(chan error, 1)
+	go func() {
+		_, err := st.approval.DecideAt(ctx, tenant, id, bpm.DecisionApprove, "", bpm.Actor{UserID: seatAp1}, nil)
+		errs <- err
+	}()
+	waitUntil(t, "the approval to wait on the neighbour's locks", func() bool {
+		var n int
+		err := st.sdb.GetContext(ctx, &n, `SELECT COUNT(*) FROM performance_schema.data_locks
+			WHERE object_schema = DATABASE() AND object_name = 'sys_bpm_tasks' AND lock_status = 'WAITING'`)
+		return err == nil && n > 0
+	})
+	// The neighbour now waits on the approval: a deadlock, and the approval is the smaller transaction.
+	var locked string
+	if err := nb.GetContext(ctx, &locked, `SELECT id FROM sys_approval_instances WHERE tenant_id = ? AND id = ? FOR UPDATE`, tenant, id); err != nil {
+		t.Fatalf("the neighbour lost the deadlock instead of the approval: %v", err)
+	}
+	if err := nb.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errs; err != nil {
+		t.Fatalf("the approval failed: %v (a deadlock victim must decide again)", err)
+	}
+
+	inst, err := st.repo.GetInstance(ctx, tenant, id)
+	if err != nil {
+		t.Fatalf("GetInstance: %v", err)
+	}
+	if inst.Status != bpm.StatusPending || inst.CurrentStep != 1 || inst.CurrentApproverID != seatAp2 || approvedEntries(inst) != 1 {
+		t.Fatalf("after the deadlock: %s@%d approver %s, %d approvals; want pending on step 1 (%s), one approval",
+			inst.Status, inst.CurrentStep, inst.CurrentApproverID, approvedEntries(inst), seatAp2)
+	}
+	assertMirror(t, st.sdb, tenant, id, "after the deadlock")
+	if got := instState(t, st.sdb, tenant, id).Seq; got != 2 {
+		t.Fatalf("seq = %d; want 2 (the arm + the one decision)", got)
 	}
 }
 

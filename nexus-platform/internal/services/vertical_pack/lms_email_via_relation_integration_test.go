@@ -115,10 +115,15 @@ func TestVerticalPack_LMSEmailViaStudentRelation(t *testing.T) {
 	}
 	var run workflow.RunRecord
 	deadline = time.Now().Add(20 * time.Second)
-	for sdb.GetContext(ctx, &run, `SELECT id, tenant_id, workflow_id, trigger_type, record_id, status, error, actions_result, started_at, finished_at
-		FROM sys_workflow_runs WHERE tenant_id = ? AND record_id = ? AND workflow_id = ?`, vpTenantA, enrol, rule.ID) != nil {
+	for {
+		// startRun writes the row as running before the actions run: judge it once it is final (#25).
+		err := sdb.GetContext(ctx, &run, `SELECT id, tenant_id, workflow_id, trigger_type, record_id, status, error, actions_result, started_at, finished_at
+			FROM sys_workflow_runs WHERE tenant_id = ? AND record_id = ? AND workflow_id = ?`, vpTenantA, enrol, rule.ID)
+		if err == nil && run.Status != string(workflow.RunRunning) {
+			break
+		}
 		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for the run of the enrolment without a student email")
+			t.Fatalf("the run of the enrolment without a student email did not reach a final status in 20s (last read: status %q, error %v)", run.Status, err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
