@@ -22,7 +22,7 @@ advisory.
 | Rep (staff) | JWT; a user holds one role ([`internal/ai/tools_access.go:17-19`]) | records and the ⌘K assistant ([`internal/handlers/router.go:796-808`]) | entity ACL, row scope, field ACL |
 | Builder in a customer workspace | workspace-session token, re-resolved on every request | acts as admin and builder in the customer tenant ([`internal/middleware/auth.go:205-213`], [`internal/middleware/auth.go:283-287`]) | refused on its home account's self-service routes ([`internal/middleware/workspace_session.go:13-18`]) and for MCP keys ([`internal/services/mcp_token_service.go:95-100`]) |
 | Preview as a role | preview token | reads, as one role | no writes, no ⌘K ([`internal/middleware/preview_readonly.go:22-33`]) |
-| In-app builder agent | none of its own: it runs inside the builder's chat request ([`internal/handlers/router.go:616-617`]) | the builder's read and `propose_*` tools | proposals only ([ADR 0003](https://github.com/doxuta/nexus/blob/ac6a2093425831f514da56c10393b74398134ef6/docs/adr/0003-agent-boundary-from-change-classes.md)) |
+| In-app builder agent | none of its own: it runs inside the builder's chat request ([`internal/handlers/router.go:616-617`]) | the builder's read and `propose_*` tools | proposals only ([ADR 0003](docs/adr/0003-agent-boundary-from-change-classes.md)) |
 | ⌘K assistant | none of its own: it runs inside the user's request | reads under that user's ACL; proposes record drafts ([`internal/ai/assistant_tools.go:1-16`]) | the user confirms every draft |
 | Outside agent over MCP | `nxm_` key | the builder's read and `propose_*` tools, at `/mcp` only, as the builder who issued the key ([`internal/mcpserver/mcpserver.go:1-7`]) | at most 8 hours, re-checked on every request ([`internal/services/mcp_token_service.go:18-28`]) |
 | API key | `nxk_` key | the record API as one role | never admin, never `/admin/*` ([`internal/services/api_key_service.go:21-40`]); 403 at `/mcp` ([`internal/mcpserver/mcpserver.go:84-88`]) |
@@ -32,13 +32,13 @@ advisory.
 - **Tenant.** The tenant comes from the verified token, and a request without one is refused
   ([`internal/middleware/auth.go:331-349`]). By rule, every query on business data filters `tenant_id`
   ([`AGENTS.md:29`]). Admins skip ACL but not the tenant ([`internal/dynrepo/rowscope.go:182-185`]). This is a convention
-  plus tests, not database-level security ([ADR 0005](https://github.com/doxuta/nexus/blob/ac6a2093425831f514da56c10393b74398134ef6/docs/adr/0005-tenant-isolation-and-row-level-access.md)).
+  plus tests, not database-level security ([ADR 0005](docs/adr/0005-tenant-isolation-and-row-level-access.md)).
 - **Entity ACL and row scope.** Access is denied by default and checked before the handler, then narrowed to rows by a
   predicate in the repository ([`internal/services/acl_service.go:25-88`], [`internal/dynrepo/rowscope.go:10-40`]).
   Admins skip both, and every field-level restriction too ([`internal/ai/assistant_reader.go:88-90`]).
 - **Drafts and publish.** On a delivered project the customer sees only what is published. A table born after the last
   publish is hidden from everyone but the builder, on the record path as well, with residual paths open
-  ([ADR 0002](https://github.com/doxuta/nexus/blob/ac6a2093425831f514da56c10393b74398134ef6/docs/adr/0002-schema-cutoff-drafts-and-rollback.md), [#23]).
+  ([ADR 0002](docs/adr/0002-schema-cutoff-drafts-and-rollback.md), [#23]).
 - **Credentials.**
   - A JWT is HS256 with an algorithm check ([`internal/auth/token.go:90-95`]). Role, admin and status come from the
     database on every request, and a disabled user or an ended session is refused at once
@@ -120,7 +120,7 @@ session ([`nexus-web/lib/aiApply.ts:1-5`]), and a draft-class change then needs 
 - **The cutoff's second ([#19]).** Metadata timestamps have second precision, so a table born in the same second as a
   publish can land on the wrong side of the cutoff.
 
-<!-- Links below are generated; each one points at the commit named under Status. -->
+<!-- Links below are generated; each code link points at d300dfc, named in the first paragraph. -->
 
 [`internal/metaversion/context.go:55-59`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/metaversion/context.go#L55-L59
 [`internal/middleware/auth.go:295-313`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/middleware/auth.go#L295-L313
