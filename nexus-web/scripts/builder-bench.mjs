@@ -155,9 +155,12 @@ function reset(seed, cassette) {
 }
 
 // ── the builder ──
-// The panel is sending while its progress line offers Huỷ (a card's own questions have a Huỷ too, inside the card).
-const sending = (scope, cancel) =>
-  [...(document.querySelector(scope)?.querySelectorAll("button") ?? [])].some((b) => b.textContent.trim() === cancel && !b.closest("article"));
+// The panel is sending while its progress line offers Huỷ. A card's own question has a Huỷ too: a card is an <article> inside
+// the panel (the Studio frame around the panel is an <article> as well, so "inside any article" would match every button).
+const sending = (scope, cancel) => {
+  const dock = document.querySelector(scope);
+  return [...(dock?.querySelectorAll("button") ?? [])].some((b) => b.textContent.trim() === cancel && !dock.contains(b.closest("article")));
+};
 
 /** Types the prompt in the assistant panel and waits for the answer; the answer itself is read from the session. */
 async function ask(nx, page, prompt) {
@@ -174,7 +177,7 @@ async function ask(nx, page, prompt) {
     // Done when nothing is sending and the answer (or an error) sits under the question.
     await page.waitForFunction((scope, cancel) => {
       const dock = document.querySelector(scope);
-      const busy = [...(dock?.querySelectorAll("button") ?? [])].some((b) => b.textContent.trim() === cancel && !b.closest("article"));
+      const busy = [...(dock?.querySelectorAll("button") ?? [])].some((b) => b.textContent.trim() === cancel && !dock.contains(b.closest("article")));
       return !busy && dock?.querySelector('[role="log"]')?.children.length >= 2;
     }, { timeout: AI_TIMEOUT, polling: 500 }, ASSISTANT, cancel);
   } catch {
@@ -182,7 +185,8 @@ async function ask(nx, page, prompt) {
   }
   // An error in place of the answer: the panel's notification with its Thử lại, outside any card.
   const shown = await page.evaluate((scope, retry) => {
-    const b = [...document.querySelectorAll(`${scope} [role="log"] button`)].find((x) => x.textContent.trim() === retry && !x.closest("article"));
+    const dock = document.querySelector(scope);
+    const b = [...document.querySelectorAll(`${scope} [role="log"] button`)].find((x) => x.textContent.trim() === retry && !dock.contains(x.closest("article")));
     return b ? (b.parentElement?.querySelector(".slds-scoped-notification")?.innerText ?? "").trim() || "error" : "";
   }, ASSISTANT, t("studio.assistant.card.retry"));
   if (shown) out.turnError = shown;
@@ -235,8 +239,10 @@ async function applyCards(page, n) {
   const before = [];
   for (let i = 0; i < n; i++) before.push(await primary(page, i));
   const applyAll = t("studio.assistant.card.applyAll").split("{n}")[0];
-  const bulk = await page.evaluateHandle((scope, prefix) => [...document.querySelectorAll(`${scope} button`)]
-    .find((b) => b.textContent.trim().startsWith(prefix) && !b.closest("article") && !b.disabled) ?? null, ASSISTANT, applyAll);
+  const bulk = await page.evaluateHandle((scope, prefix) => {
+    const dock = document.querySelector(scope);
+    return [...dock.querySelectorAll("button")].find((b) => b.textContent.trim().startsWith(prefix) && !dock.contains(b.closest("article")) && !b.disabled) ?? null;
+  }, ASSISTANT, applyAll);
   if (bulk.asElement()) {
     await bulk.asElement().click();
     await settled(page, before.map((l, i) => (bulkLabels.includes(l) ? i : -1)).filter((i) => i >= 0)).catch(() => {});
@@ -271,8 +277,10 @@ async function applyCards(page, n) {
 /** Waits until the panel sends nothing more (a failed apply makes it report the failure to the model on its own). */
 async function idle(page) {
   await sleep(2_000);
-  await page.waitForFunction((scope, cancel) => ![...(document.querySelector(scope)?.querySelectorAll("button") ?? [])]
-    .some((b) => b.textContent.trim() === cancel && !b.closest("article")), { timeout: AI_TIMEOUT, polling: 500 }, ASSISTANT, t("studio.assistant.cancel"));
+  await page.waitForFunction((scope, cancel) => {
+    const dock = document.querySelector(scope);
+    return ![...(dock?.querySelectorAll("button") ?? [])].some((b) => b.textContent.trim() === cancel && !dock.contains(b.closest("article")));
+  }, { timeout: AI_TIMEOUT, polling: 500 }, ASSISTANT, t("studio.assistant.cancel"));
 }
 
 async function publish(nx, page) {
@@ -410,16 +418,18 @@ async function attempt(c, n, seed) {
     o.error = String(e?.message ?? e); // the driver's own failure, reported as is
   } finally {
     o.seconds = Math.round((Date.now() - t0) / 1000);
+    for (const [who, page] of Object.entries(pages)) {
+      await page.screenshot({ path: path.join(outDir, "shots", `${file}-${who}.png`), fullPage: true }).catch(() => {});
+      await page.browserContext().close().catch(() => {});
+    }
+    // Closing the pages ends a turn still running; the server writes its ledger row as it returns.
+    await sleep(3_000);
     try {
       o.runs = ledger();
     } catch (e) {
       o.error ??= `reading sys_ai_runs: ${e.message}`;
     }
     Object.assign(o, transcript(`${file}.jsonl`));
-    for (const [who, page] of Object.entries(pages)) {
-      await page.screenshot({ path: path.join(outDir, "shots", `${file}-${who}.png`), fullPage: true }).catch(() => {});
-      await page.browserContext().close().catch(() => {});
-    }
     fs.writeFileSync(path.join(outDir, "obs", `${file}.json`), scrub(JSON.stringify(o, null, 2)));
   }
   return o;
