@@ -815,6 +815,7 @@ func main() {
 	// WithIdempotencyStore: Idempotency-Key on POST /:entity/import (specs/047 FR-12) — a resend of
 	// the same file replays the first summary instead of inserting the rows again.
 	importSvc := services.NewImportService(metaRepo, dynRepo, logger).WithSequenceClaimer(dynRepo).
+		WithSchemaCutoff(draftGate). // issue #2: a table born after the last publish is absent for the customer's import too
 		WithBeforeHooks(workflowCache, beforeRunSink).
 		WithIdempotencyStore(idempotency.NewSQLRepository(sqlxDB)).
 		WithAfterInsert(recordSvc.RefreshStoredRollups) // specs/083: stored roll-up totals follow an import

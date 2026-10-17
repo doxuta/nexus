@@ -5,12 +5,15 @@
 // rep could GET /<table> (200) and POST it (201) — the customer used a table nobody had published.
 // Driven through the production router over a migrated throwaway DB, as the NON-admin rep holding the
 // grant: the record path answers 404 ENTITY_NOT_FOUND, as for a table that is not there, until the next
-// version moves the cutoff past it.
+// version moves the cutoff past it. Round 2: the CSV import too (it resolved the table on its own).
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -67,6 +70,7 @@ func TestRecordPath_TableBornAfterThePublishIsAbsentForTheRep(t *testing.T) {
 	r := gin.New()
 	RegisterAPIRoutes(r.Group("/api/v1"), accessVerifier(t), aclSvc, APIHandlers{
 		Record: NewDynamicRecordHandler(services.NewRecordService(metaRepo, dyn).WithACLAuthorizer(aclSvc).WithSchemaCutoff(gate), zap.NewNop()),
+		Import: NewImportHandler(services.NewImportService(metaRepo, dyn, zap.NewNop()).WithSchemaCutoff(gate), zap.NewNop()),
 	}, zap.NewNop())
 	rep := flsMetaToken(t, tenantID, repRole, false)
 	do := func(method, path string, body any) (int, string) {
@@ -77,6 +81,25 @@ func TestRecordPath_TableBornAfterThePublishIsAbsentForTheRep(t *testing.T) {
 		w := doAuthed(t, r, method, "/api/v1"+path, rep, body, nil)
 		return w.Code, errorCode(parseBody(t, w))
 	}
+	// importCSV posts a one-row CSV import as the rep (verifier round 2: the import resolved the table on its own).
+	importCSV := func(table string) *httptest.ResponseRecorder {
+		t.Helper()
+		var buf bytes.Buffer
+		mw := multipart.NewWriter(&buf)
+		fw, err := mw.CreateFormFile("file", "rows.csv")
+		if err != nil {
+			t.Fatalf("form file: %v", err)
+		}
+		_, _ = fw.Write([]byte("title\nimported by the rep\n"))
+		_ = mw.WriteField("mapping", `{"title":"title"}`)
+		_ = mw.Close()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/"+table+"/import", &buf)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		req.Header.Set("Authorization", "Bearer "+rep)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
 
 	// Control: the same grants on a table the customer has.
 	if code, body := do("POST", "/cut_old", map[string]any{"title": "old"}); code != http.StatusCreated {
@@ -85,11 +108,17 @@ func TestRecordPath_TableBornAfterThePublishIsAbsentForTheRep(t *testing.T) {
 	if code, body := do("GET", "/cut_old", nil); code != http.StatusOK {
 		t.Fatalf("GET /cut_old as the rep = %d %s; want 200", code, body)
 	}
+	if w := importCSV("cut_old"); w.Code != http.StatusOK {
+		t.Fatalf("POST /cut_old/import as the rep = %d %s; want 200", w.Code, w.Body.String())
+	}
 	// The table born after the publish does not exist for the rep yet, grant or not.
 	for _, m := range []string{"GET", "POST"} {
 		if code, ec := codeOf(m, "/cut_new", map[string]any{"title": "new"}); code != http.StatusNotFound || ec != "ENTITY_NOT_FOUND" {
 			t.Fatalf("%s /cut_new as the rep before the publish = %d %s; want 404 ENTITY_NOT_FOUND", m, code, ec)
 		}
+	}
+	if w := importCSV("cut_new"); w.Code != http.StatusNotFound || errorCode(parseBody(t, w)) != "ENTITY_NOT_FOUND" {
+		t.Fatalf("POST /cut_new/import as the rep before the publish = %d %s; want 404 ENTITY_NOT_FOUND", w.Code, w.Body.String())
 	}
 	var rows int
 	if err := sx.Get(&rows, "SELECT COUNT(*) FROM obj_cut_new WHERE tenant_id = ?", tenantID); err != nil || rows != 0 {
