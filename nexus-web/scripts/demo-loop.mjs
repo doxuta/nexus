@@ -9,7 +9,9 @@
 //
 // One screenshot per step into <out-dir>; the first failing step prints its name and the script exits 1.
 // NEXUS_PORT as for docker compose (default 8080), or NEXUS_URL · CHROME_PATH (default: the macOS app, else
-// google-chrome / chromium / chromium-browser on PATH).
+// google-chrome / chromium / chromium-browser on PATH). DEMO_LOOP_RECORD=<dir> (opt-in, never set in CI) also keeps
+// every frame each page paints, as <builder|rep>-<epoch ms>.jpg, and the steps' times in <dir>/timeline.json: the
+// raw material of the README's GIF (docs/media). The loop itself runs the same with or without it.
 //
 // Without a model or key the assistant answers from the committed cassette:
 //   AI_ENABLED=true AI_GATEWAY_MODE=replay AI_GATEWAY_CASSETTE=/cassettes/demo-loop.jsonl docker compose up --build
@@ -40,6 +42,7 @@ const TICKET = "Printer on floor 2 is jammed"; // the rep's
 const TICKET_EDITED = `${TICKET} (toner replaced)`;
 const BUILDER_TICKET = "Projector in room 3 flickers"; // the builder's: the rep sees it and may not edit it
 const AI_TIMEOUT = 10 * 60_000; // a live model may take minutes; a replay answers at once
+const RECORD = process.env.DEMO_LOOP_RECORD;
 
 const outDir = process.argv[2];
 if (!outDir) {
@@ -111,6 +114,18 @@ const browser = await puppeteer.launch({
   args: process.env.CI ? ["--no-sandbox"] : [], // CI runners only: the sandbox needs user namespaces they may not grant
 });
 const errors = new Map(); // page → its page errors, printed when a step fails
+const timeline = []; // each step's start and end, and whose page it ends on: written for DEMO_LOOP_RECORD
+
+/** DEMO_LOOP_RECORD only: saves every frame `page` paints (a CDP screencast) as <who>-<epoch ms>.jpg. */
+async function recordFrames(page, who) {
+  const cdp = await page.createCDPSession();
+  cdp.on("Page.screencastFrame", ({ data, metadata, sessionId }) => {
+    const ms = Math.round((metadata.timestamp ?? Date.now() / 1000) * 1000);
+    fs.writeFileSync(path.join(RECORD, `${who}-${ms}.jpg`), data, "base64");
+    cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+  });
+  await cdp.send("Page.startScreencast", { format: "jpeg", quality: 90 });
+}
 
 // Signs in through the real API and seeds the session the way lib/api.ts login() stores it (remember-me →
 // localStorage), in a browser context of its own, so the builder and the rep never share storage (same as ui-shots.mjs).
@@ -121,6 +136,7 @@ async function signIn(persona) {
   page.setDefaultTimeout(30_000);
   errors.set(page, []);
   page.on("pageerror", (err) => errors.get(page).push(String(err.message ?? err)));
+  if (RECORD) await recordFrames(page, persona === PERSONAS.rep ? "rep" : "builder");
   await page.evaluateOnNewDocument((s, tenant) => {
     localStorage.setItem("nexus_remember", "1");
     localStorage.setItem("nexus_token", s.accessToken);
@@ -525,6 +541,7 @@ const steps = [
 ];
 
 fs.mkdirSync(outDir, { recursive: true });
+if (RECORD) fs.mkdirSync(RECORD, { recursive: true });
 let failed = null;
 try {
   adminToken = (await login(PERSONAS.builder)).accessToken;
@@ -542,6 +559,8 @@ try {
       console.error(`FAIL ${String(i + 1).padStart(2)} ${name}: ${err.message}`);
       for (const e of (active && errors.get(active)) ?? []) console.error(`     page error: ${e}`);
       break;
+    } finally {
+      timeline.push({ step: i + 1, name, who: active === rep ? "rep" : "builder", start: t0, end: Date.now() });
     }
   }
 } catch (err) {
@@ -549,6 +568,7 @@ try {
   console.error(`FAIL setup: ${err.message}`);
 } finally {
   await browser.close();
+  if (RECORD) fs.writeFileSync(path.join(RECORD, "timeline.json"), `${JSON.stringify(timeline, null, 2)}\n`);
 }
 if (failed) process.exit(1);
 console.log(`demo loop passed: ${steps.length} steps, screenshots in ${outDir}`);
