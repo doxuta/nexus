@@ -117,6 +117,9 @@ type APIHandlers struct {
 	// DELETE /admin/api-keys/:id, admin-gated. The keys it issues authenticate on the SAME
 	// Bearer chain via the composite verifier passed to RegisterAPIRoutes. nil disables it.
 	APIKey *AdminAPIKeyHandler
+	// MCPToken is "Connect an agent (MCP)" (issue #3): POST/GET /admin/mcp-tokens + DELETE
+	// /admin/mcp-tokens/:id on builderGated. The tokens it issues work on /mcp only. nil disables it.
+	MCPToken *AdminMCPTokenHandler
 	// Calendar is the business-hours calendar admin CRUD (CALENDAR-1):
 	// /admin/business-calendars[/:id], admin-gated. The rows it manages feed the SLA/timer
 	// engine (slice 1b) through internal/calendar. nil disables it.
@@ -633,6 +636,10 @@ func RegisterAPIRoutes(rg *gin.RouterGroup, verifier TokenVerifier, aclChecker A
 	// manage API keys: keys mint IsAdmin=false by construction.
 	if h.APIKey != nil {
 		h.APIKey.RegisterRoutes(builderGated)
+	}
+	// Issue #3: /admin/mcp-tokens, the Studio's "Connect an agent (MCP)": the AI builder's gate.
+	if h.MCPToken != nil {
+		h.MCPToken.RegisterRoutes(builderGated)
 	}
 	// Business-hours calendars (CALENDAR-1): /admin/business-calendars CRUD. Admin-gated
 	// like every other /admin resource, and BEFORE the dynamic dispatcher so its static

@@ -10,7 +10,7 @@ import "time"
 // Secret handling mirrors RefreshToken / SSOHandoffToken: only the SHA-256 hex of the full raw
 // key is persisted (KeyHash, `json:"-"` so no handler can ever serialize it); the raw key is
 // returned ONCE at creation. KeyPrefix is the public identification slice shown in the admin
-// list — deliberately NOT part of the secret's effective entropy budget (see newAPIKeySecret).
+// list — deliberately NOT part of the secret's effective entropy budget (see services.newSecret).
 type APIKey struct {
 	ID        string `gorm:"type:char(36);primaryKey" json:"id"`
 	TenantID  string `gorm:"type:char(36)" json:"tenantId"`

@@ -49,6 +49,7 @@ func TestRuleFor_Patterns(t *testing.T) {
 		{"sys_sequences", true, MergeMax, "data", "counter never goes back"},
 		{"sys_idempotency_keys", true, Clear, "", "wiped"},
 		{"refresh_tokens", true, Skip, "", "never in the file"},
+		{"sys_mcp_tokens", true, Skip, "", "an agent key never travels with a backup"},
 		{"totally_new_table", false, 0, "", "unknown table"},
 		{"objx", false, 0, "", "pattern needs the underscore"},
 		{"obj_", false, 0, "", "pattern needs a name"},

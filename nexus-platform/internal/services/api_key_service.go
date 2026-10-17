@@ -265,7 +265,7 @@ func (s *APIKeyService) IssueAPIKey(ctx context.Context, tenantID string, in Iss
 		return nil, "", invalid("APIKEY_EXPIRY_INVALID", "expiresAt phải ở tương lai")
 	}
 
-	raw, prefix, err := newAPIKeySecret()
+	raw, prefix, err := newSecret(apiKeyPrefix)
 	if err != nil {
 		return nil, "", fmt.Errorf("services.APIKeyService.IssueAPIKey: generate secret: %w", err)
 	}
@@ -427,16 +427,16 @@ func (s *APIKeyService) touch(k *auth.APIKey, now time.Time) {
 	}()
 }
 
-// newAPIKeySecret mints the raw credential `nxk_<43 base64url chars>` from crypto/rand and
-// returns it with its public identification prefix (the first apiKeyPrefixChars of the random
-// part). A CSPRNG failure aborts issuance — never a weak key.
-func newAPIKeySecret() (raw, prefix string, err error) {
+// newSecret mints a raw credential `<namespace><43 base64url chars>` (nxk_ API keys, nxm_ MCP
+// tokens) from crypto/rand and returns it with its public identification prefix (the first
+// apiKeyPrefixChars of the random part). A CSPRNG failure aborts issuance — never a weak key.
+func newSecret(namespace string) (raw, prefix string, err error) {
 	buf := make([]byte, apiKeySecretBytes)
 	if _, err := rand.Read(buf); err != nil {
 		return "", "", fmt.Errorf("crypto/rand read: %w", err)
 	}
 	random := base64.RawURLEncoding.EncodeToString(buf)
-	return apiKeyPrefix + random, random[:apiKeyPrefixChars], nil
+	return namespace + random, random[:apiKeyPrefixChars], nil
 }
 
 // ---- composite Bearer verifier ------------------------------------------------------------
@@ -494,6 +494,10 @@ func (v *CompositeVerifier) VerifyAccessToken(tok string) (*auth.Claims, error) 
 // VerifyAccessTokenContext is the context-aware verify the auth middleware prefers (it passes
 // the request context so the key lookup honors cancellation/deadlines).
 func (v *CompositeVerifier) VerifyAccessTokenContext(ctx context.Context, tok string) (*auth.Claims, error) {
+	if strings.HasPrefix(tok, MCPTokenPrefix) {
+		// An MCP token is valid on /mcp only (issue #3): on every API route it is a bad token.
+		return nil, auth.ErrTokenInvalid
+	}
 	if strings.HasPrefix(tok, apiKeyPrefix) {
 		return v.keys.VerifyKey(ctx, tok)
 	}

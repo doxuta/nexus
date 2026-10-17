@@ -558,6 +558,8 @@ func statusForCode(code string) int {
 		"APP_NOT_FOUND",
 		// APIKEY-1 machine identity: an unknown or cross-tenant key id is a missing resource.
 		"APIKEY_NOT_FOUND",
+		// Issue #3: revoking an MCP token that is not one of the caller's.
+		"MCP_TOKEN_NOT_FOUND",
 		// CALENDAR-1: an unknown or cross-tenant business-calendar id is a missing resource.
 		"CALENDAR_NOT_FOUND",
 		// TENANT-PROVISION (milestone C): an unknown/suspended cross-tenant install target.

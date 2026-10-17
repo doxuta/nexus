@@ -168,3 +168,16 @@ func TestRouterFreeze_ReadsOtherTenantsAndChainOrder(t *testing.T) {
 		t.Errorf("preview write on frozen tenant: %d %s, want 403 PREVIEW_READ_ONLY before the freeze", pw.Code, pw.Body.String())
 	}
 }
+
+// Issue #3: revoking an agent key is incident response, like revoking an API key: a frozen tenant
+// still lets the builder do it (creating one stays frozen).
+func TestRouterFreeze_AgentKeyRevokePassesCreateDoesNot(t *testing.T) {
+	hits := 0
+	r := freezeEngine(t, frozenTenants{"t1": time.Now().Add(10 * time.Minute)}, &hits)
+	if w := freezeDo(r, http.MethodDelete, "/api/v1/admin/mcp-tokens/x", "tok-t1"); isFrozenBody(w) {
+		t.Errorf("revoking an agent key while frozen: %d %s", w.Code, w.Body.String())
+	}
+	if w := freezeDo(r, http.MethodPost, "/api/v1/admin/mcp-tokens", "tok-t1"); !isFrozenBody(w) {
+		t.Errorf("creating an agent key while frozen: %d; want 503 TENANT_MAINTENANCE", w.Code)
+	}
+}

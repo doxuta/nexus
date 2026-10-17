@@ -28,6 +28,7 @@ vi.mock("./operate/OperateOverview", () => ({ OperateOverview: () => <p>tổng q
 vi.mock("@/components/screens/admin/BackgroundJobs", () => ({ BackgroundJobs: () => <p>việc nền</p> }));
 vi.mock("@/components/screens/admin/EmailLog", () => ({ EmailLog: () => <p>nhật ký email</p> }));
 vi.mock("@/components/screens/admin/ApiKeys", () => ({ ApiKeys: () => <p>khoá API</p> }));
+vi.mock("@/components/screens/admin/McpConnect", () => ({ McpConnect: () => <p>kết nối agent</p> }));
 vi.mock("./operate/CredentialsPage", () => ({ CredentialsPage: () => <p>kho khoá kết nối</p> }));
 vi.mock("@/components/screens/admin/DoctorScreen", () => ({ DoctorScreen: () => <p>bác sĩ hệ thống</p> }));
 vi.mock("./WorkflowRunHistory", () => ({
@@ -127,6 +128,7 @@ describe("Vận hành", () => {
     ["viec-nen", "việc nền"],
     ["email", "nhật ký email"],
     ["khoa-truy-cap", "khoá API"],
+    ["khoa-truy-cap", "kết nối agent"], // issue #3: the agent connection sits with the access keys
     ["khoa-ket-noi", "kho khoá kết nối"],
   ])("tu-dong/%s mounts its screen with '← Việc tự động & kết nối'", (seg, text) => {
     go(`van-hanh/tu-dong/${seg}`);

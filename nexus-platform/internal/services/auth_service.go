@@ -115,6 +115,9 @@ type AuthService struct {
 	newID    func() string    // injectable id generator; defaults to uuid
 	now      func() time.Time // injectable clock; defaults to time.Now
 
+	// agentKeys (issue #3, WithAgentKeys) ends the user's MCP agent keys with their sessions. nil = none.
+	agentKeys agentKeyRevoker
+
 	// specs/062-customer-workspace L1b: resolves a builder workspace-session token for GET /auth/me
 	// (the same resolver the Auth stage uses). nil ⇒ such a token is ErrUnauthorized (fail closed).
 	workspace workspaceMeResolver
