@@ -160,8 +160,16 @@ func previewFailed(err error) string {
 	return toolErr("PREVIEW_READ_FAILED: không đọc được bản đang có để so sánh (%v) — thử lại", err)
 }
 
-// layoutChange reads the layout currently SERVED for (entity, view) and builds the envelope.
-func (e *toolExecutor) layoutChange(ctx context.Context, d *DraftLayout) (*DraftChange, string) {
+// layoutChange reads the layout currently SERVED for (entity, view) and builds the envelope. A table
+// that is only proposed in this draft (live=false) serves nothing yet: its layout is a create.
+func (e *toolExecutor) layoutChange(ctx context.Context, d *DraftLayout, live bool) (*DraftChange, string) {
+	proj := func(l map[string]any) map[string]any {
+		return map[string]any{"entityName": d.Entity, "viewType": d.ViewType, "layout": l}
+	}
+	label, target := fmt.Sprintf("Bố cục %s của %q", d.ViewType, d.Entity), DraftChangeTarget{Entity: d.Entity, View: d.ViewType}
+	if !live {
+		return newChange("layout", "", "create", label, target, nil, proj(d.LayoutJSON)), ""
+	}
 	if e.docs == nil || e.docs.Layouts == nil {
 		return nil, docUnavailable()
 	}
@@ -173,15 +181,12 @@ func (e *toolExecutor) layoutChange(ctx context.Context, d *DraftLayout) (*Draft
 	if v == nil {
 		return nil, previewFailed(fmt.Errorf("không có màn %s", d.ViewType))
 	}
-	label, key := fmt.Sprintf("Bố cục %s của %q", d.ViewType, d.Entity), d.Entity+":"+d.ViewType
+	key := d.Entity + ":" + d.ViewType
 	if v.IsDefault {
 		label += " (mặc định)"
 		key = ""
 	}
-	proj := func(l map[string]any) map[string]any {
-		return map[string]any{"entityName": d.Entity, "viewType": d.ViewType, "layout": l}
-	}
-	return newChange("layout", key, "update", label, DraftChangeTarget{Entity: d.Entity, View: d.ViewType}, proj(v.LayoutData), proj(d.LayoutJSON)), ""
+	return newChange("layout", key, "update", label, target, proj(v.LayoutData), proj(d.LayoutJSON)), ""
 }
 
 func workflowProjection(name, entity, trigger string, cond, actions any, active bool, interval int) map[string]any {

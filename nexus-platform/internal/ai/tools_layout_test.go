@@ -137,3 +137,82 @@ func TestTools_ProposeLayout_TenantScope(t *testing.T) {
 		t.Fatalf("rejected cross-tenant proposal must not buffer, got %+v", e.draft)
 	}
 }
+
+// #30 item 1: a table proposed in the SAME draft takes its entry screen in the same turn — the
+// layout is judged against the drafted fields (plus a propose_field on that table), and the card
+// is a "create" (nothing is served for a table that does not exist yet).
+func TestTools_ProposeLayout_TableProposedInTheSameDraft(t *testing.T) {
+	e := &toolExecutor{reader: twoTenantLayoutReader(), tenantID: "tenant-A", docs: fullDocs(0)}
+	mustBuffer(t, e, "propose_entity", `{"name":"candidates","label":"Ứng viên","fields":[
+		{"name":"full_name","label":"Họ tên","fieldType":"text","required":true},
+		{"name":"email","label":"Email","fieldType":"email"},
+		{"name":"code","label":"Mã","fieldType":"text","options":{"maxLength":40,"indexed":true}}]}`)
+	mustBuffer(t, e, "propose_field", `{"entity":"candidates","name":"position","label":"Vị trí","fieldType":"text"}`)
+
+	mustBuffer(t, e, "propose_layout", `{"entity":"candidates","viewType":"edit","layoutJson":{
+		"version":1,"sections":[{"columns":2,"fields":["full_name","email","position"]}]}}`)
+	it := e.draft[len(e.draft)-1]
+	if it.Layout == nil || it.Layout.Entity != "candidates" || it.Change == nil {
+		t.Fatalf("layout draft = %+v", it)
+	}
+	if c := it.Change; c.Op != "create" || c.Before != nil || c.Target.Entity != "candidates" || c.Target.View != "edit" {
+		t.Fatalf("change = %+v; want a create on candidates/edit with no before", c)
+	}
+	// The drafted index makes the list sortable by it, like the live table will be.
+	mustBuffer(t, e, "propose_layout", `{"entity":"candidates","viewType":"list","layoutJson":{
+		"version":1,"columns":[{"field":"full_name"}],"defaultSort":{"field":"code","order":"asc"}}}`)
+
+	// Judged against the drafted fields, not waved through.
+	mustReject(t, e, "propose_layout", `{"entity":"candidates","viewType":"edit","layoutJson":{
+		"version":1,"sections":[{"columns":1,"fields":["email"]}]}}`, "REQUIRED_FIELD_OMITTED")
+	mustReject(t, e, "propose_layout", `{"entity":"candidates","viewType":"edit","layoutJson":{
+		"version":1,"sections":[{"columns":1,"fields":["full_name","ghost"]}]}}`, "LAYOUT_INVALID")
+	mustReject(t, e, "propose_layout", `{"entity":"candidates","viewType":"list","layoutJson":{
+		"version":1,"columns":[{"field":"full_name"}],"defaultSort":{"field":"email","order":"asc"}}}`, "LAYOUT_INVALID")
+	// A table neither live nor drafted is still refused.
+	mustReject(t, e, "propose_layout", `{"entity":"nobody","viewType":"edit","layoutJson":{
+		"version":1,"sections":[{"columns":1,"fields":["x"]}]}}`, "ENTITY_NOT_FOUND")
+}
+
+// #30 item 2: an index proposed in the same draft (propose_edit_field indexed:true) counts when the
+// list's defaultSort is judged; before that edit the same layout is refused.
+func TestTools_ProposeLayout_SeesAnIndexProposedInTheSameDraft(t *testing.T) {
+	r := twoTenantLayoutReader()
+	r.fields["tenant-A"]["eA2"][0].ID = "fT1" // propose_edit_field addresses the field by id
+	e := &toolExecutor{reader: r, tenantID: "tenant-A", docs: fullDocs(0)}
+	list := `{"entity":"treatments","viewType":"list","layoutJson":{
+		"version":1,"columns":[{"field":"title"}],"defaultSort":{"field":"title","order":"asc"}}}`
+	mustReject(t, e, "propose_layout", list, "LAYOUT_INVALID")
+
+	mustBuffer(t, e, "propose_edit_field", `{"entity":"treatments","field":"title","changes":{"options":{"maxLength":80,"indexed":true}}}`)
+	mustBuffer(t, e, "propose_layout", list)
+	if c := e.draft[len(e.draft)-1].Change; c == nil || c.Op != "update" {
+		t.Fatalf("change = %+v; want an update of the live table's served list", c)
+	}
+	// The overlay is a copy: the registry's own field is untouched.
+	if got := *r.fields["tenant-A"]["eA2"][0].Options; got != `{"maxLength":80}` {
+		t.Fatalf("live field options mutated to %s", got)
+	}
+}
+
+// #30 security (the PR #21 shape on the layout path): a draft entity that re-uses a LIVE table's
+// name — refused by propose_entity, but an older thread's draft may still sit in the buffer — never
+// shadows the live table. The layout is judged against the live fields, and the card is an update
+// of the live table, never a "create" of the harmless-looking draft.
+func TestTools_ProposeLayout_LiveTableWinsOverADraftOfTheSameName(t *testing.T) {
+	e := &toolExecutor{reader: twoTenantLayoutReader(), tenantID: "tenant-A", docs: fullDocs(0)}
+	mustReject(t, e, "propose_entity", `{"name":"treatments","label":"Phiếu hỗ trợ","fields":[{"name":"note","label":"Ghi chú","fieldType":"text"}]}`, "ENTITY_ALREADY_EXISTS")
+
+	e.draft = append(e.draft, DraftItem{Kind: "entity", Entity: &DraftEntity{Name: "treatments", Label: "Phiếu hỗ trợ",
+		Fields: []DraftField{{Name: "note", Label: "Ghi chú", FieldType: "text"}}}})
+	// Valid for the draft, not for the live table (no "note", required title/patient omitted).
+	mustReject(t, e, "propose_layout", `{"entity":"treatments","viewType":"edit","layoutJson":{
+		"version":1,"sections":[{"columns":1,"fields":["note"]}]}}`, "LAYOUT_INVALID")
+
+	mustBuffer(t, e, "propose_layout", `{"entity":"treatments","viewType":"edit","layoutJson":{
+		"version":1,"sections":[{"columns":1,"fields":["title","patient"]}]}}`)
+	it := e.draft[len(e.draft)-1]
+	if it.Layout.Entity != "treatments" || it.Change == nil || it.Change.Op != "update" || it.Change.Before == nil {
+		t.Fatalf("layout card = %+v / %+v; want an update of the live treatments layout", it.Layout, it.Change)
+	}
+}
