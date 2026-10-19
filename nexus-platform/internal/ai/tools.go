@@ -1342,8 +1342,8 @@ func (e *toolExecutor) proposeLayout(ctx context.Context, argsJSON string) strin
 // the layout against the real schema at Apply. live reports which branch resolved.
 func (e *toolExecutor) layoutFields(ctx context.Context, raw string) (string, bool, []metadata.FieldDefinition, string) {
 	var fields []metadata.FieldDefinition
-	name := strings.ToLower(strings.TrimSpace(raw))
-	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, raw)
+	name := canonicalEntityName(raw)
+	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, name)
 	live := err == nil
 	switch {
 	case live:
@@ -2540,6 +2540,12 @@ func (e *toolExecutor) resolveEntityField(ctx context.Context, entity, field str
 // the tool runs the SAME exported function body the apply path runs.
 // ---------------------------------------------------------------------------------------------
 
+// canonicalEntityName is the ONE spelling a draft-aware tool looks a table up by, in the live
+// registry AND the draft buffer: trimmed and lowercase, as stored names are (ValidateCreateEntity →
+// SanitizeIdentifier). Probing the two with different spellings let " name" miss the live table and
+// fall to a stale draft of the same name (verifier round 1 of #39).
+func canonicalEntityName(raw string) string { return strings.ToLower(strings.TrimSpace(raw)) }
+
 // draftedEntities returns the entities already buffered as drafts THIS turn, keyed by their
 // canonical (lowercase — ValidateCreateEntity → SanitizeIdentifier) name. It is the ONE shared
 // scan behind every "entity exists OR was drafted this turn" tool rule
@@ -2560,14 +2566,14 @@ func (e *toolExecutor) draftedEntities() map[string]*DraftEntity {
 // the same-turn draft buffer (shape-only; apply order is entity first, so referencing it is
 // structurally sound). Returns ("", errJSON) when neither resolves.
 func (e *toolExecutor) resolveEntityLiveOrDrafted(ctx context.Context, raw string) (string, string) {
-	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, raw)
+	canonical := canonicalEntityName(raw)
+	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, canonical)
 	if err == nil {
 		return ent.Name, ""
 	}
 	if !errors.Is(err, metadata.ErrEntityNotFound) {
 		return "", toolErr("RESOLVE_ENTITY_FAILED: %v", err)
 	}
-	canonical := strings.ToLower(strings.TrimSpace(raw))
 	if _, ok := e.draftedEntities()[canonical]; ok {
 		return canonical, ""
 	}

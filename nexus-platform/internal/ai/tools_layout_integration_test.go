@@ -260,6 +260,15 @@ func TestToolsLayout_IT_SameDraftTableAndIndex_ApplyInOrder(t *testing.T) {
 		t.Fatalf("parity broken: SaveLayout refused the same-draft layout once its table exists: %v", err)
 	}
 
+	// Verifier round 1 of #39: the table is live now and its draft is still in the buffer (an MCP
+	// thread replays earlier proposals, applied ones included). A leading-space spelling must still
+	// resolve to the LIVE table: an update with a Before, never a create that overwrites it at Apply.
+	mustBuffer(t, e, "propose_layout", `{"entity":" `+name+`","viewType":"edit","layoutJson":{
+		"version":1,"sections":[{"columns":1,"fields":["full_name","email","code"]}]}}`)
+	if it := e.draft[len(e.draft)-1]; it.Layout.Entity != name || it.Change == nil || it.Change.Op != "update" || it.Change.Before == nil {
+		t.Fatalf("spaced name: layout card = %+v / %+v; want an update of the live %s with a Before", it.Layout, it.Change, name)
+	}
+
 	// Item 2: a list sorted by "code" leans on an index proposed in the same draft.
 	e.draft = nil
 	mustBuffer(t, e, "propose_edit_field", `{"entity":"`+name+`","field":"code","changes":{"options":{"maxLength":40,"indexed":true}}}`)

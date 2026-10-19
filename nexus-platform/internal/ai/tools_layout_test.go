@@ -200,19 +200,40 @@ func TestTools_ProposeLayout_SeesAnIndexProposedInTheSameDraft(t *testing.T) {
 // shadows the live table. The layout is judged against the live fields, and the card is an update
 // of the live table, never a "create" of the harmless-looking draft.
 func TestTools_ProposeLayout_LiveTableWinsOverADraftOfTheSameName(t *testing.T) {
-	e := &toolExecutor{reader: twoTenantLayoutReader(), tenantID: "tenant-A", docs: fullDocs(0)}
-	mustReject(t, e, "propose_entity", `{"name":"treatments","label":"Phiếu hỗ trợ","fields":[{"name":"note","label":"Ghi chú","fieldType":"text"}]}`, "ENTITY_ALREADY_EXISTS")
+	// Every spelling of the live name resolves to the live table (verifier round 1 of #39: a
+	// leading-space variant missed the registry, fell to the draft and made a "create" card whose
+	// Apply overwrote the live layout).
+	for _, ref := range []string{"treatments", " treatments", "treatments ", "Treatments", " TREATMENTS "} {
+		t.Run(ref, func(t *testing.T) {
+			e := &toolExecutor{reader: twoTenantLayoutReader(), tenantID: "tenant-A", docs: fullDocs(0)}
+			mustReject(t, e, "propose_entity", `{"name":"treatments","label":"Phiếu hỗ trợ","fields":[{"name":"note","label":"Ghi chú","fieldType":"text"}]}`, "ENTITY_ALREADY_EXISTS")
 
-	e.draft = append(e.draft, DraftItem{Kind: "entity", Entity: &DraftEntity{Name: "treatments", Label: "Phiếu hỗ trợ",
-		Fields: []DraftField{{Name: "note", Label: "Ghi chú", FieldType: "text"}}}})
-	// Valid for the draft, not for the live table (no "note", required title/patient omitted).
-	mustReject(t, e, "propose_layout", `{"entity":"treatments","viewType":"edit","layoutJson":{
-		"version":1,"sections":[{"columns":1,"fields":["note"]}]}}`, "LAYOUT_INVALID")
+			e.draft = append(e.draft, DraftItem{Kind: "entity", Entity: &DraftEntity{Name: "treatments", Label: "Phiếu hỗ trợ",
+				Fields: []DraftField{{Name: "note", Label: "Ghi chú", FieldType: "text"}}}})
+			// Valid for the draft, not for the live table (no "note", required title/patient omitted).
+			mustReject(t, e, "propose_layout", `{"entity":"`+ref+`","viewType":"edit","layoutJson":{
+				"version":1,"sections":[{"columns":1,"fields":["note"]}]}}`, "LAYOUT_INVALID")
 
-	mustBuffer(t, e, "propose_layout", `{"entity":"treatments","viewType":"edit","layoutJson":{
-		"version":1,"sections":[{"columns":1,"fields":["title","patient"]}]}}`)
-	it := e.draft[len(e.draft)-1]
-	if it.Layout.Entity != "treatments" || it.Change == nil || it.Change.Op != "update" || it.Change.Before == nil {
-		t.Fatalf("layout card = %+v / %+v; want an update of the live treatments layout", it.Layout, it.Change)
+			mustBuffer(t, e, "propose_layout", `{"entity":"`+ref+`","viewType":"edit","layoutJson":{
+				"version":1,"sections":[{"columns":1,"fields":["title","patient"]}]}}`)
+			it := e.draft[len(e.draft)-1]
+			if it.Layout.Entity != "treatments" || it.Change == nil || it.Change.Op != "update" || it.Change.Before == nil {
+				t.Fatalf("layout card = %+v / %+v; want an update of the live treatments layout", it.Layout, it.Change)
+			}
+		})
+	}
+}
+
+// resolveEntityLiveOrDrafted (propose_approval, dashboard widgets) canonicalizes once, like
+// propose_layout: a spaced or mixed-case spelling of a live table resolves to it, not to a refusal.
+func TestResolveEntityLiveOrDrafted_CanonicalName(t *testing.T) {
+	e := &toolExecutor{reader: twoTenantLayoutReader(), tenantID: "tenant-A"}
+	for _, ref := range []string{"patients", " patients", "patients ", "Patients", " PATIENTS "} {
+		if name, res := e.resolveEntityLiveOrDrafted(context.Background(), ref); res != "" || name != "patients" {
+			t.Fatalf("resolve(%q) = %q, %s; want the live patients", ref, name, res)
+		}
+	}
+	if _, res := e.resolveEntityLiveOrDrafted(context.Background(), " invoices"); !strings.Contains(res, "ENTITY_NOT_FOUND") {
+		t.Fatalf("another tenant's table must stay unresolved, got %s", res)
 	}
 }
