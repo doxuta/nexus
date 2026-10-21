@@ -1,7 +1,10 @@
 source "$(dirname "$0")/../lib/regrade.sh"
 go_gates
-check "the route is registered" bash -c "grep -rE --include='*.go' --exclude='*_test.go' '\.GET\(\s*\"/:entity/:id/notes/newest\"' internal/handlers"
-check "nexus-web/lib/api.ts calls it" grep -q 'notes/newest' ../nexus-web/lib/api.ts
-check "check-orphan-endpoints.py --strict" python3 scripts/check-orphan-endpoints.py --strict
-check "go test ./internal/handlers/ ./internal/notes/" go test -count=1 ./internal/handlers/ ./internal/notes/
+from_base nexus-platform/scripts/check-orphan-endpoints.py
+check "check-orphan-endpoints.py --strict (the script from BASE)" python3 scripts/check-orphan-endpoints.py --strict
+check "nexus-web/lib/api.ts exports a function that GETs /notes/newest (comments ignored)" \
+	python3 "$lib/web_caller.py" ../nexus-web/lib/api.ts /notes/newest
+hidden handlers
+check "go test ./internal/handlers/ ./internal/notes/ (hidden: null with no notes, else the newest)" \
+	go test -count=1 ./internal/handlers/ ./internal/notes/
 finish
