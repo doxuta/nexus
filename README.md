@@ -173,6 +173,13 @@ fails any run where a test skips.
   apply and publish each failed once in 66 attempts, and the rep's checks never failed. Each failure is explained from
   its transcript; two of the three failing requests are engine gaps, not model errors
   ([report](evals/builder-bench/report.md)). About 2,000–2,700 output tokens per working app.
+- **Harness eval: WITH 1.00, W/OUT 1.00, Δ 0.00.** `claude plugin eval` loads `.claude/` (the builder and verifier
+  agents, the slice and verify-ui skills) as a plugin and runs four small changes to a scaffolded copy of the repo
+  with it and without it: fix a planted tenant-filter leak, add a field with its migration, add an endpoint with its
+  web caller, add a task to the MCP eval. Code graders only; a regrade with real commands (go test with held-out
+  tests, gofmt, vet, the orphan-endpoint gate) passed 8 of 8 runs in each arm too. `claude-opus-5-5`, two runs per
+  case per arm, $12.33, recorded on 2026-10-21. Zero means a ceiling, and that the harness never ran: no with-arm
+  run dispatched its agents or used its skills ([results](evals/harness/README.md)).
 
 ## How it was built
 
@@ -198,9 +205,8 @@ on this repository's Security tab.
   drafts, publish and rollback; entity ACL and row scope; five installable packs (CRM, which the seed installs,
   Clinic, Ticketing, LMS, Project Management); the Studio's builder agent and the end-user assistant, which need a
   model gateway or a recorded cassette; and `/mcp`. There are no releases: `main` is the product.
-- **Next, in the open:** an eval of the agent harness ([#5](https://github.com/doxuta/nexus/issues/5)), the
-  engine gaps builder-bench found ([#30](https://github.com/doxuta/nexus/issues/30)) and the rest of the
-  [issues](https://github.com/doxuta/nexus/issues).
+- **Next, in the open:** the engine gaps builder-bench found ([#30](https://github.com/doxuta/nexus/issues/30))
+  and the rest of the [issues](https://github.com/doxuta/nexus/issues).
 - **Frozen:** the packs beyond the demo, approvals (`internal/bpm`), work queues, dashboards, calendars, per-tenant
   backup (`internal/tenantbackup`) and the Doctor (`internal/doctor`) are in the tree and tested in CI, but no open
   issue extends them.

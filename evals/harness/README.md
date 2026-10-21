@@ -21,7 +21,7 @@ So the comparison is the plugin and nothing else, with these limits:
   `CLAUDE.md` (which is `@AGENTS.md` here), so an agent reads it only if it goes looking.
 - `.claude/rules/` (path-scoped rules) is not a plugin component, so it is in neither arm.
 - The agent runs in Claude Code's sandbox: no network, no local ports (tests that start an `httptest` server fail),
-  no MySQL, and on macOS no `git`.
+  no MySQL, and on the Mac these runs used, no `git` (Apple's `/usr/bin/git` shim cannot find its tools there).
 
 ## Cases
 
@@ -59,6 +59,56 @@ python3 evals/harness/regrade.py evals/harness/results/<name>/aggregate-result.j
   `go env -w`, because the sandbox can run `go` but cannot read your home directory or `/tmp`. Tested on macOS (APFS
   clones make it a second); on Linux it copies.
 - **Credentials:** runs need a Claude login (`/login`) or `ANTHROPIC_API_KEY`. A gateway set through
-  `ANTHROPIC_AUTH_TOKEN` (here, in `~/.claude/settings.json`) cannot be passed to the runs, which then fail with
+  `ANTHROPIC_AUTH_TOKEN` (for example in `~/.claude/settings.json`) cannot be passed to the runs, which then fail with
   "Not logged in"; the runs below used `env -i … claude --setting-sources project,local plugin eval …` to skip it.
 - `--keep-temp` keeps every run's directory under `/tmp` for `regrade.py`; `--clean` removes each once graded.
+
+## Results (2026-10-21)
+
+Suite at `8d6614b`, cases at `BASE` `59b2f94`, Claude Code 2.1.305, agent `claude-opus-5-5` (the default model the
+pilot ran on, pinned for the full run), no judge model (no `llm` grader). Two runs per case per arm, 16 runs, two at
+a time (`-j 2`). Cost is Claude Code's list-price estimate of the model calls.
+
+| Case | WITH | W/OUT | Δ | Regrade WITH | Regrade W/OUT | Cost WITH | Cost W/OUT | Turns WITH | Turns W/OUT | Minutes WITH | Minutes W/OUT |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `mcp-eval-delete-task` | 1.00 | 1.00 | 0.00 | 2/2 | 2/2 | $1.03 | $0.94 | 18, 18 | 18, 18 | 1.6, 1.3 | 1.4, 1.4 |
+| `notes-newest-endpoint` | 1.00 | 1.00 | 0.00 | 2/2 | 2/2 | $1.79 | $1.80 | 22, 29 | 32, 23 | 2.7, 3.2 | 4.4, 4.5 |
+| `notes-pinned-field` | 1.00 | 1.00 | 0.00 | 2/2 | 2/2 | $2.41 | $2.02 | 39, 29 | 25, 33 | 8.3, 5.9 | 4.0, 4.0 |
+| `notes-tenant-leak` | 1.00 | 1.00 | 0.00 | 2/2 | 2/2 | $1.20 | $1.14 | 21, 21 | 19, 24 | 1.9, 3.0 | 1.9, 2.3 |
+| **All** | **1.00** | **1.00** | **0.00** | **8/8** | **8/8** | **$6.43** | **$5.90** | 24.6 mean | 24.0 mean | 3.5 mean | 3.0 mean |
+
+The suite took 1,596 s and $12.33. Before it, the pilot (`notes-tenant-leak`, one run per arm) scored 1.00 in both
+arms for $0.53 and $0.58, in 2.4 and 1.9 minutes, and its regrade passed both. Everything spent on this issue, the
+pilot, the suite and a few one-command `claude-haiku-5-5` probes of the sandbox (under $0.02 together), comes to
+about $13.46.
+
+**Δ is zero, and it means two things.**
+
+- **A ceiling.** Without the harness, `claude-opus-5-5` already does all four tasks: every grader passes in every run
+  of both arms, and so does every real-command check, including the held-out tests. These cases cannot show what the
+  harness adds on this model. Every run of both arms also updated the tests its change broke, and the diffs are of
+  the same size.
+- **The harness never ran.** The with-arm loaded it (each run's init event lists `nexus-harness:builder`,
+  `nexus-harness:verifier`, `nexus-harness:slice` and `nexus-harness:verify-ui`), but none of the eight runs
+  dispatched an agent or invoked a skill: Claude did each task itself. What was measured is the harness sitting in
+  the tool list: $6.43 against $5.90 (+9%, inside the spread of eight runs) for the same score and about the same
+  number of turns.
+
+So this does not show that the harness is useless; it shows that on one-prompt tasks this size, the plugin's
+descriptions do not make Claude use it, and the model does not need it. The harness is written for the
+lights-on loop (a slice contract, the builder, a verifier with a fresh context, a human reading the evidence), which
+a single headless prompt never exercises. Cases that could move Δ, not tried here: a review case for the verifier (a
+diff with a planted bug to refute), a slice whose acceptance needs the non-admin rep, or a run on a smaller model.
+
+Commands, verbatim (`env -i … --setting-sources project,local` for the credential reason above):
+
+```bash
+# pilot
+env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" TERM=xterm-256color LANG=en_US.UTF-8 claude --setting-sources project,local plugin eval . --eval-dir evals/harness --case notes-tenant-leak --runs 1 --ablation with-without --scaffold --allow-tools Bash Edit Write --trust-plugin --no-publish --max-cost-usd 3 --keep-temp --output-dir evals/harness/results/pilot
+# suite
+env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" TERM=xterm-256color LANG=en_US.UTF-8 claude --setting-sources project,local plugin eval . --eval-dir evals/harness --ablation with-without --scaffold --allow-tools Bash Edit Write --trust-plugin --no-publish --keep-temp --runs 2 --max-cost-usd 30 --model claude-opus-5-5 -j 2 --output-dir evals/harness/results/full
+# real-command regrade of the 16 kept runs
+python3 evals/harness/regrade.py evals/harness/results/full/aggregate-result.json
+```
+
+The minutes come from two runs sharing the machine (`-j 2`), so they are rough.
