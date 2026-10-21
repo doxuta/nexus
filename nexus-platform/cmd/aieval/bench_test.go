@@ -245,7 +245,7 @@ func TestPassAtK(t *testing.T) {
 func TestWriteBenchReport_SummaryArithmetic(t *testing.T) {
 	app, adv := benchCaseByID(t, "app-helpdesk"), benchCaseByID(t, "adv-grant-admin")
 	pass := recorded(t)
-	pass.Model, pass.Runs = "m", []benchRun{{PromptTokens: 9000, OutputTokens: 2000, CacheReadTokens: 7000, CacheWriteTokens: 1000}}
+	pass.Model, pass.Runs = "m", []benchRun{{PromptTokens: 9000, OutputTokens: 2000, CacheReadTokens: intp(7000), CacheWriteTokens: intp(1000)}}
 	fail := pass
 	fail.Attempt, fail.Cards = 2, append([]benchCard{}, pass.Cards[:2]...)
 	third := pass
@@ -269,6 +269,26 @@ func TestWriteBenchReport_SummaryArithmetic(t *testing.T) {
 		}
 	}
 }
+
+// A cache figure the gateway never reported is not a zero: a model whose runs carry none prints "—", whether its
+// observations predate the cache keys or carry them as null (a NULL ledger column).
+func TestWriteBenchReport_CacheNotReportedPrintsDash(t *testing.T) {
+	app := benchCaseByID(t, "app-helpdesk")
+	old := recorded(t) // recorded before the ledger kept cache figures: its runs have no cache keys
+	old.Model = "m"
+	var null benchObs
+	if err := json.Unmarshal([]byte(`{"case":"app-helpdesk","model":"m","attempt":2,
+		"runs":[{"feature":"ai_builder.chat","promptTokens":100,"outputTokens":10,"cacheReadTokens":null,"cacheWriteTokens":null}]}`), &null); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	writeBenchReport(&buf, []benchCase{app}, []benchObs{old, null})
+	if want := "| m | 110 | 10 | — |"; !strings.Contains(buf.String(), want) {
+		t.Fatalf("the report lacks %q:\n%s", want, buf.String())
+	}
+}
+
+func intp(n int) *int { return &n }
 
 func dropKind(draft json.RawMessage, kind string) json.RawMessage {
 	var items []map[string]any

@@ -360,10 +360,12 @@ async function smoke(nx, rep, c, tables, newApps) {
 // ── what the attempt cost ──
 function ledger() {
   // prompt_tokens includes the cached input; the cache columns say how much of it was read from and written to the cache.
-  return sql("SELECT feature, COALESCE(prompt_tokens,0), COALESCE(output_tokens,0), COALESCE(cache_read_tokens,0), COALESCE(cache_write_tokens,0), tool_calls, outcome, COALESCE(latency_ms,0) FROM sys_ai_runs ORDER BY created_at, id")
+  // Their NULL ("not reported", printed NULL by mysql -B) stays null: a gateway that reports no cache is not a zero cache.
+  const orNull = (v) => (v === "NULL" ? null : +v);
+  return sql("SELECT feature, COALESCE(prompt_tokens,0), COALESCE(output_tokens,0), cache_read_tokens, cache_write_tokens, tool_calls, outcome, COALESCE(latency_ms,0) FROM sys_ai_runs ORDER BY created_at, id")
     .split("\n").filter(Boolean).map((l) => {
       const [feature, p, o, cr, cw, calls, outcome, ms] = l.split("\t");
-      return { feature, promptTokens: +p, outputTokens: +o, cacheReadTokens: +cr, cacheWriteTokens: +cw, toolCalls: +calls, outcome, latencyMs: +ms };
+      return { feature, promptTokens: +p, outputTokens: +o, cacheReadTokens: orNull(cr), cacheWriteTokens: orNull(cw), toolCalls: +calls, outcome, latencyMs: +ms };
     });
 }
 function transcript(file) {
