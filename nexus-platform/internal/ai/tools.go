@@ -175,7 +175,7 @@ func toolDefinitionsBase() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "propose_field",
-				Description: "Đề xuất THÊM một field vào entity đã có. Chỉ đưa vào draft — KHÔNG tạo.",
+				Description: "Đề xuất THÊM một field vào entity đã có. Chỉ đưa vào draft — KHÔNG tạo. Mỗi field đề xuất MỘT lần: tên field bảng đã có (đang chạy, hoặc đã đề xuất trong lượt này) bị từ chối FIELD_ALREADY_EXISTS — sửa field đang có thì dùng propose_edit_field.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -788,7 +788,7 @@ func (e *toolExecutor) dispatch(ctx context.Context, name, argsJSON string) stri
 	case "propose_entity":
 		return e.proposeEntity(ctx, argsJSON)
 	case "propose_field":
-		return e.proposeField(argsJSON)
+		return e.proposeField(ctx, argsJSON)
 	case "propose_relationship":
 		return e.proposeRelationship(ctx, argsJSON)
 	case "propose_layout":
@@ -1080,8 +1080,12 @@ func (e *toolExecutor) proposeEntity(ctx context.Context, argsJSON string) strin
 }
 
 // proposeField validates a proposed field through services.ValidateAddField (the add-field
-// config-time validator) before buffering — same parity guarantee as proposeEntity.
-func (e *toolExecutor) proposeField(argsJSON string) string {
+// config-time validator) before buffering — same parity guarantee as proposeEntity. A name the
+// table already has — live, drafted with the table, or proposed earlier this turn (pendingFields) —
+// is refused here with the apply path's own code (FIELD_ALREADY_EXISTS), as proposeEntity refuses a
+// taken table name (#30 item 3). A table that is neither live nor drafted is left to Apply
+// (ENTITY_NOT_FOUND), as before.
+func (e *toolExecutor) proposeField(ctx context.Context, argsJSON string) string {
 	var a proposedField
 	// proposedField only carries the field attributes; entity is a sibling key on the same object.
 	var withEntity struct {
@@ -1098,10 +1102,17 @@ func (e *toolExecutor) proposeField(argsJSON string) string {
 	if code, msg, ok := validationOf(services.ValidateAddField(in)); !ok {
 		return toolErr("%s: %s", code, msg)
 	}
+	_, _, fields, err := e.pendingFields(ctx, withEntity.Entity)
+	if err != nil && !errors.Is(err, metadata.ErrEntityNotFound) {
+		return toolErr("PROPOSE_FIELD_FAILED: %v", err)
+	}
+	if slices.ContainsFunc(fields, func(f metadata.FieldDefinition) bool { return f.Name == a.Name }) {
+		return toolErr("FIELD_ALREADY_EXISTS: bảng %q đã có field %q (đang chạy, hoặc đã đề xuất trong lượt này) — mỗi field đề xuất một lần; sửa field đang có thì dùng propose_edit_field, field mới thì đặt tên khác", withEntity.Entity, a.Name)
+	}
 
 	// specs/052 (queue #230): the cross-field half of AddField - controllingField must be a sibling
 	// picklist (live, or drafted this turn), keys among its values, no cycle - judged now, not at Apply.
-	if code, msg, ok := validationOf(e.checkAddFieldRefs(context.Background(), withEntity.Entity, a.toFieldInput())); !ok {
+	if code, msg, ok := validationOf(e.checkAddFieldRefs(ctx, withEntity.Entity, a.toFieldInput())); !ok {
 		return toolErr("%s: %s", code, msg)
 	}
 
@@ -1109,35 +1120,22 @@ func (e *toolExecutor) proposeField(argsJSON string) string {
 	return toolOK(map[string]any{"buffered": fmt.Sprintf("field %q trên %q", a.Name, withEntity.Entity)})
 }
 
-// checkAddFieldRefs runs services.ValidateAddFieldRefs against the entity's siblings: its live
-// fields (tenant-scoped reader) plus the fields buffered as drafts THIS turn (entity draft or
-// earlier propose_field). Only when the options declare controllingField, so a plain field costs
-// nothing. An entity that is neither live nor drafted has no siblings - the apply path reports
-// ENTITY_NOT_FOUND for it.
+// checkAddFieldRefs runs services.ValidateAddFieldRefs against the entity's siblings as this draft
+// will leave them (pendingFields): the live table first — a draft of the same name never adds a
+// sibling to it — else a table drafted this turn, plus earlier propose_field adds. Only when the
+// options declare controllingField, so a plain field costs nothing. An entity that is neither live
+// nor drafted has no siblings - the apply path reports ENTITY_NOT_FOUND for it.
 func (e *toolExecutor) checkAddFieldRefs(ctx context.Context, entity string, f services.FieldInput) error {
 	if f.Options["controllingField"] == nil {
 		return nil
 	}
-	var siblings []services.FieldInput
-	if ent, err := e.reader.GetEntityByName(ctx, e.tenantID, entity); err == nil {
-		fields, lerr := e.reader.ListFields(ctx, e.tenantID, ent.ID)
-		if lerr != nil {
-			return fmt.Errorf("ai.checkAddFieldRefs: %w", lerr)
-		}
-		if siblings, err = services.LiveFieldInputs(fields); err != nil {
-			return fmt.Errorf("ai.checkAddFieldRefs: %w", err)
-		}
+	_, _, fields, err := e.pendingFields(ctx, entity)
+	if err != nil && !errors.Is(err, metadata.ErrEntityNotFound) {
+		return fmt.Errorf("ai.checkAddFieldRefs: %w", err)
 	}
-	canonical := strings.ToLower(strings.TrimSpace(entity))
-	for _, it := range e.draft {
-		if it.Kind == "entity" && it.Entity != nil && it.Entity.Name == canonical {
-			for _, df := range it.Entity.Fields {
-				siblings = append(siblings, services.FieldInput{Name: df.Name, FieldType: df.FieldType, Options: df.Options})
-			}
-		}
-		if it.Kind == "field" && it.Field != nil && strings.ToLower(it.Field.Entity) == canonical {
-			siblings = append(siblings, services.FieldInput{Name: it.Field.Name, FieldType: it.Field.FieldType, Options: it.Field.Options})
-		}
+	siblings, err := services.LiveFieldInputs(fields)
+	if err != nil {
+		return fmt.Errorf("ai.checkAddFieldRefs: %w", err)
 	}
 	return services.ValidateAddFieldRefs(f, siblings)
 }
@@ -1286,7 +1284,7 @@ func (e *toolExecutor) listRoles(ctx context.Context) string {
 // map, same order as SaveLayout:
 //  1. entity exists in THIS tenant — GetEntityByName (→ ENTITY_NOT_FOUND). reader is
 //     tenant-scoped: the model can never probe or target another tenant's entities. Not live →
-//     a table propose_entity'd in this draft (#30 item 1, see layoutFields).
+//     a table propose_entity'd in this draft (#30 item 1, see pendingFields).
 //  2. fields — the same ListFields read SaveLayout performs before validating, with this draft's
 //     pending field adds/edits laid over them (#30 item 2: an index proposed this turn counts).
 //  3. ValidateLayoutConfig(viewType, layoutJson, fields) — every ../specs/041-layout-engine/spec.md §4.4 rule (strict viewType
@@ -1311,9 +1309,12 @@ func (e *toolExecutor) proposeLayout(ctx context.Context, argsJSON string) strin
 		return toolErr("INVALID_ARGS: %v", err)
 	}
 
-	name, live, fields, errStr := e.layoutFields(ctx, a.Entity)
-	if errStr != "" {
-		return errStr
+	name, live, fields, err := e.pendingFields(ctx, a.Entity)
+	if errors.Is(err, metadata.ErrEntityNotFound) {
+		return toolErr("ENTITY_NOT_FOUND: entity %q không tồn tại và cũng chưa được propose_entity trong lượt này — propose_entity trước rồi propose_layout trong CÙNG lượt", a.Entity)
+	}
+	if err != nil {
+		return toolErr("PROPOSE_LAYOUT_FAILED: %v", err)
 	}
 	if code, msg, ok := validationOf(services.ValidateLayoutConfig(a.ViewType, a.LayoutJSON, fields)); !ok {
 		return toolErr("%s: %s", code, msg)
@@ -1328,9 +1329,10 @@ func (e *toolExecutor) proposeLayout(ctx context.Context, argsJSON string) strin
 	return toolOK(map[string]any{"buffered": fmt.Sprintf("layout %s cho %q", a.ViewType, name)})
 }
 
-// layoutFields resolves propose_layout's table and the fields its layout is judged against, as they
-// will stand once this draft is applied (apply order: entities first, then the rest in draft order,
-// so every item buffered before the layout lands before it — #30 items 1 and 2):
+// pendingFields resolves a table and its fields as they will stand once this draft is applied (apply
+// order: entities first, then the rest in draft order, so every item buffered before the caller's
+// lands before it). propose_layout judges a layout against them (#30 items 1 and 2), propose_field
+// refuses a name among them (#30 item 3) and checks a dependent picklist's parent against them:
 //   - the LIVE registry first: its fields, with this draft's propose_edit_field changes laid over
 //     them (an index proposed this turn counts for defaultSort). A live table always wins on a name:
 //     a draft entity of the same name (an older thread's proposal) is never read, so it can neither
@@ -1338,9 +1340,10 @@ func (e *toolExecutor) proposeLayout(ctx context.Context, argsJSON string) strin
 //   - else a table propose_entity'd in this draft: its drafted fields;
 //   - either way plus the fields propose_field adds to that table, when the name is still free.
 //
-// The result is a copy — the registry's own definitions are never mutated. SaveLayout re-validates
-// the layout against the real schema at Apply. live reports which branch resolved.
-func (e *toolExecutor) layoutFields(ctx context.Context, raw string) (string, bool, []metadata.FieldDefinition, string) {
+// The result is a copy — the registry's own definitions are never mutated; the apply path re-validates
+// against the real schema. live reports which branch resolved; metadata.ErrEntityNotFound means the
+// table is neither live nor drafted.
+func (e *toolExecutor) pendingFields(ctx context.Context, raw string) (string, bool, []metadata.FieldDefinition, error) {
 	var fields []metadata.FieldDefinition
 	name := canonicalEntityName(raw)
 	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, name)
@@ -1350,15 +1353,15 @@ func (e *toolExecutor) layoutFields(ctx context.Context, raw string) (string, bo
 		name = ent.Name
 		liveFields, lerr := e.reader.ListFields(ctx, e.tenantID, ent.ID)
 		if lerr != nil {
-			return "", false, nil, toolErr("PROPOSE_LAYOUT_FAILED: %v", lerr)
+			return "", false, nil, fmt.Errorf("ai.pendingFields: %w", lerr)
 		}
 		fields = slices.Clone(liveFields)
 	case !errors.Is(err, metadata.ErrEntityNotFound):
-		return "", false, nil, toolErr("PROPOSE_LAYOUT_FAILED: %v", err)
+		return "", false, nil, fmt.Errorf("ai.pendingFields: %w", err)
 	default:
 		d, ok := e.draftedEntities()[name]
 		if !ok {
-			return "", false, nil, toolErr("ENTITY_NOT_FOUND: entity %q không tồn tại và cũng chưa được propose_entity trong lượt này — propose_entity trước rồi propose_layout trong CÙNG lượt", raw)
+			return "", false, nil, fmt.Errorf("ai.pendingFields: %q: %w", raw, metadata.ErrEntityNotFound)
 		}
 		for _, f := range d.Fields {
 			fields = append(fields, draftFieldDefinition(f.Name, f.Label, f.FieldType, f.Required, f.Options))
@@ -1371,7 +1374,7 @@ func (e *toolExecutor) layoutFields(ctx context.Context, raw string) (string, bo
 	for _, it := range e.draft {
 		switch {
 		case it.Kind == "field" && it.Field != nil && strings.ToLower(strings.TrimSpace(it.Field.Entity)) == name:
-			if at(it.Field.Name) < 0 { // an existing field wins; a duplicate add fails at Apply
+			if at(it.Field.Name) < 0 { // an existing field wins (propose_field refuses a duplicate)
 				fields = append(fields, draftFieldDefinition(it.Field.Name, it.Field.Label, it.Field.FieldType, it.Field.Required, it.Field.Options))
 			}
 		case live && it.Kind == "edit_field" && it.EditField != nil && it.EditField.Entity == name:
@@ -1382,7 +1385,7 @@ func (e *toolExecutor) layoutFields(ctx context.Context, raw string) (string, bo
 			}
 		}
 	}
-	return name, live, fields, ""
+	return name, live, fields, nil
 }
 
 // draftFieldDefinition is a proposed field in the registry's shape, for validators that read one.
