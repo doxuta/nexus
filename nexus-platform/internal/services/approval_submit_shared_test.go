@@ -6,32 +6,7 @@ import (
 	"testing"
 
 	"nexus/platform/internal/bpm"
-	"nexus/platform/internal/dynrepo"
 )
-
-// shareOnlyReader is a record reader where the record is reachable ONLY through a manual share
-// (specs/051): a scope without IncludeShares misses it, one with the flag reads it. visibleToAll=true
-// models a record the caller reaches on their own.
-type shareOnlyReader struct {
-	visibleToAll bool
-	getErr       error // a non-not-found failure for the first read
-	gets         []RecordScope
-}
-
-func (r *shareOnlyReader) Get(_ context.Context, sc RecordScope, _, _, id string, _, _ []string) (*dynrepo.Record, error) {
-	r.gets = append(r.gets, sc)
-	if r.getErr != nil {
-		return nil, r.getErr
-	}
-	if !r.visibleToAll && !sc.IncludeShares && !sc.IsAdmin {
-		return nil, ErrRecordNotFound
-	}
-	return &dynrepo.Record{ID: id, Data: map[string]any{}}, nil
-}
-
-func (r *shareOnlyReader) AuthorizeView(_ context.Context, _ string, sc RecordScope, _ string) (RecordScope, error) {
-	return sc, nil
-}
 
 type submitRecorder struct{ submitted bool }
 
@@ -49,53 +24,46 @@ func (s *submitRecorder) Delegate(context.Context, string, string, string, strin
 	return nil, nil
 }
 
-// TestSubmitForApproval_SharedOnlyViewerGets403 pins the approval half of DAILY-QUEUE #225: the submit
-// route is pinned to "edit", so a caller who sees the record only through a manual share used to get a
-// bare 404; they already read it, so the answer is RECORD_SHARED_READ_ONLY (403) — and nothing is
-// submitted. A stranger keeps the 404, and a caller who reaches the record on their own still submits.
-func TestSubmitForApproval_SharedOnlyViewerGets403(t *testing.T) {
-	actor := bpm.Actor{UserID: "u2"}
-	edit := RecordScope{UserID: "u2", RoleID: "r", AccessLevel: "owner"} // what the edit-pinned route resolves
-
-	run := func(rd *shareOnlyReader, sc RecordScope) (error, *submitRecorder) {
-		req := &submitRecorder{}
-		svc := NewApprovalService(&fakeApprovalProcessRepo{}, &fakeApprovalInstanceRepo{}, &fakeApprovalDecider{}).WithRequestFlow(req, rd)
-		_, err := svc.SubmitForApproval(context.Background(), sc, "t1", "deals", "rec-1", actor, bpm.SubmitOptions{})
-		return err, req
+// TestSubmitForApproval_WriteMissAnswers pins "Gửi duyệt" to the ONE write-miss decision (#43, with
+// DAILY-QUEUE #225 and #18): the route is pinned to "edit", so a send whose edit scope misses the
+// record answers what a PUT would — RECORD_SHARED_READ_ONLY for a share-only viewer, FORBIDDEN for a
+// record their view scope reaches, the bare 404 for one they cannot see (another team's, a deleted
+// one) — and nothing is submitted. The reader is a REAL RecordService, so this is the shared decision
+// itself, not a copy of it.
+func TestSubmitForApproval_WriteMissAnswers(t *testing.T) {
+	edit := RecordScope{UserID: "u-rep", RoleID: "r1", AccessLevel: "owner"} // what the edit-pinned route resolves
+	cases := []struct {
+		name   string
+		store  RecordStore
+		levels map[string]string
+		want   error // nil = submitted
+	}{
+		{"own record → submitted", &editScopeStore{mine: true}, map[string]string{"view": "all", "edit": "owner"}, nil},
+		{"view=all edit=own, a colleague's record → 403 FORBIDDEN", &viewNotEditStore{}, map[string]string{"view": "all", "edit": "owner"}, ErrRecordEditForbidden},
+		{"view=team edit=own, a teammate's record → 403 FORBIDDEN", &viewNotEditStore{inMyTeam: true}, map[string]string{"view": "team", "edit": "owner"}, ErrRecordEditForbidden},
+		{"view=team edit=own, another team's record → 404", &viewNotEditStore{}, map[string]string{"view": "team", "edit": "owner"}, ErrRecordNotFound},
+		{"view=all, the record is gone → 404", &viewNotEditStore{gone: true}, map[string]string{"view": "all", "edit": "owner"}, ErrRecordNotFound},
+		{"share-only viewer → 403 RECORD_SHARED_READ_ONLY", &shareOnlyStore{shared: true}, map[string]string{"view": "owner", "edit": "owner"}, ErrRecordSharedReadOnly},
+		{"stranger → 404", &shareOnlyStore{}, map[string]string{"view": "owner", "edit": "owner"}, ErrRecordNotFound},
 	}
-
-	t.Run("share-only viewer: 403, nothing submitted", func(t *testing.T) {
-		err, req := run(&shareOnlyReader{}, edit)
-		if !errors.Is(err, ErrRecordSharedReadOnly) {
-			t.Fatalf("err = %v; want ErrRecordSharedReadOnly", err)
-		}
-		if req.submitted {
-			t.Fatal("a share-only viewer started an approval")
-		}
-	})
-
-	t.Run("stranger (not even the flagged read reaches it): still 404", func(t *testing.T) {
-		rd := &shareOnlyReader{getErr: ErrRecordNotFound}
-		if err, _ := run(rd, edit); !errors.Is(err, ErrRecordNotFound) {
-			t.Fatalf("err = %v; want ErrRecordNotFound", err)
-		}
-	})
-
-	t.Run("a caller who reaches the record on their own submits", func(t *testing.T) {
-		err, req := run(&shareOnlyReader{visibleToAll: true}, edit)
-		if err != nil || !req.submitted {
-			t.Fatalf("err = %v submitted = %v; want a normal submit", err, req.submitted)
-		}
-	})
-
-	t.Run("level all: the probe is skipped (a miss there means the record is gone)", func(t *testing.T) {
-		rd := &shareOnlyReader{getErr: ErrRecordNotFound}
-		sc := RecordScope{UserID: "u2", RoleID: "r", AccessLevel: "all"}
-		if err, _ := run(rd, sc); !errors.Is(err, ErrRecordNotFound) {
-			t.Fatalf("err = %v; want ErrRecordNotFound", err)
-		}
-		if len(rd.gets) != 1 {
-			t.Fatalf("reads = %d; want exactly 1 (no share probe at level all)", len(rd.gets))
-		}
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			records := shareTestService(tc.store).WithACLAuthorizer(&perActionAuthz{levels: tc.levels})
+			req := &submitRecorder{}
+			svc := NewApprovalService(&fakeApprovalProcessRepo{}, &fakeApprovalInstanceRepo{}, &fakeApprovalDecider{}).WithRequestFlow(req, records)
+			_, err := svc.SubmitForApproval(context.Background(), edit, "tenant-1", "widgets", "rec-1", bpm.Actor{UserID: "u-rep"}, bpm.SubmitOptions{})
+			if tc.want == nil {
+				if err != nil || !req.submitted {
+					t.Fatalf("err = %v submitted = %v; want a normal submit", err, req.submitted)
+				}
+				return
+			}
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v; want %v", err, tc.want)
+			}
+			if req.submitted {
+				t.Fatal("submitted despite the refusal")
+			}
+		})
+	}
 }

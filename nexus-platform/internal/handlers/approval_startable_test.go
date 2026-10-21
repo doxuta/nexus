@@ -18,6 +18,9 @@ type okReader struct{}
 func (okReader) Get(context.Context, services.RecordScope, string, string, string, []string, []string) (*dynrepo.Record, error) {
 	return &dynrepo.Record{Data: map[string]any{"total": 1}}, nil
 }
+func (okReader) ExplainWriteMiss(_ context.Context, _ services.RecordScope, _, _, _ string, err error) error {
+	return err
+}
 func (okReader) AuthorizeView(_ context.Context, _ string, sc services.RecordScope, _ string) (services.RecordScope, error) {
 	return sc, nil
 }
