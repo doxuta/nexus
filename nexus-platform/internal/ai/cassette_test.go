@@ -473,7 +473,7 @@ func TestReplay_DrivesTheBuilderWithoutBaseURLOrKey(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "builder.jsonl")
 	rec, err := newRecorder(&scriptedGateway{t: t, responses: []ChatResponse{
-		toolCallResp("call_1", "list_entities", "{}"),
+		cached(toolCallResp("call_1", "list_entities", "{}"), 6, 4),
 		toolCallResp("call_2", "propose_entity",
 			`{"name":"appointments","label":"Lịch hẹn","fields":[{"name":"start_at","label":"Bắt đầu","fieldType":"datetime","required":true}]}`),
 		finalTextResp("Đã đề xuất appointments."),
@@ -502,11 +502,12 @@ func TestReplay_DrivesTheBuilderWithoutBaseURLOrKey(t *testing.T) {
 	}
 	// The ledger row is what the daily token budget sums: a rehearsal must add nothing to it, while
 	// the cassette keeps what the recorded turn really cost.
-	if len(ledger.runs) != 1 || ledger.runs[0].PromptTokens != 0 || ledger.runs[0].OutputTokens != 0 || got.Usage != (Usage{}) {
-		t.Fatalf("replayed turn spent %+v (ledger %+v); want zero tokens", got.Usage, ledger.runs)
+	if len(ledger.runs) != 1 || ledger.runs[0].PromptTokens != 0 || ledger.runs[0].OutputTokens != 0 ||
+		ledger.runs[0].CacheReadTokens != 0 || ledger.runs[0].CacheWriteTokens != 0 || got.Usage != (Usage{}) {
+		t.Fatalf("replayed turn spent %+v (ledger %+v); want zero tokens, cache included", got.Usage, ledger.runs)
 	}
-	if lines := readCassette(t, path); lines[0].Response.Usage.PromptTokens != 10 {
-		t.Fatalf("cassette usage = %+v; want the recorded 10 prompt tokens kept", lines[0].Response.Usage)
+	if u := readCassette(t, path)[0].Response.Usage; u.PromptTokens != 10 || u.CacheReadTokens != 6 || u.CacheWriteTokens != 4 {
+		t.Fatalf("cassette usage = %+v; want the recorded 10 prompt tokens (6 read from the cache, 4 written) kept", u)
 	}
 	if got.Outcome != outcomeOK || got.Reply != recorded.Reply || len(got.Draft) != 1 || got.Draft[0].Entity == nil || got.Draft[0].Entity.Name != "appointments" {
 		t.Fatalf("replayed turn = %q %q %+v; want the recorded reply and the appointments draft", got.Outcome, got.Reply, got.Draft)

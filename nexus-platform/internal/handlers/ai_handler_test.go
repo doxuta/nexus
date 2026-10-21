@@ -171,7 +171,7 @@ func okResult() ai.Result {
 	return ai.Result{
 		Reply:   "Tôi đề xuất entity patients.",
 		Draft:   []ai.DraftItem{{Kind: "entity", Entity: &ai.DraftEntity{Name: "patients", Label: "Bệnh nhân"}}},
-		Usage:   ai.Usage{PromptTokens: 30, CompletionTokens: 12, TotalTokens: 42},
+		Usage:   ai.Usage{PromptTokens: 30, CompletionTokens: 12, TotalTokens: 42, CacheReadTokens: 20, CacheWriteTokens: 5},
 		RunID:   "run-1",
 		Outcome: "ok",
 	}
@@ -191,6 +191,10 @@ func TestAIHandler_Chat_NewSession_200(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "promptTokens") || strings.Contains(body, "prompt_tokens") {
 		t.Fatalf("usage must serialize camelCase (promptTokens, not prompt_tokens); body=%s", body)
+	}
+	// The cached part of the prompt is reported too (issue #30 item 8).
+	if body := rec.Body.String(); !strings.Contains(body, `"cacheReadTokens":20`) || !strings.Contains(body, `"cacheWriteTokens":5`) {
+		t.Fatalf("usage must carry cacheReadTokens and cacheWriteTokens; body=%s", body)
 	}
 	var resp struct {
 		Data struct {

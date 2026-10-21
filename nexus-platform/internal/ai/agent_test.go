@@ -63,6 +63,12 @@ func finalTextResp(text string) ChatResponse {
 	}
 }
 
+// cached returns r with cache figures in its usage: a part of its PromptTokens, as the gateway reports them.
+func cached(r ChatResponse, read, write int) ChatResponse {
+	r.Usage.CacheReadTokens, r.Usage.CacheWriteTokens = read, write
+	return r
+}
+
 func enabledCfg(maxSteps int) config.AIConfig {
 	return config.AIConfig{Enabled: true, Model: "cc/test", TimeoutSec: 5, MaxTokens: 1024, MaxSteps: maxSteps}
 }
@@ -285,5 +291,43 @@ func TestAgent_Chat_GatewayError_MapsGatewayError(t *testing.T) {
 	}
 	if len(rec.runs) != 1 || rec.runs[0].Outcome != outcomeGatewayError {
 		t.Fatalf("ledger = %+v; want one row outcome=gateway_error", rec.runs)
+	}
+}
+
+// Both agents sum cache reads and writes over every call of a turn, into the result the API returns and
+// the ledger row the daily budget and builder-bench read (issue #30 item 8).
+func TestAgents_SumCacheTokensIntoResultAndLedger(t *testing.T) {
+	ctx := context.Background()
+	msgs := []ChatMessage{{Role: "user", Content: "có bảng nào?"}}
+	script := func() *scriptedGateway {
+		return &scriptedGateway{t: t, responses: []ChatResponse{
+			cached(toolCallResp("call_1", "list_entities", "{}"), 0, 7), // prompt 10, of which 7 written to the cache
+			cached(finalTextResp("xong"), 7, 2),                         // prompt 12, of which 7 read and 2 written
+		}}
+	}
+	for name, turn := range map[string]func(*fakeRecorder) (Result, error){
+		"builder": func(rec *fakeRecorder) (Result, error) {
+			return NewAIBuilderAgent(enabledCfg(6), script(), twoTenantReader(), nil, rec, nil).Chat(ctx, Scope{UserID: "u1"}, "tenant-A", "", msgs)
+		},
+		"assistant": func(rec *fakeRecorder) (Result, error) {
+			return NewAssistantAgent(enabledCfg(6), script(), &fakeRecordReader{}, rec, nil).Ask(ctx, callerScope(), "tenant-A", "", msgs)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &fakeRecorder{}
+			res, err := turn(rec)
+			if err != nil {
+				t.Fatalf("turn: %v", err)
+			}
+			if want := (Usage{PromptTokens: 22, CompletionTokens: 10, TotalTokens: 32, CacheReadTokens: 7, CacheWriteTokens: 9}); res.Usage != want {
+				t.Fatalf("result usage = %+v; want %+v", res.Usage, want)
+			}
+			if len(rec.runs) != 1 {
+				t.Fatalf("ledger rows = %d; want 1", len(rec.runs))
+			}
+			if r := rec.runs[0]; r.PromptTokens != 22 || r.OutputTokens != 10 || r.CacheReadTokens != 7 || r.CacheWriteTokens != 9 {
+				t.Fatalf("ledger row = %+v; want prompt 22 (cache included), output 10, cache read 7, cache write 9", r)
+			}
+		})
 	}
 }

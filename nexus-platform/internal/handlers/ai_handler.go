@@ -603,12 +603,15 @@ func (h *AIBuilderHandler) decodeDraft(raw json.RawMessage) []ai.DraftItem {
 
 // usageDTO maps ai.Usage (whose json tags are the OpenAI snake_case parse shape) to the camelCase
 // the Nexus API contract mandates (api-conventions §Response Format). outputTokens mirrors the
-// sys_ai_runs.output_tokens column (the completion side of the turn).
+// sys_ai_runs.output_tokens column (the completion side of the turn). promptTokens includes the cached
+// input; cacheReadTokens/cacheWriteTokens say how much of it the provider's prompt cache served or stored.
 func usageDTO(u ai.Usage) gin.H {
 	return gin.H{
-		"promptTokens": u.PromptTokens,
-		"outputTokens": u.CompletionTokens,
-		"totalTokens":  u.TotalTokens,
+		"promptTokens":     u.PromptTokens,
+		"outputTokens":     u.CompletionTokens,
+		"totalTokens":      u.TotalTokens,
+		"cacheReadTokens":  u.CacheReadTokens,
+		"cacheWriteTokens": u.CacheWriteTokens,
 	}
 }
 

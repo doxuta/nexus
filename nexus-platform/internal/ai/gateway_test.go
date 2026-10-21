@@ -159,3 +159,80 @@ func TestGateway_Complete_SendsBearerOnlyWhenKeySet(t *testing.T) {
 		})
 	}
 }
+
+// The gateway can receive usage in more than one shape. Whatever the shape, Usage.PromptTokens is ALL
+// the input the model read — cache reads and cache writes included, counted once — and the two cache
+// fields say how much of it was read from and written to the provider's prompt cache (issue #30
+// item 8: a ~70 KB call was recorded as ~2,000 prompt tokens). The figures are the dev gateway's own
+// ledger for the three calls of cassettes/demo-loop.jsonl.
+func TestUsage_ParsesCacheTokensFromEveryShape(t *testing.T) {
+	for _, tc := range []struct {
+		name, usage string
+		want        Usage
+	}{
+		{"OpenAI: prompt_tokens already includes prompt_tokens_details.cached_tokens",
+			`{"prompt_tokens":34915,"completion_tokens":1076,"total_tokens":35991,"prompt_tokens_details":{"cached_tokens":33906}}`,
+			Usage{PromptTokens: 34915, CompletionTokens: 1076, TotalTokens: 35991, CacheReadTokens: 33906}},
+		{"OpenAI-compatible router: cache writes in prompt_tokens_details.cache_creation_tokens, also included",
+			`{"prompt_tokens":34915,"completion_tokens":1076,"total_tokens":35991,"prompt_tokens_details":{"cached_tokens":33906,"cache_creation_tokens":1007}}`,
+			Usage{PromptTokens: 34915, CompletionTokens: 1076, TotalTokens: 35991, CacheReadTokens: 33906, CacheWriteTokens: 1007}},
+		{"Anthropic: input_tokens EXCLUDES cache_read_input_tokens and cache_creation_input_tokens",
+			`{"input_tokens":2,"output_tokens":1076,"cache_read_input_tokens":33906,"cache_creation_input_tokens":1007}`,
+			Usage{PromptTokens: 34915, CompletionTokens: 1076, TotalTokens: 35991, CacheReadTokens: 33906, CacheWriteTokens: 1007}},
+		{"Anthropic fields beside an OpenAI prompt_tokens that already includes them: no double count",
+			`{"prompt_tokens":34915,"completion_tokens":1076,"total_tokens":35991,"cache_read_input_tokens":33906,"cache_creation_input_tokens":1007}`,
+			Usage{PromptTokens: 34915, CompletionTokens: 1076, TotalTokens: 35991, CacheReadTokens: 33906, CacheWriteTokens: 1007}},
+		{"prompt_tokens smaller than its cached part cannot include it: the cache is added",
+			`{"prompt_tokens":2002,"completion_tokens":1064,"total_tokens":3066,"cache_read_input_tokens":32378,"cache_creation_input_tokens":1528}`,
+			Usage{PromptTokens: 35908, CompletionTokens: 1064, TotalTokens: 36972, CacheReadTokens: 32378, CacheWriteTokens: 1528}},
+		{"no cache fields (the dev gateway's non-streaming answer): cache 0, prompt as reported",
+			`{"prompt_tokens":2002,"completion_tokens":1064,"total_tokens":3066}`,
+			Usage{PromptTokens: 2002, CompletionTokens: 1064, TotalTokens: 3066}},
+		{"empty prompt_tokens_details", `{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14,"prompt_tokens_details":{}}`,
+			Usage{PromptTokens: 11, CompletionTokens: 3, TotalTokens: 14}},
+		{"empty usage", `{}`, Usage{}},
+		{"null usage", `null`, Usage{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var resp ChatResponse
+			if err := json.Unmarshal([]byte(`{"choices":[],"usage":`+tc.usage+`}`), &resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Usage != tc.want {
+				t.Fatalf("usage = %+v; want %+v", resp.Usage, tc.want)
+			}
+		})
+	}
+}
+
+// The recorder writes Usage back out into the cassette and the replayer reads it again: a usage that
+// carries cache tokens must come back unchanged, not with its cache counted a second time.
+func TestUsage_RoundTripsThroughACassetteLine(t *testing.T) {
+	u := Usage{PromptTokens: 34915, CompletionTokens: 1076, TotalTokens: 35991, CacheReadTokens: 33906, CacheWriteTokens: 1007}
+	b, err := json.Marshal(u)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var back Usage
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("decode %s: %v", b, err)
+	}
+	if back != u {
+		t.Fatalf("round trip %s = %+v; want %+v", b, back, u)
+	}
+}
+
+// The live gateway hands the decoded cache figures to the caller.
+func TestGateway_Complete_ReportsCacheTokens(t *testing.T) {
+	g, _ := newMockGateway(t, 5*time.Second, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],
+			"usage":{"prompt_tokens":20000,"completion_tokens":300,"total_tokens":20300,"prompt_tokens_details":{"cached_tokens":18000}}}`))
+	})
+	resp, err := g.Complete(context.Background(), ChatRequest{Model: "m"})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if want := (Usage{PromptTokens: 20000, CompletionTokens: 300, TotalTokens: 20300, CacheReadTokens: 18000}); resp.Usage != want {
+		t.Fatalf("usage = %+v; want %+v", resp.Usage, want)
+	}
+}
