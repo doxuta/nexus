@@ -915,13 +915,13 @@ func (r seatReadRow) seat() Seat {
 // the seat is closed by status; the per-seat `version` CAS arrives with parallel seats (S4).
 //
 // A write InnoDB rolls back as a deadlock victim is run again, up to voteAttempts times, like a vote
-// (#37, #35): it shares writeSeats, whose seat writes can wait on a neighbouring instance's seats
-// while that instance's writer waits on this instance row. The rolled-back run wrote nothing, and
-// its inputs are data the caller built before the call (the one function among them, the actor's
-// QueueView, only reads), so the next run judges the instance afresh under its lock.
+// (#37, #35). writeSeats no longer locks a neighbouring instance's seats (it writes by primary key),
+// which removed the cycle both were caught in; the re-run stays for what still scans seats with a
+// lock (the SLA clock's seat due date in commitTransition, ClaimBreach). The rolled-back run wrote
+// nothing, and its inputs are data the caller built before the call (the one function among them,
+// the actor's QueueView, only reads), so the next run judges the instance afresh under its lock.
 //
-// ponytail: re-runs the victim instead of removing the cycle. Ceiling: a write InnoDB picks
-// voteAttempts times in a row still fails with 1213.
+// Ceiling: a write InnoDB picks voteAttempts times in a row still fails with 1213.
 func (r *SQLRepository) DecideTaskTx(ctx context.Context, tenantID, id string, g TaskGuard, next InstanceTransition, historyJSON []byte) error {
 	for attempt := 1; ; attempt++ {
 		err := r.decideTaskTx(ctx, tenantID, id, g, next, historyJSON)
@@ -1141,12 +1141,12 @@ func visitSeatsOf(ctx context.Context, q sqlx.QueryerContext, tenantID, instance
 // overwritten with the caller's copy — so concurrent votes keep each other's entries.
 //
 // A vote InnoDB rolls back as a deadlock victim is run again, up to voteAttempts times (#35): the
-// finishing votes of neighbouring instances can wait on each other's seat-index gaps, and the vote
-// InnoDB picks would otherwise be lost, its step left open. The rolled-back run wrote nothing, so
-// the next one judges the visit afresh under the instance lock.
+// finishing votes of neighbouring instances waited on each other's seat-index gaps, and the vote
+// InnoDB picked was lost, its step left open. writeSeats now writes seats by primary key (#37), so
+// that cycle is gone; the re-run stays as the backstop DecideTaskTx describes. The rolled-back run
+// wrote nothing, so the next one judges the visit afresh under the instance lock.
 //
-// ponytail: this re-runs the victim instead of removing the cycle (writeSeats keeps its next-key
-// range locks). Ceiling: a vote InnoDB picks voteAttempts times in a row still fails with 1213.
+// Ceiling: a vote InnoDB picks voteAttempts times in a row still fails with 1213.
 func (r *SQLRepository) VoteTaskTx(ctx context.Context, tenantID, id string, g VoteGuard, onComplete InstanceTransition) (*VoteResult, error) {
 	for attempt := 1; ; attempt++ {
 		res, err := r.voteTaskTx(ctx, tenantID, id, g, onComplete)
@@ -1299,14 +1299,6 @@ func writeSeats(ctx context.Context, tx *sqlx.Tx, tenantID, instanceID string, w
 		}
 	}
 	if w.Close != "" {
-		if w.Node != "" {
-			const q = `UPDATE sys_bpm_tasks
-				SET status = 'cancelled', outcome = ?, completed_at = ?, updated_at = ?, version = version + 1
-				WHERE tenant_id = ? AND instance_id = ? AND status = 'open' AND node_id <> ?`
-			if _, err := tx.ExecContext(ctx, q, string(SeatSuperseded), now, now, tenantID, instanceID, w.Node); err != nil {
-				return fmt.Errorf("supersede stale seats: %w", err)
-			}
-		}
 		status, acted, err := seatEnd(w.Close)
 		if err != nil {
 			return err
@@ -1315,21 +1307,52 @@ func writeSeats(ctx context.Context, tx *sqlx.Tx, tenantID, instanceID string, w
 		if acted { // who acted and why belong to a seat that was acted on, not one that was withdrawn
 			by, note = nullIfEmpty(w.By), nullIfEmpty(w.Comment)
 		}
-		q := `UPDATE sys_bpm_tasks
+		// The open seats are read without a lock and closed one by one by primary key (#37): an
+		// UPDATE that finds them by instance scans a range of idx_bt_visit or idx_bt_inbox and takes
+		// next-key locks on the seats of neighbouring instances, whose writers could then wait on
+		// this one while it waits on them.
+		//
+		// The read is a consistent read, so it sees every open seat only under this invariant:
+		// every seat writer takes the instance row FOR UPDATE first, AND its transaction makes its
+		// first consistent read (which fixes the REPEATABLE READ snapshot) only after that lock.
+		// A consistent read added before the lock fixes the snapshot early: a seat that another
+		// writer of this instance inserts and commits in between (a delegation's new seat) is then
+		// missing here and stays open forever (TestParallel_DelegateThenFinishingVote_NoOrphanSeat).
+		// DecideTaskTx would still lose on its seq check; a vote matches no seq and writes past it.
+		var open []struct {
+			ID     string `db:"id"`
+			NodeID string `db:"node_id"`
+		}
+		if err := tx.SelectContext(ctx, &open, `SELECT id, node_id FROM sys_bpm_tasks
+			WHERE tenant_id = ? AND instance_id = ? AND status = 'open'`, tenantID, instanceID); err != nil {
+			return fmt.Errorf("read open seats: %w", err)
+		}
+		const supersede = `UPDATE sys_bpm_tasks
+			SET status = 'cancelled', outcome = ?, completed_at = ?, updated_at = ?, version = version + 1
+			WHERE tenant_id = ? AND id = ? AND status = 'open'`
+		const end = `UPDATE sys_bpm_tasks
 			SET status = ?, outcome = ?, decided_by = ?, comment = ?, completed_at = ?, updated_at = ?, version = version + 1
-			WHERE tenant_id = ? AND instance_id = ? AND status = 'open'`
-		args := []any{status, string(w.Close), by, note, now, now, tenantID, instanceID}
-		if w.CloseSeat != "" { // only the delegator's own seat of a many-seat step
-			q += ` AND id = ?`
-			args = append(args, w.CloseSeat)
+			WHERE tenant_id = ? AND id = ? AND status = 'open'`
+		var closed int64
+		for _, s := range open {
+			switch {
+			case w.Node != "" && s.NodeID != w.Node: // a seat on another node is stale
+				if _, err := tx.ExecContext(ctx, supersede, string(SeatSuperseded), now, now, tenantID, s.ID); err != nil {
+					return fmt.Errorf("supersede stale seats: %w", err)
+				}
+			case w.CloseSeat == "" || s.ID == w.CloseSeat: // CloseSeat: only the delegator's own seat
+				res, err := tx.ExecContext(ctx, end, status, string(w.Close), by, note, now, now, tenantID, s.ID)
+				if err != nil {
+					return fmt.Errorf("close seats: %w", err)
+				}
+				n, err := res.RowsAffected()
+				if err != nil {
+					return fmt.Errorf("close seats: rows affected: %w", err)
+				}
+				closed += n
+			}
 		}
-		res, err := tx.ExecContext(ctx, q, args...)
-		if err != nil {
-			return fmt.Errorf("close seats: %w", err)
-		}
-		if n, err := res.RowsAffected(); err != nil {
-			return fmt.Errorf("close seats: rows affected: %w", err)
-		} else if w.CloseSeat != "" && n != 1 {
+		if w.CloseSeat != "" && closed != 1 {
 			return ErrConcurrent // the seat being handed on is gone
 		}
 	}
