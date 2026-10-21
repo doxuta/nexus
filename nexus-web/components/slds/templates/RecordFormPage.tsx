@@ -57,6 +57,8 @@ interface RecordFormBaseProps {
   /** Huỷ; in the modal variant also Esc and the X (after `onOpenChange(false)`). */
   onCancel: () => void;
   saving?: boolean;
+  /** Lưu is off without "saving" (Huỷ stays live): the caller knows the save would be refused and says why in `notification`. */
+  submitDisabled?: boolean;
   /** Save button label; default "Lưu". */
   submitLabel?: string;
   /** Extra footer buttons between Huỷ and Lưu, e.g. "Lưu & tạo mới". */
@@ -144,7 +146,7 @@ function Notification({ notification }: { notification?: RecordFormBaseProps["no
 }
 
 export function RecordFormPage(props: RecordFormPageProps) {
-  const { title, icon, objectLabel, meta, sections, status, formRef, notification, onSubmit, onCancel, saving = false, submitLabel, extraActions, className, docked = true, inertFooter = false } =
+  const { title, icon, objectLabel, meta, sections, status, formRef, notification, onSubmit, onCancel, saving = false, submitDisabled = false, submitLabel, extraActions, className, docked = true, inertFooter = false } =
     props;
   const formId = useId();
   // Modal: Huỷ, Esc and the X all close here. Huỷ is disabled while saving; Esc and the X stay live,
@@ -176,7 +178,7 @@ export function RecordFormPage(props: RecordFormPageProps) {
       {status == null && (
         <>
           {extraActions}
-          <button type="submit" form={formId} className="slds-button slds-button_brand" disabled={saving}>
+          <button type="submit" form={formId} className="slds-button slds-button_brand" disabled={saving || submitDisabled}>
             {saving ? t("action.saving") : (submitLabel ?? t("action.save"))}
           </button>
         </>

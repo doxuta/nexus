@@ -15,7 +15,8 @@
 //     entity has a money field. A record the caller sees ONLY through a share (record.sharedWithMe)
 //     is read-only: a notice says so and Sửa / Xoá / Đổi chủ / Chia sẻ are not offered. Likewise a
 //     record outside the caller's EDIT scope (record.canEdit === false, e.g. edit=own on a colleague's
-//     lead) hides Sửa / Chia sẻ and says why — the entity-level grant alone would offer a save that 404s.
+//     lead) hides Sửa / Chia sẻ and says why — the entity-level grant alone would offer a save the server
+//     refuses with 403 FORBIDDEN (#18).
 //     Chia sẻ opens ./detail/ShareDialog.
 //   • Tabs (one mounted at a time, so a tab's requests fire only when it is opened):
 //     Tổng quan · Trao đổi · Quan hệ · Tệp · Lịch sử · Duyệt — each lives in ./detail/*.
@@ -415,7 +416,8 @@ export function LayoutDetail({ entity, recordId, onEdit, onClone, onDeleted, tra
   // every write action would come back 403 RECORD_SHARED_READ_ONLY.
   const sharedReadOnly = !!record.sharedWithMe;
   // DAILY-QUEUE #334: the entity-level grant (mayEdit) says nothing about THIS record — a rep with
-  // edit=own sees a colleague's lead (view=all) and the save would be 404. The server says so per record.
+  // edit=own sees a colleague's lead (view=all) and the save would be refused 403 FORBIDDEN (#18). The server
+  // says so per record.
   const outOfEditScope = record.canEdit === false && !sharedReadOnly;
   const canWrite = mayEdit && !sharedReadOnly && !outOfEditScope;
 
