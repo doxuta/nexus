@@ -9,6 +9,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, deleteRelationshipById, getRelationshipImpact, updateField, type FieldMeta, type RelViewConfig } from "@/lib/api";
+import { emitDraftsChanged } from "@/lib/draftEvents";
 import { strictErrorMessage } from "@/lib/errorMessages";
 import { t, tf } from "@/lib/i18n";
 import { impactDependents, edgeKindOf, type CanvasEdgeSpec } from "@/lib/relCanvas";
@@ -134,6 +135,7 @@ function LinkView({ slug, edge, entities, labelOf, onBack, onChanged, onViewConf
     setLabelBusy(true);
     try {
       await updateField(f.id, { label: labelDraft.trim() });
+      emitDraftsChanged("field-save"); // a field draft on a delivered project: the header recounts
       setSavedLabel(labelDraft.trim());
       toast.success(t("studio.build.relMap.panel.fieldLabelSaved"));
     } catch (e) {

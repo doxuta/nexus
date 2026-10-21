@@ -21,6 +21,7 @@ const publish = vi.hoisted(() => ({ state: { delivered: false, draftableTypes: [
 vi.mock("@/components/studio/usePublishState", () => ({ usePublishState: () => ({ data: publish.state }) }));
 
 import { ApiError } from "@/lib/api";
+import { onDraftsChanged } from "@/lib/draftEvents";
 import { RelationPanel, type PanelEntity } from "./RelationPanel";
 
 const field = (name: string, label: string, extra = {}) => ({ name, label, fieldType: "text", ...extra });
@@ -194,6 +195,29 @@ describe("RelationPanel — create and edit label (L4b)", () => {
     expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === "PATCH")).toBe(false);
     expect(screen.getByText("Muốn đổi bảng đích hoặc kiểu, gỡ liên kết rồi tạo mới.")).toBeInTheDocument();
     expect(screen.queryByLabelText(/Bảng chính|Bảng chi tiết|Kiểu liên kết/)).toBeNull(); // no edit box for target / kind
+  });
+  it("a saved label is a field draft: announced on the drafts bus once the PUT has answered, never before, never on a refusal (#17)", async () => {
+    const heard: string[] = [];
+    const off = onDraftsChanged((s) => heard.push(s));
+    try {
+      let answer!: () => void;
+      api.updateField.mockReturnValueOnce(new Promise((r) => { answer = () => r({}); }));
+      mount({ kind: "edge", id: "r1" });
+      fireEvent.change(screen.getByLabelText("Nhãn trường liên kết"), { target: { value: "Chủ lịch" } });
+      fireEvent.click(screen.getByRole("button", { name: "Lưu nhãn" }));
+      await waitFor(() => expect(api.updateField).toHaveBeenCalledTimes(1));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(heard).toEqual([]); // the write has not answered yet: a recount now would read the old count
+      answer();
+      await waitFor(() => expect(heard).toEqual(["field-save"]));
+      api.updateField.mockRejectedValueOnce(new ApiError(422, "VALIDATION_ERROR", "x"));
+      fireEvent.change(screen.getByLabelText("Nhãn trường liên kết"), { target: { value: "Chủ lịch hẹn" } });
+      fireEvent.click(screen.getByRole("button", { name: "Lưu nhãn" }));
+      await waitFor(() => expect(toast.error).toHaveBeenCalled());
+      expect(heard).toEqual(["field-save"]);
+    } finally {
+      off();
+    }
   });
   it("Nhiều–nhiều: honest note, no label box", () => {
     mount({ kind: "edge", id: "r2" });
