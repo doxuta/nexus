@@ -304,7 +304,8 @@ func wantAdvancedOnce(t *testing.T, f *parallelFixture, label, id string) {
 // A second connection plays the neighbour: it holds the neighbour's visit range, waits until the
 // finishing vote waits on it, then asks for a lock the vote holds (its instance row). It has written
 // more rows than any vote, so InnoDB rolls the vote back every time. The vote must run again, and
-// the step must still advance exactly once.
+// the step must still advance exactly once. writeSeats no longer takes that range lock (#37); the
+// neighbour here still does, so this test pins the re-run that stays as a backstop.
 func TestParallel_ConcurrentLastTwoApprovers_DeadlockVictim(t *testing.T) {
 	f := armCouncils(t, "parlock", "all", 2, users(seatAp1, seatAp2, seatAp3)...)
 	ctx := context.Background()
@@ -363,6 +364,33 @@ func TestParallel_ConcurrentLastTwoApprovers_DeadlockVictim(t *testing.T) {
 		}
 	}
 	wantAdvancedOnce(t, f, "after the deadlock", id)
+}
+
+// TestParallel_FinishingVoteBesideHeldNeighbour_NoRangeLock (#35, #37, the root fix) is
+// TestDecide_BesideHeldNeighbour_NoRangeLock for the vote: the finishing vote of the neighbour is
+// held open after its seat writes and keeps only record locks on sys_bpm_tasks, and the finishing
+// vote of the instance whose seats come before it in idx_bt_visit goes through without waiting.
+func TestParallel_FinishingVoteBesideHeldNeighbour_NoRangeLock(t *testing.T) {
+	f := armCouncils(t, "parheld", "all", 2, users(seatAp1, seatAp2, seatAp3)...)
+	id, next := f.insts[0], f.insts[1] // next: the instance whose seats follow id's in idx_bt_visit
+	if next < id {
+		id, next = next, id
+	}
+	for _, x := range []string{id, next} {
+		for _, voter := range []string{seatAp1, seatAp2} {
+			if _, err := f.decide(t, x, bpm.DecisionApprove, "", bpm.Actor{UserID: voter}); err != nil {
+				t.Fatalf("partial vote: %v", err)
+			}
+		}
+	}
+
+	release := f.st.holdNeighbour(t, f.tenant, next, bpm.Actor{UserID: seatAp3})
+	f.st.besideHeld(t, release, func() error {
+		_, err := f.decide(t, id, bpm.DecisionApprove, "", bpm.Actor{UserID: seatAp3})
+		return err
+	})
+	wantAdvancedOnce(t, f, "the vote beside the held neighbour", id)
+	wantAdvancedOnce(t, f, "the held neighbour", next)
 }
 
 // TestParallel_SameActorTwoSeats409_MySQL: the person named AND holding the seated role votes once.

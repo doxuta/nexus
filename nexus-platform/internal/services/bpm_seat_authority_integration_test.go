@@ -23,12 +23,16 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	"nexus/platform/internal/bpm"
+	"nexus/platform/internal/jobs"
 )
 
 // racyStore is the real repository with a seam between the READ of an instance and the WRITE of a
@@ -204,7 +208,9 @@ func TestDecide_SameSeatTwoTabs_SecondGets409(t *testing.T) {
 // A second connection plays the neighbour: it locks the neighbour's seat, waits until the approval
 // waits on it, then asks for a lock the approval holds (its instance row). It has written more rows,
 // so InnoDB rolls the approval back every time. The approval must run again, and the step must
-// advance exactly once.
+// advance exactly once. writeSeats no longer takes that range lock (#37, see
+// TestDecide_BesideHeldNeighbour_NoRangeLock); the neighbour here still does, so this test pins the
+// re-run that stays as a backstop.
 func TestDecide_SingleSeatDeadlockVictim(t *testing.T) {
 	st := bpmWire(t)
 	ctx := context.Background()
@@ -267,6 +273,131 @@ func TestDecide_SingleSeatDeadlockVictim(t *testing.T) {
 	assertMirror(t, st.sdb, tenant, id, "after the deadlock")
 	if got := instState(t, st.sdb, tenant, id).Seq; got != 2 {
 		t.Fatalf("seq = %d; want 2 (the arm + the one decision)", got)
+	}
+}
+
+// heldQueue is the breach-job queue of a repository whose write a test holds open: the first job a
+// write parks (inside its transaction, after its seat writes) closes held, then waits for release.
+// It enqueues nothing.
+type heldQueue struct {
+	held, release chan struct{}
+	once          sync.Once
+}
+
+func (q *heldQueue) EnqueueExec(context.Context, sqlx.ExecerContext, jobs.Job) (string, error) {
+	q.once.Do(func() { close(q.held) })
+	<-q.release
+	return "", nil
+}
+
+// holdNeighbour has the real repository approve instance id as actor (a single-seat decision or a
+// vote) and holds that transaction open right after its seat writes, where it parks the next step's
+// breach job. Every lock it then keeps on sys_bpm_tasks must be a record lock: a next-key or gap
+// lock on a seat index is what a neighbouring instance's seat write waits on (#35, #37).
+// release lets the write commit and returns its error; call it once.
+func (s *bpmStack) holdNeighbour(t *testing.T, tenant, id string, actor bpm.Actor) (release func() error) {
+	t.Helper()
+	q := &heldQueue{held: make(chan struct{}), release: make(chan struct{})}
+	repo := bpm.NewSQLRepository(s.sdb, nil).WithSLADueJobs(q)
+	errs := make(chan error, 1)
+	go func() {
+		_, err := bpm.NewDecider(repo, repo, repo, nil, nil).Decide(context.Background(), tenant, id, bpm.DecisionApprove, "", actor)
+		errs <- err
+	}()
+	var let sync.Once
+	release = func() error { let.Do(func() { close(q.release) }); return <-errs }
+	t.Cleanup(func() { let.Do(func() { close(q.release) }) })
+	select {
+	case <-q.held:
+	case err := <-errs:
+		t.Fatalf("the neighbour's write ended before it parked its breach job: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the neighbour's write never reached its breach job")
+	}
+	var locks []string
+	if err := s.sdb.Select(&locks, `SELECT CONCAT(index_name, ' ', lock_mode, ' ', COALESCE(lock_data, ''))
+		FROM performance_schema.data_locks
+		WHERE object_schema = DATABASE() AND object_name = 'sys_bpm_tasks' AND lock_type = 'RECORD'`); err != nil {
+		t.Fatalf("read the held write's seat locks: %v", err)
+	}
+	if len(locks) == 0 {
+		t.Fatal("the held write keeps no seat lock: it is not held after its seat writes")
+	}
+	for _, l := range locks {
+		if !strings.Contains(l, " X,REC_NOT_GAP ") {
+			t.Errorf("the held write keeps a range lock on a seat index: %s; want record locks only (X,REC_NOT_GAP)", l)
+		}
+	}
+	return release
+}
+
+// besideHeld runs do while a neighbour's write is held (holdNeighbour) and requires it to finish
+// without waiting on a lock: the only transaction it could wait on is the neighbour's, the first
+// half of the deadlock of #35 and #37. The neighbour is then released and must commit too.
+func (s *bpmStack) besideHeld(t *testing.T, release func() error, do func() error) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- do() }()
+	deadline := time.After(20 * time.Second)
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("beside the held neighbour: %v", err)
+			}
+			if err := release(); err != nil {
+				t.Fatalf("the released neighbour: %v", err)
+			}
+			return
+		case <-deadline:
+			t.Fatal("neither finished nor waited on a lock in 20s")
+		case <-time.After(10 * time.Millisecond):
+		}
+		var waits []string
+		if err := s.sdb.Select(&waits, `SELECT CONCAT(object_name, ' ', COALESCE(index_name, ''), ' ', lock_mode, ' ', COALESCE(lock_data, ''))
+			FROM performance_schema.data_locks WHERE object_schema = DATABASE() AND lock_status = 'WAITING'`); err != nil {
+			t.Fatalf("read lock waits: %v", err)
+		}
+		if len(waits) > 0 {
+			nerr := release()
+			t.Fatalf("waited on the held neighbour: %v (after its release: %v; the neighbour: %v)", waits, <-done, nerr)
+		}
+	}
+}
+
+// TestDecide_BesideHeldNeighbour_NoRangeLock (#37, the root fix): the cycle of
+// TestDecide_SingleSeatDeadlockVictim needs a seat write that waits on a NEIGHBOURING instance's
+// seats. Here a real decision on the neighbour is held open after its seat writes. It must keep only
+// record locks on sys_bpm_tasks, and the approval of the instance whose seats come before the
+// neighbour's in idx_bt_visit must go through without waiting on it. Both then advanced once.
+func TestDecide_BesideHeldNeighbour_NoRangeLock(t *testing.T) {
+	st := bpmWire(t)
+	ctx := context.Background()
+	tenant, ids := armTwoStepN(t, st, "seatheld", 2)
+	id, next := ids[0], ids[1] // next: the instance whose seats follow id's in idx_bt_visit
+	if next < id {
+		id, next = next, id
+	}
+
+	release := st.holdNeighbour(t, tenant, next, bpm.Actor{UserID: seatAp1})
+	st.besideHeld(t, release, func() error {
+		_, err := st.approval.DecideAt(ctx, tenant, id, bpm.DecisionApprove, "", bpm.Actor{UserID: seatAp1}, nil)
+		return err
+	})
+
+	for _, x := range []string{id, next} {
+		inst, err := st.repo.GetInstance(ctx, tenant, x)
+		if err != nil {
+			t.Fatalf("GetInstance: %v", err)
+		}
+		if inst.Status != bpm.StatusPending || inst.CurrentStep != 1 || inst.CurrentApproverID != seatAp2 || approvedEntries(inst) != 1 {
+			t.Fatalf("%s: %s@%d approver %s, %d approvals; want pending on step 1 (%s), one approval",
+				x, inst.Status, inst.CurrentStep, inst.CurrentApproverID, approvedEntries(inst), seatAp2)
+		}
+		assertMirror(t, st.sdb, tenant, x, "beside the held neighbour")
+		if got := instState(t, st.sdb, tenant, x).Seq; got != 2 {
+			t.Fatalf("%s: seq = %d; want 2 (the arm + the one decision)", x, got)
+		}
 	}
 }
 
