@@ -152,7 +152,9 @@ const (
 // TestRecordWrite_EditScopeTeamView_OverHTTP pins the scope the #18 check reads under: a view=team,
 // edit=own rep gets 403 on a teammate's record (they can read it) but the 404 of an unknown id —
 // byte for byte — on another team's record, which their GET hides. A check that read any wider than
-// the caller's view scope would turn that 404 into an existence oracle.
+// the caller's view scope would turn that 404 into an existence oracle. It also pins the canEdit flag
+// on a shared record the role may edit through its team level: a share grants a read and must not
+// take that edit right away.
 func TestRecordWrite_EditScopeTeamView_OverHTTP(t *testing.T) {
 	gdb, sx := a4SetupMigratedDB(t)
 	rt := newA4Router(t, gdb, sx)
@@ -165,21 +167,30 @@ func TestRecordWrite_EditScopeTeamView_OverHTTP(t *testing.T) {
 		grantLevel(teamScopeEntity, "create", "all"), grantLevel(teamScopeEntity, "view", "team"),
 		grantLevel(teamScopeEntity, "edit", "owner"), grantLevel(teamScopeEntity, "delete", "owner"),
 	})
+	// "lead" reads only their own rows but edits the team's: a share is how a team record reaches their view.
+	lead := a4SeedRole(t, gdb, teamScopeTenantID, "lead", []auth.RoleAction{
+		grantLevel(teamScopeEntity, "view", "owner"), grantLevel(teamScopeEntity, "edit", "team"),
+	})
 	mail := func(who string) string { return who + "@" + teamScopeTenantSlug }
 	x1 := a4SeedUser(t, gdb, teamScopeTenantID, mail("x1"), false, &rep)
 	x2 := a4SeedUser(t, gdb, teamScopeTenantID, mail("x2"), false, &rep)
 	y1 := a4SeedUser(t, gdb, teamScopeTenantID, mail("y1"), false, &rep)
+	lx := a4SeedUser(t, gdb, teamScopeTenantID, mail("lx"), false, &lead)
 	a4SeedUser(t, gdb, teamScopeTenantID, mail("admin"), true, nil)
 	// Memberships before any record: a record's team set is its creator's teams at insert time.
 	a5SeedMembership(t, gdb, x1, teamX)
 	a5SeedMembership(t, gdb, x2, teamX)
+	a5SeedMembership(t, gdb, lx, teamX)
 	a5SeedMembership(t, gdb, y1, teamY)
 
 	a4DropEntity(sx, []string{teamScopeTenantID}, teamScopeEntity)
-	t.Cleanup(func() { a4DropEntity(sx, []string{teamScopeTenantID}, teamScopeEntity) })
+	t.Cleanup(func() {
+		a4DropEntity(sx, []string{teamScopeTenantID}, teamScopeEntity)
+		sx.Exec("DELETE FROM sys_record_shares WHERE tenant_id = ?", teamScopeTenantID)
+	})
 	rt.createEntity(t, rt.login(t, teamScopeTenantSlug, mail("admin")).Data.AccessToken, teamScopeEntity)
 	tok := func(who string) string { return rt.login(t, teamScopeTenantSlug, mail(who)).Data.AccessToken }
-	x1Tok, x2Tok, y1Tok := tok("x1"), tok("x2"), tok("y1")
+	x1Tok, x2Tok, y1Tok, lxTok := tok("x1"), tok("x2"), tok("y1"), tok("lx")
 
 	base := "/api/v1/" + teamScopeEntity
 	call := func(name, method, path, token string, body any, wantStatus int, wantCode string) []byte {
@@ -214,4 +225,18 @@ func TestRecordWrite_EditScopeTeamView_OverHTTP(t *testing.T) {
 	call("x1 PUT X's", http.MethodPut, xRec, x1Tok, edit, http.StatusForbidden, "FORBIDDEN")
 	call("x1 DELETE X's", http.MethodDelete, xRec, x1Tok, nil, http.StatusForbidden, "FORBIDDEN")
 
+	// canEdit on a share: x2 shares their team record with lx (view=own, edit=team). lx sees it only
+	// through the share, yet their team edit scope covers it — the flag must not say otherwise.
+	call("x2 shares with lx", http.MethodPost, xRec+"/shares", x2Tok, map[string]any{"userId": lx}, http.StatusCreated, "")
+	var got struct {
+		Data map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal(call("lx GET shared", http.MethodGet, xRec, lxTok, nil, http.StatusOK, ""), &got)
+	if got.Data["sharedWithMe"] != true {
+		t.Fatalf("lx GET: sharedWithMe = %v; want true", got.Data["sharedWithMe"])
+	}
+	if v, present := got.Data["canEdit"]; present {
+		t.Fatalf("lx GET: canEdit = %v; want absent (their edit=team scope reaches the record)", v)
+	}
+	call("lx PUT shared team record", http.MethodPut, xRec, lxTok, map[string]any{"title": "by the lead"}, http.StatusOK, "")
 }

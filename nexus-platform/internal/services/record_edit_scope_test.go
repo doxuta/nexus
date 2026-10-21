@@ -59,6 +59,8 @@ func TestRecordGet_CanEditFollowsEditScope(t *testing.T) {
 		{"no edit grant → canEdit false", viewScope, map[string]string{"view": "all"}, false, false, false, &f, 1},
 		{"shared-only record → canEdit false, no probe", RecordScope{UserID: "u-rep", AccessLevel: "owner", RoleID: "r1", IncludeShares: true},
 			map[string]string{"view": "owner", "edit": "owner"}, false, true, false, &f, 1},
+		{"shared record, view=own edit=team: the team edit scope reaches it → absent", RecordScope{UserID: "u-rep", AccessLevel: "owner", RoleID: "r1", IncludeShares: true},
+			map[string]string{"view": "owner", "edit": "team"}, false, true, false, nil, 2},
 		{"same level, own record → absent, no probe", RecordScope{UserID: "u-rep", AccessLevel: "owner", RoleID: "r1"},
 			map[string]string{"view": "owner", "edit": "owner"}, false, false, true, nil, 1},
 		{"admin → absent, ACL never consulted", RecordScope{UserID: "u-a", AccessLevel: "all", IsAdmin: true}, nil, false, false, false, nil, 1},
