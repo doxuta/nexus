@@ -253,7 +253,9 @@ type a4Router struct {
 }
 
 // newA4Router builds the migrated-DB-backed production router with ACL enabled.
-func newA4Router(t *testing.T, gdb *gorm.DB, sx *sqlx.DB) *a4Router {
+// extra lets a suite mount more handlers on the same production chain (#43: notes, files, approvals,
+// relations), each wired by the caller exactly like main.go.
+func newA4Router(t *testing.T, gdb *gorm.DB, sx *sqlx.DB, extra ...func(*APIHandlers)) *a4Router {
 	t.Helper()
 
 	t.Setenv("JWT_SECRET", itJWTSecret)
@@ -294,7 +296,7 @@ func newA4Router(t *testing.T, gdb *gorm.DB, sx *sqlx.DB) *a4Router {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	RegisterAPIRoutes(r.Group("/api/v1"), tokenSvc, aclSvc, APIHandlers{
+	handlers := APIHandlers{
 		Auth:     NewAuthHandler(authSvc, zap.NewNop()),
 		Metadata: NewMetadataHandler(gdb, zap.NewNop()),
 		Admin:    NewAdminEntityHandler(services.NewEntityService(dyn, meta), services.NewFieldService(dyn, meta), zap.NewNop()),
@@ -313,7 +315,11 @@ func newA4Router(t *testing.T, gdb *gorm.DB, sx *sqlx.DB) *a4Router {
 		// W9b: saved-view CRUD (protected group) + recycle-bin restore rides the Record handler's
 		// RequireACLAction("delete") gate under this ACL-enabled router.
 		SavedView: NewSavedViewHandler(services.NewViewService(view.NewSQLRepository(sx), meta, zap.NewNop()), zap.NewNop()),
-	}, zap.NewNop(), WithLiveSubject(userClaims), WithSessionGuard(sessionGuard))
+	}
+	for _, add := range extra {
+		add(&handlers)
+	}
+	RegisterAPIRoutes(r.Group("/api/v1"), tokenSvc, aclSvc, handlers, zap.NewNop(), WithLiveSubject(userClaims), WithSessionGuard(sessionGuard))
 
 	return &a4Router{engine: r, gdb: gdb, sx: sx, tokenSvc: tokenSvc, roleRepo: roleRepo}
 }

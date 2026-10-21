@@ -27,33 +27,44 @@ var ErrRecordSharedReadOnly = invalid("RECORD_SHARED_READ_ONLY", "Hồ sơ này 
 var ErrRecordEditForbidden = invalid("FORBIDDEN", "Bạn không có quyền thực hiện thao tác này")
 
 // ResolveShareTarget authorizes managing the shares of (entityName, recordID) — Q4(a): whoever may
-// EDIT the record may share it. Like ResolveNoteTarget it does not trust the route's own ACL mount:
-//
-//  1. re-resolve the caller's "edit" grant on the entity (authorizeAction; denied → 403 FORBIDDEN
-//     before any read — admins and a nil authorizer pass through, the codebase-wide convention);
-//  2. resolve the entity (ErrEntityNotFound);
-//  3. read the record under that EDIT scope with shares OFF — a record visible to them only
-//     through a share is RECORD_SHARED_READ_ONLY (403, they may not re-share or revoke), anything
-//     else out of scope is the same 404 a direct GET gives.
-//
-// Returns the canonical entity name to store on the share row.
+// EDIT the record may share it. It is ResolveWriteTarget for "edit"; returns the canonical entity
+// name to store on the share row.
 func (s *RecordService) ResolveShareTarget(ctx context.Context, scope RecordScope, tenantID, entityName, recordID string) (string, error) {
-	editScope, err := s.authorizeAction(ctx, tenantID, scope, entityName, "edit")
+	return s.ResolveWriteTarget(ctx, scope, tenantID, entityName, recordID, "edit")
+}
+
+// ResolveWriteTarget authorizes a write of kind action ("edit" for share management, "view" for a
+// note — specs/060 #349) on the EXISTING record (entityName, recordID). Like ResolveNoteTarget it does
+// not trust the route's own ACL mount:
+//
+//  1. re-resolve the caller's grant for action (authorizeAction; denied → 403 FORBIDDEN before any
+//     read — admins and a nil authorizer pass through, the codebase-wide convention);
+//  2. resolve the entity (ErrEntityNotFound);
+//  3. read the record under that scope with shares OFF — a write never reaches a row through a
+//     share (specs/051) — and answer a miss with ExplainWriteMiss: 403 when the caller can read the
+//     record, the 404 a direct GET gives otherwise.
+//
+// Returns the entity's canonical name.
+func (s *RecordService) ResolveWriteTarget(ctx context.Context, scope RecordScope, tenantID, entityName, recordID, action string) (string, error) {
+	writeScope, err := s.authorizeAction(ctx, tenantID, scope, entityName, action)
 	if err != nil {
 		return "", err
 	}
+	writeScope.IncludeShares = false
 	e, _, err := s.resolve(ctx, tenantID, entityName)
 	if err != nil {
 		return "", err
 	}
-	if _, err := s.store.GetRecord(ctx, e.Name, tenantID, recordID, editScope.toRowScope()); err != nil {
-		return "", s.sharedReadOnlyOr(ctx, editScope, tenantID, e.Name, recordID, err)
+	if _, err := s.store.GetRecord(ctx, e.Name, tenantID, recordID, writeScope.toRowScope()); err != nil {
+		return "", s.ExplainWriteMiss(ctx, writeScope, tenantID, e.Name, recordID, err)
 	}
 	return e.Name, nil
 }
 
-// sharedReadOnlyOr maps a write that missed the record under the caller's write scope, by asking what
-// the caller may READ — never more than a GET of the same record would have told them:
+// ExplainWriteMiss is THE answer for a write whose own scope missed the record (#18, #43): record
+// PUT/DELETE, share management, note create, file upload, approval submit and relation link/unlink
+// all ask it, so "viewable but not writable" reads the same on every surface. It asks what the
+// caller may READ — never more than a GET of the same record would have told them:
 //   - the SAME level plus the manual-share clause reaches it → they see it only because it was shared
 //     → ErrRecordSharedReadOnly (the share clause only widens owner/team levels, so only those probe);
 //   - their VIEW scope reaches it → ErrRecordEditForbidden (issue #18);
@@ -61,7 +72,13 @@ func (s *RecordService) ResolveShareTarget(ctx context.Context, scope RecordScop
 //
 // Admins skip both probes (a miss means the record is gone), and so does a write level of "all" (no
 // view level is wider). A probe or ACL failure is returned wrapped rather than guessed at.
-func (s *RecordService) sharedReadOnlyOr(ctx context.Context, writeScope RecordScope, tenantID, entity, id string, writeErr error) error {
+func (s *RecordService) ExplainWriteMiss(ctx context.Context, writeScope RecordScope, tenantID, entity, id string, writeErr error) error {
+	return explainWriteMiss(ctx, s.store, s.authz, writeScope, tenantID, entity, id, writeErr)
+}
+
+// explainWriteMiss is ExplainWriteMiss over explicit dependencies, for a service that holds the
+// store and the authorizer but not a RecordService (RelationService). A nil authz skips the view probe.
+func explainWriteMiss(ctx context.Context, store RecordFetcher, authz entityAuthorizer, writeScope RecordScope, tenantID, entity, id string, writeErr error) error {
 	lvl := dynrepo.AccessLevel(writeScope.AccessLevel)
 	if !errors.Is(writeErr, ErrRecordNotFound) || writeScope.IsAdmin || lvl == dynrepo.AccessAll {
 		return writeErr
@@ -69,18 +86,18 @@ func (s *RecordService) sharedReadOnlyOr(ctx context.Context, writeScope RecordS
 	if lvl.IsOwnerScoped() {
 		probe := writeScope.toRowScope()
 		probe.IncludeShares = true
-		if _, err := s.store.GetRecord(ctx, entity, tenantID, id, probe); err == nil {
+		if _, err := store.GetRecord(ctx, entity, tenantID, id, probe); err == nil {
 			return ErrRecordSharedReadOnly
 		} else if !errors.Is(err, ErrRecordNotFound) {
-			return fmt.Errorf("services.RecordService.sharedReadOnlyOr: %w", err)
+			return fmt.Errorf("services.explainWriteMiss: %w", err)
 		}
 	}
-	if s.authz == nil {
+	if authz == nil {
 		return writeErr
 	}
-	allowed, viewLevel, err := s.authz.Authorize(ctx, tenantID, writeScope.RoleID, entity, "view")
+	allowed, viewLevel, err := authz.Authorize(ctx, tenantID, writeScope.RoleID, entity, "view")
 	if err != nil {
-		return fmt.Errorf("services.RecordService.sharedReadOnlyOr: %w", err)
+		return fmt.Errorf("services.explainWriteMiss: %w", err)
 	}
 	// A level equal to the write level was just probed (or is "none": 1=0) — nothing new to ask.
 	if !allowed || viewLevel == writeScope.AccessLevel || dynrepo.AccessLevel(viewLevel) == dynrepo.AccessNone {
@@ -88,11 +105,11 @@ func (s *RecordService) sharedReadOnlyOr(ctx context.Context, writeScope RecordS
 	}
 	view := writeScope // identity verbatim; only the level changes, with the share clause a view read carries
 	view.AccessLevel, view.IncludeShares = viewLevel, true
-	if _, err := s.store.GetRecord(ctx, entity, tenantID, id, view.toRowScope()); err != nil {
+	if _, err := store.GetRecord(ctx, entity, tenantID, id, view.toRowScope()); err != nil {
 		if errors.Is(err, ErrRecordNotFound) {
 			return writeErr
 		}
-		return fmt.Errorf("services.RecordService.sharedReadOnlyOr: %w", err)
+		return fmt.Errorf("services.explainWriteMiss: %w", err)
 	}
 	return ErrRecordEditForbidden
 }

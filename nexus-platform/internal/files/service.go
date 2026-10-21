@@ -32,6 +32,9 @@ var (
 type RecordGuard interface {
 	ResolveFileField(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID, fieldName string) (string, error)
 	SetFileRefs(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID, fieldName string, refs []map[string]any) error
+	// ExplainWriteMiss answers an upload whose edit scope missed the record the way every record write
+	// does (#43): 403 when the caller can read it, the miss unchanged otherwise.
+	ExplainWriteMiss(ctx context.Context, writeScope services.RecordScope, tenantID, entity, id string, writeErr error) error
 }
 
 // Limits captures the upload policy (size cap + mime whitelist), resolved from config.FileConfig.
@@ -152,13 +155,14 @@ func (s *Service) Upload(ctx context.Context, scope services.RecordScope, in Upl
 	// where POST→"create" handed a role with create:all and edit:own all-rows authority over a write
 	// limited to its own rows. Resolving here keeps the service correct whatever the mount says, the
 	// same way Open and Delete resolve view / delete. A denial resolves to AccessNone, which makes
-	// the ResolveFileField probe below answer not-found — the same closed refusal an unreadable
-	// record gives, so no existence oracle opens up.
+	// the ResolveFileField probe below miss; that miss is then answered like any record write's
+	// (ExplainWriteMiss): 403 only for a record the caller can read, so no existence oracle opens up.
 	scope = s.scopeFor(ctx, scope, in.TenantID, in.EntityName, "edit")
-	// 1) Authorize: record must be readable + field must be a file/image field.
+	// 1) Authorize: record must be reachable under that edit scope + field must be a file/image field.
+	// A record the caller can read but not edit is 403, one they cannot read the 404 of a missing one.
 	entity, err := s.guard.ResolveFileField(ctx, scope, in.TenantID, in.EntityName, in.RecordID, in.FieldName)
 	if err != nil {
-		return nil, err
+		return nil, s.guard.ExplainWriteMiss(ctx, scope, in.TenantID, in.EntityName, in.RecordID, err)
 	}
 	// 2) Policy: mime whitelist (checked before any bytes are stored).
 	if !s.limits.MimeOK(in.Mime) {

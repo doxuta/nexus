@@ -586,14 +586,15 @@ export function LayoutForm({ entity, recordId, onSaved, onCancel, modal = false,
     notification = { tone: "info", body: t("draft.preview.writeLocked") };
   } else if (lockedNotice) {
     notification = { tone: "warning", body: lockedNotice };
-  } else if (isEdit && record?.sharedWithMe) {
-    // specs/051 FR-009: reached through a share only (e.g. a pasted /edit link) — the save will be
-    // refused with 403 RECORD_SHARED_READ_ONLY, so say it before the user types.
-    notification = { tone: "info", body: t("page.record.share.readOnly") };
   } else if (isEdit && record?.canEdit === false) {
-    // #334: a pasted /edit link to a record outside the caller's edit scope — the save would be
-    // refused 403 FORBIDDEN (#18), so Lưu is off (submitDisabled below) and this says why.
-    notification = { tone: "info", body: t("page.record.editScope.readOnly") };
+    // #334 / #43: a pasted /edit link to a record outside the caller's edit scope — the save would be
+    // refused 403 (#18), so Lưu is off (submitDisabled below) and this says why: shared for viewing
+    // (specs/051, RECORD_SHARED_READ_ONLY) or someone else's. A shared record the edit scope reaches
+    // (canEdit absent) is an ordinary edit form.
+    notification = {
+      tone: "info",
+      body: t(record.sharedWithMe ? "page.record.share.readOnly" : "page.record.editScope.readOnly"),
+    };
   } else if (savedNote) {
     notification = { tone: "success", body: savedNote };
   } else if (cloneFromId) {

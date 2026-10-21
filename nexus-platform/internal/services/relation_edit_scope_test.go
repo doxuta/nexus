@@ -8,6 +8,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"nexus/platform/internal/dynrepo"
@@ -165,5 +166,48 @@ func TestUnlink_NoEditGrantIsRefusedAsInvalid(t *testing.T) {
 
 	if codeOf(err) != "RECORD_RELATION_INVALID" {
 		t.Fatalf("err = %v; want RECORD_RELATION_INVALID — no edit grant must not unlink", err)
+	}
+}
+
+// TestLinkUnlink_ViewableSourceOutsideEditScopeIs403 — #43: a source record the caller can READ but not
+// edit answers like every other write on a record (explainWriteMiss): 403 FORBIDDEN, where it used to be
+// the RECORD_RELATION_INVALID of a record that is not there. One they cannot read, or one that is gone,
+// keeps that answer — the view probe never reveals a record outside the view scope.
+func TestLinkUnlink_ViewableSourceOutsideEditScopeIs403(t *testing.T) {
+	ctx := context.Background()
+	fetcher := ownerFetcher{owners: map[string]string{"theirs": "user-2", "tgt-1": "user-2"}}
+	handed := dynrepo.RowScope{UserID: "user-1", Level: dynrepo.AccessAll} // what a mis-mapped route would hand down
+	cases := []struct{ name, viewLevel, sourceID, wantCode string }{
+		{"view=all edit=own, a colleague's record → 403", "all", "theirs", "FORBIDDEN"},
+		{"view=own edit=own, a colleague's record → as absent", "owner", "theirs", "RECORD_RELATION_INVALID"},
+		{"view=all, a record that is not there → as absent", "all", "gone", "RECORD_RELATION_INVALID"},
+	}
+	for _, tc := range cases {
+		for op, call := range map[string]func(*RelationService) error{
+			"link": func(svc *RelationService) error {
+				_, err := svc.Link(ctx, "tenant-1", "user-1", "role-1", false, "accounts", tc.sourceID, "accounts_contacts", "tgt-1",
+					newCheckerAllExist(), nil, fetcher, handed)
+				return err
+			},
+			"unlink": func(svc *RelationService) error {
+				return svc.Unlink(ctx, "tenant-1", "user-1", "role-1", false, "accounts", tc.sourceID, "accounts_contacts", "tgt-1", fetcher, handed)
+			},
+		} {
+			t.Run(op+": "+tc.name, func(t *testing.T) {
+				joinRepo, relMeta := nnRelFixture()
+				joinRepo.unlinkErr = errors.New("UnlinkRecords reached despite the refusal")
+				authz := actionAuthz{"accounts:view": tc.viewLevel, "accounts:edit": "owner", "contacts:view": "all"}
+				err := call(NewRelationService(joinRepo, relMeta).WithRelationACLAuthorizer(authz))
+				if got := codeOf(err); got != tc.wantCode {
+					t.Fatalf("code = %q (err=%v), want %q", got, err, tc.wantCode)
+				}
+				if tc.wantCode == "FORBIDDEN" && !errors.Is(err, ErrRecordEditForbidden) {
+					t.Fatalf("err = %v; want ErrRecordEditForbidden (the record routes' 403)", err)
+				}
+				if len(joinRepo.links) != 0 {
+					t.Errorf("join rows written despite the refusal: %v", joinRepo.links)
+				}
+			})
+		}
 	}
 }

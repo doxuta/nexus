@@ -86,6 +86,10 @@ type approvalRecordReader interface {
 	// record probe below is dead code: it would ask "can you see this row" holding no access at all
 	// and always answer no. Satisfied by *services.RecordService.
 	AuthorizeView(ctx context.Context, tenantID string, scope RecordScope, entity string) (RecordScope, error)
+	// ExplainWriteMiss answers a row-visibility miss of a send the way every record write does (#43):
+	// 403 when the caller can read the row, the miss unchanged otherwise. Satisfied by
+	// *services.RecordService.
+	ExplainWriteMiss(ctx context.Context, writeScope RecordScope, tenantID, entity, id string, writeErr error) error
 }
 
 // approvalUserExists reports whether userID is a real, non-deleted user in THIS tenant. Delegate
@@ -516,9 +520,10 @@ func (s *ApprovalService) recordForSend(ctx context.Context, scope RecordScope, 
 	// Two reads with two DIFFERENT purposes, deliberately not merged:
 	//
 	// (1) The caller-scoped Get is the ROW-VISIBILITY probe — may this person act on this record?
-	// Its refusal (404 for an invisible row) is forwarded verbatim.
+	// The route is pinned to "edit", so a miss is a write miss: 403 for a row the caller can read
+	// (only through a share, or through their view scope), the 404 of an invisible row otherwise.
 	if _, err := s.records.Get(ctx, scope, tenantID, entityName, recordID, nil, nil); err != nil {
-		return nil, s.sharedReadOnlyOr(ctx, scope, tenantID, entityName, recordID, err)
+		return nil, s.records.ExplainWriteMiss(ctx, scope, tenantID, entityName, recordID, err)
 	}
 	// (2) A SYSTEM read supplies the criteria-evaluation data. The caller-scoped read strips
 	// field-ACL-hidden fields, and approval ROUTING must not depend on which fields the submitter
@@ -531,25 +536,6 @@ func (s *ApprovalService) recordForSend(ctx context.Context, scope RecordScope, 
 		return nil, err
 	}
 	return full.Data, nil
-}
-
-// sharedReadOnlyOr maps a row-visibility miss of SubmitForApproval: this route is pinned to "edit", so
-// the scope carries no manual-share flag and a caller who sees the record ONLY through a share (specs/
-// 051) used to get the same 404 as a stranger. When the same level plus the share clause does reach
-// the row they are a share-only viewer — they already read it, so RECORD_SHARED_READ_ONLY (403, the
-// PUT/DELETE answer) leaks nothing (DAILY-QUEUE #225). The share clause only widens owner/team scopes,
-// so admins and level "all" (a miss means the record is gone) skip the probe. Any other error, and a
-// miss that survives the flag, is returned unchanged.
-func (s *ApprovalService) sharedReadOnlyOr(ctx context.Context, scope RecordScope, tenantID, entityName, recordID string, err error) error {
-	if !errors.Is(err, ErrRecordNotFound) || scope.IsAdmin || scope.IncludeShares || !dynrepo.AccessLevel(scope.AccessLevel).IsOwnerScoped() {
-		return err
-	}
-	probe := scope
-	probe.IncludeShares = true
-	if _, perr := s.records.Get(ctx, probe, tenantID, entityName, recordID, nil, nil); perr == nil {
-		return ErrRecordSharedReadOnly
-	}
-	return err
 }
 
 // RecallApproval withdraws a pending request the caller submitted.

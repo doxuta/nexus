@@ -17,6 +17,9 @@ type missReader struct{ err error }
 func (m missReader) Get(context.Context, services.RecordScope, string, string, string, []string, []string) (*dynrepo.Record, error) {
 	return nil, m.err
 }
+func (missReader) ExplainWriteMiss(_ context.Context, _ services.RecordScope, _, _, _ string, err error) error {
+	return err
+}
 func (m missReader) AuthorizeView(_ context.Context, _ string, sc services.RecordScope, _ string) (services.RecordScope, error) {
 	return sc, nil
 }
@@ -50,6 +53,7 @@ func TestApprovalSubmit_RefusalStatuses(t *testing.T) {
 		{"record out of scope", services.ErrRecordNotFound, http.StatusNotFound, "RECORD_NOT_FOUND"},
 		{"entity unknown", services.ErrEntityNotFound, http.StatusNotFound, "ENTITY_NOT_FOUND"},
 		{"share-only viewer", services.ErrRecordSharedReadOnly, http.StatusForbidden, "RECORD_SHARED_READ_ONLY"},
+		{"readable, outside the edit scope (#43)", services.ErrRecordEditForbidden, http.StatusForbidden, "FORBIDDEN"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := services.NewApprovalService(nil, nil, nil).WithRequestFlow(noSubmit{}, missReader{err: tc.err})

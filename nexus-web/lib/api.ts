@@ -1456,15 +1456,19 @@ export interface ApiRecord {
   // screen must feature-detect rather than render an empty owner. Added 2026-07-29: the read path
   // never returned it, so "Đổi chủ" was a button whose effect nothing could show.
   ownerId?: string;
-  // true when the caller sees this record ONLY through a manual share (specs/051 FR-009, GET
-  // /:entity/:id only) — shares are read-only, so the record page hides Sửa/Xoá/Chia sẻ on open.
+  // true when the caller's VIEW scope reaches this record ONLY through a manual share (specs/051 FR-009,
+  // GET /:entity/:id only). It does not decide whether the record can be edited — canEdit does (#43): a
+  // share takes no edit right away (view=own, edit=team on a shared team record keeps Sửa). The page uses
+  // it to word the read-only notice, to hide Xoá (a DELETE on it is refused 403 RECORD_SHARED_READ_ONLY)
+  // and to keep Trao đổi read-only (a note's floor is the view scope without the share).
   // Absent in every other case (own record, AccessAll, admin, list rows).
   sharedWithMe?: boolean;
-  // false when the caller's EDIT scope does not reach this record although their VIEW scope does
-  // (view=all, edit=own: a colleague's lead), or they hold no edit grant — GET /:entity/:id only
-  // (DAILY-QUEUE #334). Absent means "no restriction known" (own record, edit=all, admin), never
-  // "forbidden": the page hides Sửa and the form turns Lưu off on `=== false`; the save itself would be
-  // refused 403 FORBIDDEN (#18).
+  // false when the caller's EDIT scope does not reach this record: their VIEW scope does (view=all,
+  // edit=own: a colleague's lead), the record reaches them only through a share and their edit scope
+  // does not cover it, or they hold no edit grant — GET /:entity/:id only (DAILY-QUEUE #334, #41).
+  // Absent means "no restriction known" (own record, edit=all, admin, a shared record the edit scope
+  // reaches), never "forbidden": the page hides Sửa / Chia sẻ / Đổi chủ and the form turns Lưu off on
+  // `=== false`; the save itself would be refused 403 FORBIDDEN (#18) or RECORD_SHARED_READ_ONLY.
   canEdit?: boolean;
 }
 // Pagination block returned by the list endpoint in OFFSET mode (?page=&limit=).

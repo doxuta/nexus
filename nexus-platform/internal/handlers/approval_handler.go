@@ -1357,6 +1357,8 @@ func (h *ApprovalHandler) respondSendError(c *gin.Context, err error, op, tenant
 		c.JSON(http.StatusNotFound, gin.H{"error": "Entity không tồn tại", "code": "ENTITY_NOT_FOUND"})
 	case errors.Is(err, services.ErrRecordNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "Bản ghi không tồn tại", "code": "RECORD_NOT_FOUND"})
+	case errors.Is(err, services.ErrRecordEditForbidden): // #43: readable, outside the edit scope
+		respondRecordEditForbidden(c)
 	default:
 		h.respondServiceError(c, err, op, tenantID)
 	}

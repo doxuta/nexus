@@ -221,6 +221,11 @@ func (f *fakeApprovalRecordReader) AuthorizeView(_ context.Context, _ string, sc
 	return scope, nil
 }
 
+// ExplainWriteMiss passes the probe's miss through: these tests script the probe's answer directly.
+func (f *fakeApprovalRecordReader) ExplainWriteMiss(_ context.Context, _ RecordScope, _, _, _ string, err error) error {
+	return err
+}
+
 func (f *fakeApprovalRecordReader) Get(_ context.Context, sc RecordScope, _, _, _ string, _, _ []string) (*dynrepo.Record, error) {
 	f.sawLevel = sc.AccessLevel
 	if f.err != nil {

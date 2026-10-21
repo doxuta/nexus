@@ -74,6 +74,9 @@ type wiRecords struct{ data map[string]any }
 func (r wiRecords) Get(context.Context, services.RecordScope, string, string, string, []string, []string) (*dynrepo.Record, error) {
 	return &dynrepo.Record{ID: "rec-1", Data: r.data}, nil
 }
+func (wiRecords) ExplainWriteMiss(_ context.Context, _ services.RecordScope, _, _, _ string, err error) error {
+	return err
+}
 func (wiRecords) AuthorizeView(_ context.Context, _ string, sc services.RecordScope, _ string) (services.RecordScope, error) {
 	return sc, nil
 }

@@ -1992,7 +1992,7 @@ func (s *RecordService) Update(ctx context.Context, scope RecordScope, tenantID,
 		// them only through a manual share — or through their view scope (#18) — say so NOW: the
 		// field/relation checks below run with currentVals == nil (strict) and would otherwise answer
 		// 403 FIELD_* / 422 before the read-only verdict. Any other outcome falls through to the old flow.
-		if serr := s.sharedReadOnlyOr(ctx, scope, tenantID, e.Name, id, gerr); errors.Is(serr, ErrRecordSharedReadOnly) || errors.Is(serr, ErrRecordEditForbidden) {
+		if serr := s.ExplainWriteMiss(ctx, scope, tenantID, e.Name, id, gerr); errors.Is(serr, ErrRecordSharedReadOnly) || errors.Is(serr, ErrRecordEditForbidden) {
 			return serr
 		}
 	}
@@ -2095,7 +2095,7 @@ func (s *RecordService) Update(ctx context.Context, scope RecordScope, tenantID,
 	uerr := s.store.UpdateRecord(ctx, e.Name, tenantID, id, scope.UserID, scope.toRowScope(), clean, expectedVersion, uniqueFieldSpecs(specs))
 	if uerr != nil {
 		// specs/051: a record the caller sees only through a manual share is read-only → 403.
-		return asDataConstraint(asDuplicate(asVersionConflict(s.sharedReadOnlyOr(ctx, scope, tenantID, e.Name, id, uerr)), e.Name, specs))
+		return asDataConstraint(asDuplicate(asVersionConflict(s.ExplainWriteMiss(ctx, scope, tenantID, e.Name, id, uerr)), e.Name, specs))
 	}
 	commitHooks()
 	// specs/083: the row may have changed amount or moved to another parent — refresh both totals.
@@ -2723,7 +2723,7 @@ func (s *RecordService) Delete(ctx context.Context, scope RecordScope, tenantID,
 		return err
 	}
 	if derr := s.store.SoftDeleteRecord(ctx, e.Name, tenantID, id, scope.toRowScope()); derr != nil {
-		return s.sharedReadOnlyOr(ctx, scope, tenantID, e.Name, id, derr) // specs/051: shared-only → 403
+		return s.ExplainWriteMiss(ctx, scope, tenantID, e.Name, id, derr) // specs/051: shared-only → 403
 	}
 	s.refreshStoredRollups(ctx, tenantID, e.Name, before) // specs/083: the parent total no longer counts it
 	// RM-19: audit the committed delete (before-only diff). Async + fail-open.

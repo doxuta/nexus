@@ -153,6 +153,34 @@ func (s *RelationService) sourceEditScope(ctx context.Context, tenantID, userID,
 	return dynrepo.RowScope{UserID: userID, Level: dynrepo.AccessLevel(level)}, true, nil
 }
 
+// gateSource is the source-record gate of Link and Unlink: both change THAT record, so it is read under
+// the caller's EDIT scope (sourceEditScope, #351). A miss gets the answer every record write gets
+// (explainWriteMiss, #43): 403 when the caller can read the record (RECORD_SHARED_READ_ONLY through a
+// share, FORBIDDEN through their view scope); otherwise the RECORD_RELATION_INVALID an absent record
+// gets, so a record they cannot see stays indistinguishable from one that does not exist (NN-02).
+func (s *RelationService) gateSource(ctx context.Context, tenantID, userID, roleID string, isAdmin bool, sourceEntity, sourceID string, fetcher RecordFetcher, handed dynrepo.RowScope) error {
+	absent := invalid("RECORD_RELATION_INVALID", "bản ghi nguồn %q không tồn tại hoặc thuộc tenant khác", sourceID)
+	srcScope, ok, err := s.sourceEditScope(ctx, tenantID, userID, roleID, isAdmin, sourceEntity, handed)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return absent
+	}
+	_, err = fetcher.GetRecord(ctx, sourceEntity, tenantID, sourceID, srcScope)
+	if err == nil {
+		return nil
+	}
+	write := RecordScope{UserID: srcScope.UserID, AccessLevel: string(srcScope.Level), IsAdmin: srcScope.IsAdmin, RoleID: roleID}
+	switch err = explainWriteMiss(ctx, fetcher, s.authz, write, tenantID, sourceEntity, sourceID, err); {
+	case errors.Is(err, ErrRecordNotFound):
+		return absent
+	case errors.Is(err, ErrRecordSharedReadOnly), errors.Is(err, ErrRecordEditForbidden):
+		return err
+	}
+	return fmt.Errorf("services.RelationService.gateSource: %w", err)
+}
+
 // RegisterRelationshipInput is the payload for registering a new N-N relationship.
 type RegisterRelationshipInput struct {
 	Name    string // unique identifier for this relationship (e.g. "accounts_contacts")
@@ -249,6 +277,7 @@ func (s *RelationService) RegisterRelationship(
 // Returns RECORD_RELATION_INVALID (422) if sourceID or targetID does not exist in the
 // same tenant (spec §4.2: validate BOTH records), or if sourceID is outside the caller's
 // row-scope (NN-02: IDOR fix — source outside scope is indistinguishable from missing).
+// A source the caller can read but not edit is 403 instead (gateSource, #43).
 // Returns ErrRelationshipNotFound (→ 404) if relName is unknown or not an N-N relation.
 //
 // aclChecker is optional (nil disables the ACL-on-target check). When provided it must
@@ -316,21 +345,8 @@ func (s *RelationService) Link(
 	// Admins carry IsAdmin=true in sourceScope → GetRecord short-circuits to AccessAll.
 	// #351: the scope is the caller's EDIT scope on the source (see sourceEditScope), not the one
 	// handed down by the route.
-	srcScope, srcOK, err := s.sourceEditScope(ctx, tenantID, userID, roleID, isAdmin, sourceEntity, sourceScope)
-	if err != nil {
+	if err := s.gateSource(ctx, tenantID, userID, roleID, isAdmin, sourceEntity, sourceID, fetcher, sourceScope); err != nil {
 		return false, fmt.Errorf("services.Link: %w", err)
-	}
-	if !srcOK {
-		return false, invalid("RECORD_RELATION_INVALID",
-			"bản ghi nguồn %q không tồn tại hoặc thuộc tenant khác", sourceID)
-	}
-	_, srcErr := fetcher.GetRecord(ctx, sourceEntity, tenantID, sourceID, srcScope)
-	if srcErr != nil {
-		if errors.Is(srcErr, dynrepo.ErrRecordNotFound) {
-			return false, invalid("RECORD_RELATION_INVALID",
-				"bản ghi nguồn %q không tồn tại hoặc thuộc tenant khác", sourceID)
-		}
-		return false, fmt.Errorf("services.Link: GetRecord source: %w", srcErr)
 	}
 
 	// Validate the target record under the caller's ROW scope on the target entity — not merely
@@ -385,7 +401,8 @@ func (s *RelationService) Link(
 // Returns ErrRecordNotFound (→ 404) if the specific link does not exist.
 // Returns RECORD_RELATION_INVALID (422) if sourceID is outside the caller's EDIT row-scope
 // (NN-02: IDOR fix — a caller with edit-on-entity but owner/team scope cannot unlink
-// relationships on source records they cannot see, same as the Link gate).
+// relationships on source records they cannot see, same as the Link gate). A source they can
+// read but not edit is 403 instead (gateSource, #43).
 //
 // sourceScope is the caller's resolved A5 row-level scope for the source entity.
 // fetcher must be non-nil (it is the same dynRepo used for DML).
@@ -420,21 +437,8 @@ func (s *RelationService) Unlink(
 	// outside the caller's scope is indistinguishable from a missing record so no information
 	// is leaked. Previously Unlink had no source existence check at all — this adds one.
 	// #351: unlinking is editing the source record, so it is gated by the EDIT scope too.
-	srcScope, srcOK, err := s.sourceEditScope(ctx, tenantID, userID, roleID, isAdmin, sourceEntity, sourceScope)
-	if err != nil {
+	if err := s.gateSource(ctx, tenantID, userID, roleID, isAdmin, sourceEntity, sourceID, fetcher, sourceScope); err != nil {
 		return fmt.Errorf("services.Unlink: %w", err)
-	}
-	if !srcOK {
-		return invalid("RECORD_RELATION_INVALID",
-			"bản ghi nguồn %q không tồn tại hoặc thuộc tenant khác", sourceID)
-	}
-	_, srcErr := fetcher.GetRecord(ctx, sourceEntity, tenantID, sourceID, srcScope)
-	if srcErr != nil {
-		if errors.Is(srcErr, dynrepo.ErrRecordNotFound) {
-			return invalid("RECORD_RELATION_INVALID",
-				"bản ghi nguồn %q không tồn tại hoặc thuộc tenant khác", sourceID)
-		}
-		return fmt.Errorf("services.Unlink: GetRecord source: %w", srcErr)
 	}
 
 	if err := s.dynRepo.UnlinkRecords(ctx, tenantID, sourceEntity, sourceID, targetEntity, targetID); err != nil {

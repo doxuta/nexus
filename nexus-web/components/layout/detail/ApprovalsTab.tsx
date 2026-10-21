@@ -8,8 +8,9 @@
 // Every button shows for everyone and the SERVER decides: the browser cannot know which roles you
 // hold, so a hidden button is a guess. A refusal arrives as the server's own sentence
 // (APPROVAL_NOT_SUBMITTER / APPROVAL_NOT_AUTHORIZED).
-// The one exception is "Gửi duyệt" on a record seen only through a manual share (readOnly,
-// specs/051 FR-009): that is a write on the record, and the browser DOES know it is refused.
+// The one exception is "Gửi duyệt" on a record the server says I cannot edit (readOnly = canEdit
+// false, #43 — e.g. seen only through a manual share, specs/051): that is a write on the record, and
+// the browser DOES know it is refused.
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";

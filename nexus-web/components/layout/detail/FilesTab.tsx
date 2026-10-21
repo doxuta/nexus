@@ -14,8 +14,9 @@
 //   Upload:   POST /:entity/:id/files multipart with `field=<fieldname>` (REQUIRED).
 //   Download: GET /files/:id via fetch+auth → blob → save (auth header required; no ?token=).
 //   Delete:   DELETE /files/:id → 204.
-// readOnly (specs/051 FR-009 — the record is seen only through a manual share): no upload zone and no
-// delete button, both are writes the server refuses; download stays.
+// readOnly (the server says I cannot edit this record — canEdit false, #43; e.g. seen only through a
+// manual share, specs/051): no upload zone and no delete button, both are writes the server refuses;
+// download stays.
 import { useId, useState, type DragEvent } from "react";
 import clsx from "clsx";
 import { Download, FileText, Paperclip, Upload, X } from "lucide-react";
