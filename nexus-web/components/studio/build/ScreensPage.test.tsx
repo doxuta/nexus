@@ -9,8 +9,6 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/studio/du-an/northwind/dung/man-hinh",
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), forward: vi.fn(), refresh: vi.fn(), prefetch: vi.fn() }),
 }));
-const lb = vi.fn();
-vi.mock("@/components/studio/LayoutBuilder", () => ({ LayoutBuilder: (p: unknown) => { lb(p); return <div data-testid="lb" />; } }));
 const se = vi.fn();
 vi.mock("@/components/studio/screen/ScreenEditor", () => ({ ScreenEditor: (p: unknown) => { se(p); return <div data-testid="se" />; } }));
 const listEntities = vi.fn();
@@ -42,7 +40,6 @@ describe("ScreensPage", () => {
     mount();
     await screen.findByTestId("se");
     expect(se).toHaveBeenCalledWith(expect.objectContaining({ bang: "crm_accounts" }));
-    expect(screen.queryByTestId("lb")).toBeNull();
   });
   it("?man=form on a named table opens that table's ScreenEditor", async () => {
     listEntities.mockResolvedValue([ent("crm_accounts", "Khách hàng"), ent("pm_tasks", "Công việc")]);
@@ -55,14 +52,11 @@ describe("ScreensPage", () => {
     mount({ entity: "pm_tasks", man: "ho-so" });
     await screen.findByTestId("se");
     expect(se).toHaveBeenCalledWith(expect.objectContaining({ bang: "pm_tasks", man: "ho-so" }));
-    expect(screen.queryByTestId("lb")).toBeNull();
   });
-  it("?man=danh-sach opens the ScreenEditor on the list; LayoutBuilder is never mounted", async () => {
+  it("?man=danh-sach opens the ScreenEditor on the list", async () => {
     listEntities.mockResolvedValue([ent("crm_accounts", "Khách hàng")]);
     mount({ man: "danh-sach" });
     await screen.findByTestId("se");
     expect(se).toHaveBeenCalledWith(expect.objectContaining({ bang: "crm_accounts", man: "danh-sach" }));
-    expect(lb).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("lb")).toBeNull();
   });
 });

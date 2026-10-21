@@ -2,7 +2,7 @@ package handlers
 
 // admin_layout_handler_draft_test.go — specs/063-draft-publish S7-3: the per-view body of
 // GET /metadata/layouts/:entity carries draftState when (and only when) the service set it — the
-// FE label "Nháp · Khách chưa thấy" of LayoutBuilder reads it. Found by the third-person acceptance
+// FE label "Nháp · Khách chưa thấy" of the screen editor reads it. Found by the third-person acceptance
 // run: the service set it and the response shaper dropped it.
 
 import (

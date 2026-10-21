@@ -130,12 +130,6 @@ export const EMBEDDED_REGISTRY: EmbeddedEntry[] = [
     render: async () => { const { EntityFieldEditor } = await import("@/components/studio/EntityFieldEditor"); return <EntityFieldEditor entityName="crm_accounts" />; },
   },
   {
-    id: "LayoutBuilder",
-    file: "components/studio/LayoutBuilder.tsx",
-    routes: { "/metadata/entities": { data: ENTITIES }, "/metadata/fields/": { data: FIELDS } },
-    render: async () => { const { LayoutBuilder } = await import("@/components/studio/LayoutBuilder"); return <LayoutBuilder entityName="crm_accounts" />; },
-  },
-  {
     id: "AppsManager",
     file: "components/studio/AppsManager.tsx",
     // "Tạo app" is an in-page strip since f2-apps-menu; only "Sửa" still opens CreateAppDialog (components/apps, its own ledger row).

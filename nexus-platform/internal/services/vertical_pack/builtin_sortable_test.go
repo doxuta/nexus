@@ -8,7 +8,7 @@ import "testing"
 // (GetLayout → buildSortAllowlist); no writer of layout JSON may carry an opinion. The built-in
 // packs used to ship ten `"sortable": true` literals — every one on a plain text field the engine
 // cannot sort — so the header promised a sort the list endpoint answered with 422. The builder
-// half of the same invariant lives in nexus-web/components/studio/LayoutBuilder.tsx (buildListJson
+// half of the same invariant lives in nexus-web/lib/screenEditorModel.ts (listDraftToJson
 // emits no `sortable`); this test pins the pack half so a future pack author cannot reintroduce it.
 func TestBuiltinPacks_NoLayoutColumnWritesSortable(t *testing.T) {
 	for _, slug := range BuiltinSlugs() {

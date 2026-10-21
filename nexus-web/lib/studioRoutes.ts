@@ -140,7 +140,7 @@ export function zoneOfRoute(route: StudioRoute | null): "dung" | "van-hanh" | "b
   return head === "van-hanh" ? "van-hanh" : head === "bao-tri" || head === "cai-dat" ? "bao-tri" : "dung";
 }
 
-/** `?man=` of the Màn hình pages -> the LayoutBuilder view; anything else = undefined (the builder's own default). */
+/** `?man=` of the Màn hình pages -> the screen-editor view; anything else = undefined (the page opens the form). */
 export function viewOfMan(man: string | undefined): "Form" | "Detail" | "List" | undefined {
   return man === "form" ? "Form" : man === "ho-so" ? "Detail" : man === "danh-sach" ? "List" : undefined;
 }
