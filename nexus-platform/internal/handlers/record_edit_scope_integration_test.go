@@ -142,3 +142,76 @@ func TestRecordWrite_EditScope403_OverHTTP(t *testing.T) {
 	expect("B PUT deleted", http.MethodPut, rec, bTok, edit, http.StatusNotFound, "RECORD_NOT_FOUND")
 	expect("B DELETE deleted", http.MethodDelete, rec, bTok, nil, http.StatusNotFound, "RECORD_NOT_FOUND")
 }
+
+const (
+	teamScopeTenantID   = "ed175c00-0000-0000-0000-0000000000c3"
+	teamScopeTenantSlug = "editscope-team"
+	teamScopeEntity     = "it_edit_scope_team_tickets"
+)
+
+// TestRecordWrite_EditScopeTeamView_OverHTTP pins the scope the #18 check reads under: a view=team,
+// edit=own rep gets 403 on a teammate's record (they can read it) but the 404 of an unknown id —
+// byte for byte — on another team's record, which their GET hides. A check that read any wider than
+// the caller's view scope would turn that 404 into an existence oracle.
+func TestRecordWrite_EditScopeTeamView_OverHTTP(t *testing.T) {
+	gdb, sx := a4SetupMigratedDB(t)
+	rt := newA4Router(t, gdb, sx)
+	a4SeedTenant(t, gdb, teamScopeTenantID, teamScopeTenantSlug, "Acme team scope")
+	teamX, teamY := uuid.NewString(), uuid.NewString()
+	a5SeedTeam(t, gdb, teamX, teamScopeTenantID, "Team X")
+	a5SeedTeam(t, gdb, teamY, teamScopeTenantID, "Team Y")
+
+	rep := a4SeedRole(t, gdb, teamScopeTenantID, "teamrep", []auth.RoleAction{
+		grantLevel(teamScopeEntity, "create", "all"), grantLevel(teamScopeEntity, "view", "team"),
+		grantLevel(teamScopeEntity, "edit", "owner"), grantLevel(teamScopeEntity, "delete", "owner"),
+	})
+	mail := func(who string) string { return who + "@" + teamScopeTenantSlug }
+	x1 := a4SeedUser(t, gdb, teamScopeTenantID, mail("x1"), false, &rep)
+	x2 := a4SeedUser(t, gdb, teamScopeTenantID, mail("x2"), false, &rep)
+	y1 := a4SeedUser(t, gdb, teamScopeTenantID, mail("y1"), false, &rep)
+	a4SeedUser(t, gdb, teamScopeTenantID, mail("admin"), true, nil)
+	// Memberships before any record: a record's team set is its creator's teams at insert time.
+	a5SeedMembership(t, gdb, x1, teamX)
+	a5SeedMembership(t, gdb, x2, teamX)
+	a5SeedMembership(t, gdb, y1, teamY)
+
+	a4DropEntity(sx, []string{teamScopeTenantID}, teamScopeEntity)
+	t.Cleanup(func() { a4DropEntity(sx, []string{teamScopeTenantID}, teamScopeEntity) })
+	rt.createEntity(t, rt.login(t, teamScopeTenantSlug, mail("admin")).Data.AccessToken, teamScopeEntity)
+	tok := func(who string) string { return rt.login(t, teamScopeTenantSlug, mail(who)).Data.AccessToken }
+	x1Tok, x2Tok, y1Tok := tok("x1"), tok("x2"), tok("y1")
+
+	base := "/api/v1/" + teamScopeEntity
+	call := func(name, method, path, token string, body any, wantStatus int, wantCode string) []byte {
+		t.Helper()
+		w := doAuthed(t, rt.engine, method, path, token, body, nil)
+		if w.Code != wantStatus || shareCode(t, w.Body.Bytes()) != wantCode {
+			t.Fatalf("%s: %s %s → %d %s; want %d %s", name, method, path, w.Code, w.Body.String(), wantStatus, wantCode)
+		}
+		return w.Body.Bytes()
+	}
+	create := func(token, title string) string {
+		t.Helper()
+		var env recordCreateEnvelope
+		_ = json.Unmarshal(call("create "+title, http.MethodPost, base, token, map[string]any{"title": title}, http.StatusCreated, ""), &env)
+		return base + "/" + env.Data.ID
+	}
+	yRec, xRec := create(y1Tok, "Team Y's"), create(x2Tok, "Team X's")
+	edit := map[string]any{"title": "hacked"}
+
+	// Another team's record: hidden from x1's GET, so every write is the unknown id's 404, byte for byte.
+	call("x1 GET Y's", http.MethodGet, yRec, x1Tok, nil, http.StatusNotFound, "RECORD_NOT_FOUND")
+	unknown := base + "/" + uuid.NewString()
+	for _, m := range []string{http.MethodPut, http.MethodDelete} {
+		hidden := call("x1 "+m+" Y's", m, yRec, x1Tok, edit, http.StatusNotFound, "RECORD_NOT_FOUND")
+		none := call("x1 "+m+" unknown id", m, unknown, x1Tok, edit, http.StatusNotFound, "RECORD_NOT_FOUND")
+		if string(hidden) != string(none) {
+			t.Fatalf("x1 %s on another team's record differs from an unknown id:\n %s\n %s", m, hidden, none)
+		}
+	}
+	// A teammate's record: readable, not theirs to change → 403.
+	call("x1 GET X's", http.MethodGet, xRec, x1Tok, nil, http.StatusOK, "")
+	call("x1 PUT X's", http.MethodPut, xRec, x1Tok, edit, http.StatusForbidden, "FORBIDDEN")
+	call("x1 DELETE X's", http.MethodDelete, xRec, x1Tok, nil, http.StatusForbidden, "FORBIDDEN")
+
+}

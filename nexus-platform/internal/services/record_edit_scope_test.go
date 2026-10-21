@@ -100,12 +100,13 @@ func TestRecordGet_CanEditFollowsEditScope(t *testing.T) {
 type viewNotEditStore struct {
 	bulkTestStore
 	gone        bool
+	inMyTeam    bool // the record's team set holds a team of the caller: a "team" scope reaches it
 	reads       []dynrepo.RowScope
 	writeScopes []dynrepo.RowScope
 }
 
 func (s *viewNotEditStore) reaches(scope dynrepo.RowScope) bool {
-	return !s.gone && (scope.IsAdmin || scope.Level == dynrepo.AccessAll)
+	return !s.gone && (scope.IsAdmin || scope.Level == dynrepo.AccessAll || (s.inMyTeam && scope.Level == dynrepo.AccessTeam))
 }
 
 func (s *viewNotEditStore) GetRecord(_ context.Context, _, _, id string, scope dynrepo.RowScope) (*dynrepo.Record, error) {
@@ -158,29 +159,35 @@ func TestRecordWrite_ViewableButOutOfWriteScopeIs403(t *testing.T) {
 		return s.Update(ctx, scope, "tenant-1", "widgets", "rec-1", map[string]any{"name": "x"}, nil)
 	}
 	cases := []struct {
-		name   string
-		scope  RecordScope
-		authz  entityAuthorizer // nil = none wired
-		gone   bool
-		call   func(*RecordService, RecordScope) error
-		want   error
-		probed bool // a read ran under the VIEW level (with the share clause)
+		name     string
+		scope    RecordScope
+		authz    entityAuthorizer // nil = none wired
+		gone     bool
+		inMyTeam bool
+		call     func(*RecordService, RecordScope) error
+		want     error
+		probed   bool // a read ran under the VIEW level (with the share clause)
 	}{
-		{"PUT view=all edit=own → 403", own, &perActionAuthz{levels: map[string]string{"view": "all", "edit": "owner"}}, false, put, ErrRecordEditForbidden, true},
-		{"PUT a field, view=all edit=own → 403 before the field checks", own, &perActionAuthz{levels: map[string]string{"view": "all", "edit": "owner"}}, false, putField, ErrRecordEditForbidden, true},
-		{"DELETE view=all delete=own → 403", own, &perActionAuthz{levels: map[string]string{"view": "all", "delete": "owner"}}, false, del, ErrRecordEditForbidden, true},
+		{"PUT view=all edit=own → 403", own, &perActionAuthz{levels: map[string]string{"view": "all", "edit": "owner"}}, false, false, put, ErrRecordEditForbidden, true},
+		{"PUT a field, view=all edit=own → 403 before the field checks", own, &perActionAuthz{levels: map[string]string{"view": "all", "edit": "owner"}}, false, false, putField, ErrRecordEditForbidden, true},
+		{"DELETE view=all delete=own → 403", own, &perActionAuthz{levels: map[string]string{"view": "all", "delete": "owner"}}, false, false, del, ErrRecordEditForbidden, true},
 		{"PUT edit=none view=all → 403", RecordScope{UserID: "u-rep", AccessLevel: "none", RoleID: "r1"},
-			&perActionAuthz{levels: map[string]string{"view": "all", "edit": "none"}}, false, put, ErrRecordEditForbidden, true},
-		{"PUT view=own (cannot view) → 404", own, &perActionAuthz{levels: map[string]string{"view": "owner", "edit": "owner"}}, false, put, ErrRecordNotFound, false},
-		{"DELETE no view grant → 404", own, &perActionAuthz{levels: map[string]string{"delete": "owner"}}, false, del, ErrRecordNotFound, false},
-		{"PUT view=none → 404", own, &perActionAuthz{levels: map[string]string{"view": "none", "edit": "owner"}}, false, put, ErrRecordNotFound, false},
-		{"PUT view=all, record gone → 404", own, &perActionAuthz{levels: map[string]string{"view": "all", "edit": "owner"}}, true, put, ErrRecordNotFound, true},
-		{"DELETE view=all, record gone → 404", own, &perActionAuthz{levels: map[string]string{"view": "all", "delete": "owner"}}, true, del, ErrRecordNotFound, true},
-		{"PUT no authorizer wired → 404", own, nil, false, put, ErrRecordNotFound, false},
+			&perActionAuthz{levels: map[string]string{"view": "all", "edit": "none"}}, false, false, put, ErrRecordEditForbidden, true},
+		{"PUT view=own (cannot view) → 404", own, &perActionAuthz{levels: map[string]string{"view": "owner", "edit": "owner"}}, false, false, put, ErrRecordNotFound, false},
+		{"DELETE no view grant → 404", own, &perActionAuthz{levels: map[string]string{"delete": "owner"}}, false, false, del, ErrRecordNotFound, false},
+		{"PUT view=none → 404", own, &perActionAuthz{levels: map[string]string{"view": "none", "edit": "owner"}}, false, false, put, ErrRecordNotFound, false},
+		{"PUT view=all, record gone → 404", own, &perActionAuthz{levels: map[string]string{"view": "all", "edit": "owner"}}, true, false, put, ErrRecordNotFound, true},
+		{"DELETE view=all, record gone → 404", own, &perActionAuthz{levels: map[string]string{"view": "all", "delete": "owner"}}, true, false, del, ErrRecordNotFound, true},
+		{"PUT no authorizer wired → 404", own, nil, false, false, put, ErrRecordNotFound, false},
+		// view=team: the check reads under the TEAM scope — another team's record stays hidden (404, like an
+		// unknown id), a teammate's record is readable so its write is 403.
+		{"PUT view=team edit=own, another team's record → 404", own, &perActionAuthz{levels: map[string]string{"view": "team", "edit": "owner"}}, false, false, put, ErrRecordNotFound, true},
+		{"DELETE view=team delete=own, another team's record → 404", own, &perActionAuthz{levels: map[string]string{"view": "team", "delete": "owner"}}, false, false, del, ErrRecordNotFound, true},
+		{"PUT view=team edit=own, a teammate's record → 403", own, &perActionAuthz{levels: map[string]string{"view": "team", "edit": "owner"}}, false, true, put, ErrRecordEditForbidden, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			store := &viewNotEditStore{gone: tc.gone}
+			store := &viewNotEditStore{gone: tc.gone, inMyTeam: tc.inMyTeam}
 			svc := shareTestService(store)
 			if tc.authz != nil {
 				svc = svc.WithACLAuthorizer(tc.authz)
@@ -193,13 +200,17 @@ func TestRecordWrite_ViewableButOutOfWriteScopeIs403(t *testing.T) {
 					t.Fatalf("write ran with %+v; want the caller's own %q level, no shares", ws, tc.scope.AccessLevel)
 				}
 			}
+			// The view probe: any read at a level other than the caller's write level. It must run at
+			// exactly their VIEW level, as them, with the share clause a view read carries — never wider.
 			probed := false
 			for _, rs := range store.reads {
-				if rs.Level == dynrepo.AccessAll && !rs.IsAdmin {
-					probed = true
-					if !rs.IncludeShares || rs.UserID != tc.scope.UserID {
-						t.Fatalf("view probe ran with %+v; want the caller's identity and the share clause a view read carries", rs)
-					}
+				if rs.Level == dynrepo.AccessLevel(tc.scope.AccessLevel) {
+					continue
+				}
+				probed = true
+				pa, _ := tc.authz.(*perActionAuthz)
+				if pa == nil || rs.Level != dynrepo.AccessLevel(pa.levels["view"]) || rs.IsAdmin || !rs.IncludeShares || rs.UserID != tc.scope.UserID {
+					t.Fatalf("view probe ran with %+v; want the caller's own VIEW level, identity and share clause", rs)
 				}
 			}
 			if probed != tc.probed {
