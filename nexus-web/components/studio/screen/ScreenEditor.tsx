@@ -20,6 +20,7 @@ import { QueryState } from "@/components/studio/QueryState";
 import { toast } from "@/components/ui/Toaster";
 import { deleteLayout, getTenantBrandingDoc, type EntityMeta, type FieldMeta } from "@/lib/api";
 import { classOf } from "@/lib/draftClass";
+import { emitDraftsChanged } from "@/lib/draftEvents";
 import { undoDraftDelete } from "@/lib/draftUndo";
 import { strictErrorMessage } from "@/lib/errorMessages";
 import {
@@ -277,6 +278,7 @@ function Editor({
     setSaveErr(null);
     setWhenErr(null);
     const r = await saveScreen({ entity: bang, viewType: isRecord ? "detail" : "edit", layoutId, asNew, draft, fields: savedFields, edits });
+    emitDraftsChanged("screen-save"); // a pending change on a delivered project, even a partly failed Lưu: the header recounts
     if (r.ok) {
       setGone(false);
       void qc.invalidateQueries({ queryKey: ["metadata", "layout", bang] });
@@ -310,6 +312,7 @@ function Editor({
     setSaving(true);
     try {
       await deleteLayout(layoutId);
+      emitDraftsChanged("screen-reset");
       setResetAsk(false);
       await refetch();
     } catch (e) {
