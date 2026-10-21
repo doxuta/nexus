@@ -57,6 +57,12 @@ export function proposalKey(turnId: string, index: number): string {
   return `${turnId}:${index}`;
 }
 
+/** Where a card is saved: its turn's server seq (a read-back turn is `m_<seq>`, serverMessagesToTurns) and its index. null for a turn of this tab. */
+export function proposalPlace(key: string): { seq: number; index: number } | null {
+  const m = /^m_(\d+):(\d+)$/.exec(key);
+  return m ? { seq: Number(m[1]), index: Number(m[2]) } : null;
+}
+
 class ScopeChanged extends Error {}
 
 // Every write goes through `w`, which re-checks scope first.

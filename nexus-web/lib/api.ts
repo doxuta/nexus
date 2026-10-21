@@ -2477,6 +2477,11 @@ export async function getAiSession(id: string): Promise<AiSessionDetail> {
 export async function deleteAiSession(id: string): Promise<void> {
   await req("DELETE", `/admin/ai/builder/sessions/${id}`, undefined);
 }
+// POST /admin/ai/builder/sessions/:id/settled → 204: the card at (seq, index) of a saved thread was applied, discarded or
+// undone, so the thread's MCP agent stops replaying it into its next proposal (issue #42). 404 PROPOSAL_NOT_FOUND otherwise.
+export async function settleAiProposal(sessionId: string, seq: number, index: number): Promise<void> {
+  await req("POST", `/admin/ai/builder/sessions/${sessionId}/settled`, { seq, index });
+}
 
 // ── ⌘K AI Assistant (end-user ask-data) — EVERY authenticated user, NOT admin-gated ──
 // POST /assistant/ask — one read-only Q&A turn about the caller's OWN visible data. The

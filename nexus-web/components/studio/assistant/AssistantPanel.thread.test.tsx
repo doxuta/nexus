@@ -17,10 +17,13 @@ vi.mock("@/lib/previewSession", () => ({ getPreviewToken: () => null }));
 vi.mock("../usePublishState", () => ({ usePublishState: () => ({ data: { delivered: false, draftableTypes: [] } }) }));
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, aiHealth: vi.fn(async () => false), getAiSession: vi.fn() };
+  return {
+    ...actual, aiHealth: vi.fn(async () => false), getAiSession: vi.fn(),
+    addField: vi.fn(async () => ({})), settleAiProposal: vi.fn(async () => undefined),
+  };
 });
 
-import { getAiSession } from "@/lib/api";
+import { addField, getAiSession, settleAiProposal } from "@/lib/api";
 import { resetAssistantOpenForTests, useAssistantOpen } from "@/lib/assistantOpen";
 import { parseStudioPath } from "@/lib/studioRoutes";
 import { AssistantMount } from "./AssistantMount";
@@ -65,6 +68,8 @@ function mount(path = "/studio/du-an/northwind/van-hanh/tu-dong/khoa-truy-cap") 
 }
 
 beforeEach(() => {
+  vi.mocked(addField).mockClear();
+  vi.mocked(settleAiProposal).mockClear();
   vi.mocked(getAiSession).mockReset();
   vi.mocked(getAiSession).mockResolvedValue(THREAD as never);
   window.localStorage.clear();
@@ -84,6 +89,25 @@ describe("opening a saved conversation", () => {
     // the proposal is a card a human applies, as in a live turn
     await waitFor(() => expect(screen.getByRole("button", { name: "Áp dụng" })).toBeInTheDocument());
     expect(screen.getByTestId("open-state").textContent).toBe("true");
+  });
+
+  // Issue #42: a card of a saved thread that is applied or discarded is told to the server (turn seq 3, card 0), so the
+  // thread's MCP agent stops replaying it into its next proposal.
+  it("tells the thread when a card is applied", async () => {
+    mount();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "mo" })); });
+    fireEvent.click(await screen.findByRole("button", { name: "Áp dụng" }));
+    await waitFor(() => expect(addField).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(settleAiProposal).toHaveBeenCalledWith("sess-1", 3, 0));
+    expect(settleAiProposal).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the thread when a card is discarded, and writes nothing else", async () => {
+    mount();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "mo" })); });
+    fireEvent.click(await screen.findByRole("button", { name: "Bỏ" }));
+    await waitFor(() => expect(settleAiProposal).toHaveBeenCalledWith("sess-1", 3, 0));
+    expect(addField).not.toHaveBeenCalled();
   });
 
   it("is not offered where the panel cannot mount", () => {

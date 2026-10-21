@@ -32,6 +32,9 @@ export interface ApplyState extends CardState {
 const KEY = "nexus.ai-apply-state.v1";
 const TERMINAL = new Set<CardStatus>(["done", "warn", "discarded", "undone", "sealed"]);
 
+/** Applied, discarded or undone: the card is settled ("error" stays retryable, "applying" is in flight). */
+export const isTerminal = (s: CardStatus): boolean => TERMINAL.has(s);
+
 function pick(v: CardState): CardState {
   return {
     status: v.status,
