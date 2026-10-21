@@ -46,6 +46,33 @@ func TestTools_ProposeField_RefusesANameTheTableAlreadyHas(t *testing.T) {
 	mustReject(t, e, "propose_field", `{"entity":"shops","name":"district","label":"Quận","fieldType":"text"}`, "FIELD_ALREADY_EXISTS")
 }
 
+// The refusal tells the truth per case (PR #40 verifier LOW): propose_edit_field reads only the live
+// registry, so it is the way out for a live field alone. A field still pending in this draft keeps
+// its card; changing it means discarding that card (for a drafted table, its propose_entity).
+func TestTools_ProposeField_DuplicateMessageFitsTheCase(t *testing.T) {
+	e := &toolExecutor{reader: twoTenantRelReader(), tenantID: "tenant-A"}
+	mustBuffer(t, e, "propose_field", `{"entity":"patients","name":"phone","label":"SĐT","fieldType":"text"}`)
+	mustBuffer(t, e, "propose_entity", `{"name":"shops","label":"Cửa hàng","fields":[{"name":"province","label":"Tỉnh","fieldType":"text"}]}`)
+	refusal := func(args string) string {
+		t.Helper()
+		mustReject(t, e, "propose_field", args, "FIELD_ALREADY_EXISTS")
+		_, m := parseToolResult(t, e.execute(context.Background(), "propose_field", args))
+		msg, _ := m["error"].(string)
+		return msg
+	}
+	if msg := refusal(`{"entity":"patients","name":"full_name","label":"Tên","fieldType":"text"}`); !strings.Contains(msg, "propose_edit_field") || strings.Contains(msg, "trong draft này") {
+		t.Errorf("live field: want the propose_edit_field way out, got %q", msg)
+	}
+	for _, args := range []string{
+		`{"entity":"patients","name":"phone","label":"SĐT","fieldType":"text"}`,  // proposed earlier this turn
+		`{"entity":"shops","name":"province","label":"Tỉnh","fieldType":"text"}`, // drafted with its table
+	} {
+		if msg := refusal(args); strings.Contains(msg, "propose_edit_field") || !strings.Contains(msg, "trong draft này") || !strings.Contains(msg, "bỏ thẻ") {
+			t.Errorf("pending field %s: want 'already in this draft, its card stands', got %q", args, msg)
+		}
+	}
+}
+
 // A live table wins over a draft of the same name (PR #21): an older thread's proposal of "patients"
 // with a "note" field neither blocks a real "note" nor hides the live "full_name".
 func TestTools_ProposeField_LiveTableWinsOverADraftOfTheSameName(t *testing.T) {

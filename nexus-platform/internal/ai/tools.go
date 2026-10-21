@@ -1124,8 +1124,13 @@ func (e *toolExecutor) proposeField(ctx context.Context, argsJSON string) string
 	if err != nil && !errors.Is(err, metadata.ErrEntityNotFound) {
 		return toolErr("PROPOSE_FIELD_FAILED: %v", err)
 	}
-	if slices.ContainsFunc(fields, func(f metadata.FieldDefinition) bool { return f.Name == a.Name }) {
-		return toolErr("FIELD_ALREADY_EXISTS: bảng %q đã có field %q (đang chạy, hoặc đã đề xuất trong lượt này) — mỗi field đề xuất một lần; sửa field đang có thì dùng propose_edit_field, field mới thì đặt tên khác", withEntity.Entity, a.Name)
+	if i := slices.IndexFunc(fields, func(f metadata.FieldDefinition) bool { return f.Name == a.Name }); i >= 0 {
+		// A registry row has an id; a pending field (draftFieldDefinition) has none. propose_edit_field
+		// reads only the registry, so it is the way out for a live field alone.
+		if fields[i].ID != "" {
+			return toolErr("FIELD_ALREADY_EXISTS: bảng %q đã có field %q — sửa field đang có thì dùng propose_edit_field, field mới thì đặt tên khác", withEntity.Entity, a.Name)
+		}
+		return toolErr("FIELD_ALREADY_EXISTS: field %q của bảng %q đã nằm trong draft này (đề xuất trước đó trong lượt, hoặc cùng propose_entity của bảng) — thẻ đó vẫn giữ, KHÔNG đề xuất lại; muốn đổi thì người duyệt bỏ thẻ đó rồi đề xuất lại (field của bảng đang draft: bỏ thẻ propose_entity rồi propose_entity lại cả bảng), field mới thì đặt tên khác", a.Name, withEntity.Entity)
 	}
 
 	// specs/052 (queue #230): the cross-field half of AddField - controllingField must be a sibling
