@@ -373,7 +373,7 @@ const steps = [
   }],
 
   ["layout-published", async () => {
-    const want = await publishFromHeader(builder, studio(`dung/man-hinh/${entity.name}?man=danh-sach`));
+    const want = await publishFromHeader(builder); // no reload: the screen editor's Lưu has raised the header's count
     await submitPublish(builder, want);
     return `version ${want} is live`;
   }],

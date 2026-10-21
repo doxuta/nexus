@@ -16,6 +16,7 @@ import { usePublishState } from "@/components/studio/usePublishState";
 import { toast } from "@/components/ui/Toaster";
 import { deleteLayout, getTenantBrandingDoc, type EntityMeta, type FieldMeta } from "@/lib/api";
 import { classOf } from "@/lib/draftClass";
+import { emitDraftsChanged } from "@/lib/draftEvents";
 import { strictErrorMessage } from "@/lib/errorMessages";
 import { t, tf } from "@/lib/i18n";
 import { useSetBlocked } from "@/lib/navigation-blocker";
@@ -80,6 +81,7 @@ export function ListScreenEditor({ slug, entities, bang, truong, onTruong, onPic
     const r = await saveListScreen({ entity: bang, layoutId, asNew, layoutJson: listDraftToJson(draft) });
     if (r.ok) {
       setGone(false);
+      emitDraftsChanged("screen-save"); // a pending change on a delivered project: the header recounts
       await refetch(); // new dataUpdatedAt remounts this editor on the saved state
       toast.success(t("studio.build.screens.status.ok"));
       return;
@@ -99,6 +101,7 @@ export function ListScreenEditor({ slug, entities, bang, truong, onTruong, onPic
     setSaving(true);
     try {
       await deleteLayout(layoutId);
+      emitDraftsChanged("screen-reset");
       setResetAsk(false);
       await refetch();
     } catch (e) {
