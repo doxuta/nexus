@@ -43,6 +43,7 @@ jobs:
         run: |
           python3 scripts/test_acceptance_acl.py
           python3 scripts/test_acceptance_named_credentials.py
+          python3 scripts/test_seed_demo.py
       - name: eval pass-rule unit tests
         run: python3 ../evals/mcp/test_run.py
 
@@ -118,6 +119,10 @@ jobs:
           curl -fsS -X POST http://localhost:8080/api/v1/auth/login -H 'Content-Type: application/json' \
             -d '{"tenant":"northwind","email":"test@example.com","password":"Demo-Rep-2026!"}' | grep -q accessToken
           curl -fsS -o /dev/null http://localhost:8080/
+      - name: the sales rep reads rows in every CRM table the seed fills (#30)
+        run: |
+          python3 nexus-platform/scripts/acceptance-acl.py --base http://localhost:8080/api/v1 \
+            --expect crm_accounts,crm_contacts,crm_opportunities,crm_leads,crm_activities,crm_quotes,crm_quote_lines,crm_contracts
       - name: logs on failure
         if: failure()
         run: docker compose logs --tail 200
