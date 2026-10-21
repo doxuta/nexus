@@ -1,8 +1,9 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeClient } from "@/lib/query/client";
+import { emitDraftsChanged } from "@/lib/draftEvents";
 
 const matches = vi.fn<(s: string) => boolean>();
 vi.mock("@/lib/studioContext", () => ({ useStudioIdentity: () => ({ matches }) }));
@@ -10,6 +11,17 @@ const getPublishState = vi.fn();
 vi.mock("@/lib/api", () => ({ getPublishState: () => getPublishState() }));
 
 import { READ_TIMEOUT_MS, usePublishState } from "./usePublishState";
+
+// Issue #46: the header, the draft bar, the assistant… each mount usePublishState. One save announces once on the
+// drafts bus, and that must cost ONE GET /admin/publish/state, not one per mounted reader (each invalidate cancels the
+// read in flight and sends another, and getPublishState takes no signal, so every cancelled read still hits the server).
+function Readers({ n }: { n: number }) {
+  return <>{Array.from({ length: n }, (_, i) => <Reader key={i} />)}</>;
+}
+function Reader() {
+  usePublishState("acme");
+  return null;
+}
 
 const wrap = (c: ReturnType<typeof makeClient>) =>
   function W({ children }: { children: ReactNode }) {
@@ -63,5 +75,25 @@ describe("usePublishState", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("one announcement on the drafts bus sends one read, however many readers are mounted (#46)", async () => {
+    matches.mockReturnValue(true);
+    getPublishState.mockResolvedValue({ delivered: true, pendingCount: 0 });
+    const c = makeClient(); // the app's 2-minute staleTime: only the announcement re-reads
+    const { rerender, unmount } = render(<QueryClientProvider client={c}><Readers n={5} /></QueryClientProvider>);
+    await waitFor(() => expect(getPublishState).toHaveBeenCalledTimes(1));
+    act(() => emitDraftsChanged("screen-save"));
+    await waitFor(() => expect(c.isFetching()).toBe(0));
+    expect(getPublishState).toHaveBeenCalledTimes(2);
+
+    // The listener lives as long as one reader does, and goes with the last one.
+    rerender(<QueryClientProvider client={c}><Readers n={1} /></QueryClientProvider>);
+    act(() => emitDraftsChanged("screen-save"));
+    await waitFor(() => expect(getPublishState).toHaveBeenCalledTimes(3));
+    unmount();
+    act(() => emitDraftsChanged("screen-save"));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(getPublishState).toHaveBeenCalledTimes(3);
   });
 });
