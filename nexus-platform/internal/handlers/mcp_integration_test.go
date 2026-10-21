@@ -75,8 +75,11 @@ func newMCPITRouter(t *testing.T, gdb *gorm.DB, sx *sqlx.DB) mcpITRouter {
 	apiKeySvc := services.NewAPIKeyService(auth.NewAPIKeyRepository(gdb), roleRepo)
 	mcpSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(gdb), store, userRepo)
 	authSvc := services.NewAuthService(userRepo, auth.NewRefreshTokenRepository(gdb), tokenSvc).WithAgentKeys(mcpSvc)
-	// AI off: MCP needs no gateway. The column probe is main.go's (issue #42: propose_field asks AddField's column check).
-	agent := ai.NewAIBuilderAgent(config.AIConfig{}, nil, ai.ReaderWithAccessProbes(meta, &ai.AccessProbes{Columns: dynrepo.New(sx)}),
+	// AI off: MCP needs no gateway. The column and ref probes are main.go's (issue #42): propose_field asks
+	// AddField's column check, propose_records the ref registry of the SAME record service /:entity/bulk uses.
+	dyn := dynrepo.New(sx)
+	records := services.NewRecordService(meta, dyn)
+	agent := ai.NewAIBuilderAgent(config.AIConfig{}, nil, ai.ReaderWithAccessProbes(meta, &ai.AccessProbes{Columns: dyn, Refs: records}),
 		&ai.DocReaders{Layouts: services.NewLayoutService(meta, metadata.NewLayoutRepository(gdb), nil)}, nil, zap.NewNop())
 
 	gin.SetMode(gin.TestMode)
@@ -84,7 +87,8 @@ func newMCPITRouter(t *testing.T, gdb *gorm.DB, sx *sqlx.DB) mcpITRouter {
 	RegisterAPIRoutes(r.Group("/api/v1"), services.NewCompositeVerifier(tokenSvc, apiKeySvc), services.NewACLService(roleRepo), APIHandlers{
 		Auth:     NewAuthHandler(authSvc, zap.NewNop()),
 		Metadata: NewMetadataHandler(gdb, zap.NewNop()),
-		Admin:    NewAdminEntityHandler(services.NewEntityService(dynrepo.New(sx), meta), services.NewFieldService(dynrepo.New(sx), meta), zap.NewNop()),
+		Admin:    NewAdminEntityHandler(services.NewEntityService(dyn, meta), services.NewFieldService(dyn, meta), zap.NewNop()),
+		Record:   NewDynamicRecordHandler(records, zap.NewNop()),
 		AI:       NewAIBuilderHandler(nil, store, nil, nil, zap.NewNop()),
 		APIKey:   NewAdminAPIKeyHandler(apiKeySvc, zap.NewNop()),
 		MCPToken: NewAdminMCPTokenHandler(mcpSvc, zap.NewNop()),
@@ -684,6 +688,96 @@ func TestMCP_SettledProposalsAreNotReplayed(t *testing.T) {
 		}
 		settle(t, field)
 		mustPropose(t, "propose_field", website)
+	})
+
+	t.Run("a field applied then deleted keeps its name, as at Apply", func(t *testing.T) {
+		fax := map[string]any{"entity": "st_patients", "name": "fax", "label": "Fax", "fieldType": "text"}
+		mustPropose(t, "propose_field", fax)
+		card := last(t)
+		w := admin(t, http.MethodPost, "/admin/fields", map[string]any{"entityName": "st_patients", "name": "fax", "label": "Fax", "fieldType": "text"})
+		var added struct {
+			Data struct {
+				Field struct{ ID string } `json:"field"`
+			} `json:"data"`
+		}
+		if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &added) != nil || added.Data.Field.ID == "" {
+			t.Fatalf("apply: %d %s", w.Code, w.Body.String())
+		}
+		settle(t, card)
+		if got := propose(t, "propose_field", fax); !strings.HasPrefix(got, "FIELD_ALREADY_EXISTS") {
+			t.Fatalf("the applied field again: %q; want FIELD_ALREADY_EXISTS (it is live)", got)
+		}
+		if w := admin(t, http.MethodDelete, "/admin/fields/"+added.Data.Field.ID, nil); w.Code != http.StatusNoContent {
+			t.Fatalf("delete: %d %s", w.Code, w.Body.String())
+		}
+		got := propose(t, "propose_field", fax)
+		w = admin(t, http.MethodPost, "/admin/fields", map[string]any{"entityName": "st_patients", "name": "fax", "label": "Fax", "fieldType": "text"})
+		var env struct{ Code string }
+		_ = json.Unmarshal(w.Body.Bytes(), &env)
+		if !strings.HasPrefix(got, "FIELD_ALREADY_EXISTS") || env.Code != "FIELD_ALREADY_EXISTS" {
+			t.Fatalf("the deleted field's name: propose %q, Apply %d %s; want FIELD_ALREADY_EXISTS from both", got, w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("an applied then reverted picklist value no longer vouches for a dependent value", func(t *testing.T) {
+		values := func(v ...string) map[string]any { return map[string]any{"options": map[string]any{"values": v}} }
+		mustPropose(t, "propose_edit_field", map[string]any{"entity": "st_patients", "field": "status", "changes": values("new", "done", "lost")})
+		edit := last(t)
+		field := "/admin/fields/" + edit.item.EditField.FieldID
+		if w := admin(t, http.MethodPut, field, values("new", "done", "lost")); w.Code != http.StatusOK {
+			t.Fatalf("apply: %d %s", w.Code, w.Body.String())
+		}
+		settle(t, edit)
+		reason := func(name string) map[string]any {
+			return map[string]any{"entity": "st_patients", "name": name, "label": "Why", "fieldType": "picklist",
+				"options": map[string]any{"values": []string{"price", "other"}, "controllingField": "status", "dependentValues": map[string]any{"lost": []string{"price"}}}}
+		}
+		mustPropose(t, "propose_field", reason("lost_why")) // applied: the live value counts
+		if w := admin(t, http.MethodPut, field, values("new", "done")); w.Code != http.StatusOK {
+			t.Fatalf("revert: %d %s", w.Code, w.Body.String())
+		}
+		if got := propose(t, "propose_field", reason("lost_cause")); !strings.HasPrefix(got, "FIELD_DEPENDENT_PICKLIST_INVALID") {
+			t.Fatalf("a dependent value keyed on a reverted status value: %q; want FIELD_DEPENDENT_PICKLIST_INVALID", got)
+		}
+	})
+
+	t.Run("an applied parent card's @ref still resolves for its child; a discarded one does not", func(t *testing.T) {
+		for _, ent := range []map[string]any{
+			{"name": "st_companies", "label": "Companies", "fields": []map[string]any{{"name": "title", "label": "Title", "fieldType": "text", "isRequired": true}}},
+			{"name": "st_contacts", "label": "Contacts", "fields": []map[string]any{{"name": "full_name", "label": "Name", "fieldType": "text"},
+				{"name": "company", "label": "Company", "fieldType": "relation", "options": map[string]any{"relatedEntity": "st_companies"}}}},
+		} {
+			if w := admin(t, http.MethodPost, "/admin/entities", ent); w.Code != http.StatusCreated {
+				t.Fatalf("create %s: %d %s", ent["name"], w.Code, w.Body.String())
+			}
+		}
+		bulk := func(t *testing.T, c card) int {
+			t.Helper()
+			w := admin(t, http.MethodPost, "/"+c.item.Records.Entity+"/bulk?mode=partial", map[string]any{"records": c.item.Records.Rows})
+			var res struct {
+				Data struct{ Created int } `json:"data"`
+			}
+			if w.Code >= 300 || json.Unmarshal(w.Body.Bytes(), &res) != nil {
+				t.Fatalf("apply %s: %d %s", c.item.Records.Entity, w.Code, w.Body.String())
+			}
+			return res.Data.Created
+		}
+		mustPropose(t, "propose_records", map[string]any{"entity": "st_companies", "rows": []map[string]any{{"title": "Acme", "$ref": "acme"}}})
+		parent := last(t)
+		if n := bulk(t, parent); n != 1 {
+			t.Fatalf("parent created %d; want 1", n)
+		}
+		settle(t, parent)
+		mustPropose(t, "propose_records", map[string]any{"entity": "st_contacts", "rows": []map[string]any{{"full_name": "Bình", "company": "@acme"}}})
+		if n := bulk(t, last(t)); n != 1 {
+			t.Fatalf("child created %d at Apply; want 1 (the ref resolves there too)", n)
+		}
+
+		mustPropose(t, "propose_records", map[string]any{"entity": "st_companies", "rows": []map[string]any{{"title": "Beta", "$ref": "beta"}}})
+		settle(t, last(t)) // discarded: never applied, nothing registered
+		if got := propose(t, "propose_records", map[string]any{"entity": "st_contacts", "rows": []map[string]any{{"full_name": "Chi", "company": "@beta"}}}); !strings.HasPrefix(got, "RECORD_REF_UNRESOLVED") {
+			t.Fatalf("a child of a discarded parent card: %q; want RECORD_REF_UNRESOLVED", got)
+		}
 	})
 
 	t.Run("a discarded picklist edit no longer vouches for a dependent value", func(t *testing.T) {
