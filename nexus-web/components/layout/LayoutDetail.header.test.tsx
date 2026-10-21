@@ -225,7 +225,7 @@ describe("LayoutDetail — SLDS record home", () => {
   });
 
   // DAILY-QUEUE #334: edit=own on a colleague's record — the entity-level grant says yes (mayEdit) but the
-  // server says canEdit:false for THIS record, so no Sửa / Chia sẻ (the save would 404) and a reason is shown.
+  // server says canEdit:false for THIS record, so no Sửa / Chia sẻ (the save would be refused 403, #18) and a reason is shown.
   it("a record outside my edit scope (canEdit:false) opens without Sửa / Chia sẻ / Đổi chủ and says why", async () => {
     vi.mocked(getRecord).mockResolvedValue({ ...RECORD, canEdit: false });
     renderDetail();

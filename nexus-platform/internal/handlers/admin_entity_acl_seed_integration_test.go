@@ -205,8 +205,9 @@ func TestACLSeed_AppScopedEntity_StaffSeesOwnRows_NoRoleGets403(t *testing.T) {
 	}
 
 	// 5b) owner-scope PHẢI áp cả trên GHI, không chỉ ĐỌC: staff PUT bản ghi CỦA MÌNH -> 200; staff
-	// PUT bản ghi CỦA ADMIN (ngoài phạm vi owner) -> KHÔNG được 200 — record-level ACL "không tiết
-	// lộ tồn tại" (api-conventions.md) nên kỳ vọng 404, không phải 403 kèm thông tin.
+	// PUT bản ghi CỦA ADMIN (ngoài phạm vi sửa owner) -> KHÔNG được 200. Staff XEM được bản ghi đó
+	// (view:all, bước 6), nên lời từ chối là 403 FORBIDDEN (#18) — 404 chỉ dành cho bản ghi người gọi
+	// không xem được (không tiết lộ tồn tại).
 	puw := doAuthed(t, r, http.MethodPut, "/api/v1/"+entityName+"/"+staffRec.Data.ID, staffTok, map[string]any{"title": "đã sửa"}, nil)
 	if puw.Code != http.StatusOK {
 		t.Fatalf("staff PUT bản ghi của mình: %d %s; want 200", puw.Code, puw.Body.String())
@@ -215,8 +216,8 @@ func TestACLSeed_AppScopedEntity_StaffSeesOwnRows_NoRoleGets403(t *testing.T) {
 	if pow.Code == http.StatusOK {
 		t.Fatalf("staff PUT bản ghi của admin trả 200 — owner-scope KHÔNG áp trên ghi (lỗ bảo mật): %s", pow.Body.String())
 	}
-	if pow.Code != http.StatusNotFound {
-		t.Fatalf("staff PUT bản ghi của admin: %d %s; want 404 (không tiết lộ tồn tại)", pow.Code, pow.Body.String())
+	if pow.Code != http.StatusForbidden {
+		t.Fatalf("staff PUT bản ghi của admin: %d %s; want 403 (xem được nhưng không sửa được, #18)", pow.Code, pow.Body.String())
 	}
 
 	// 6) Staff GET list -> 200, thấy CẢ HAI bản ghi.
@@ -228,7 +229,7 @@ func TestACLSeed_AppScopedEntity_StaffSeesOwnRows_NoRoleGets403(t *testing.T) {
 	// tức `go test ./...` thường không hề thấy. Đây là bằng chứng phải chạy CẢ suite integration khi
 	// đụng ngữ nghĩa quyền, không chỉ package mình vừa sửa.
 	//
-	// Vế "chỉ sửa của mình" KHÔNG bị nới: bước 5 ngay trên vẫn đòi PUT lên bản ghi của admin trả 404.
+	// Vế "chỉ sửa của mình" KHÔNG bị nới: bước 5 ngay trên vẫn đòi PUT lên bản ghi của admin bị từ chối (403).
 	lw := doAuthed(t, r, http.MethodGet, "/api/v1/"+entityName, staffTok, nil, nil)
 	if lw.Code != http.StatusOK {
 		t.Fatalf("staff list: %d %s", lw.Code, lw.Body.String())
