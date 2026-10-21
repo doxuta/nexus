@@ -26,7 +26,7 @@ import { ScopedNotification } from "@/components/slds/ScopedNotification";
 import { buttonClassName } from "@/components/slds/Button";
 
 const PREVIEW_LIMIT = 20;
-// Mirrors LayoutBuilder's seedListState default (which fields make a reasonable list when none
+// Mirrors the list screen's NOT_A_COLUMN (lib/screenEditorModel: which fields make a reasonable list when none
 // is declared) — a safety net only: the engine always serves a generated default list layout for
 // a live entity, so `layout.views.list.columns` normally already carries this exact choice.
 const LIST_EXCLUDED_TYPES = new Set(["relation", "polymorphic_relation", "rich_text", "multi_select"]);
