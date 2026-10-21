@@ -207,3 +207,34 @@ func TestRecordShare_UpdateOfSharedRecordIsReadOnlyBeforeFieldChecks(t *testing.
 		})
 	}
 }
+
+// TestResolveWriteTarget_View pins the note-create gate (#43, specs/060 #349): the record is read under
+// the re-resolved VIEW grant with shares OFF — even though the view-pinned route hands a scope that
+// carries the share flag — and a miss is the shared write-miss answer: RECORD_SHARED_READ_ONLY for a
+// share-only viewer, the bare 404 for a stranger.
+func TestResolveWriteTarget_View(t *testing.T) {
+	arriving := RecordScope{UserID: "u-b", AccessLevel: "owner", RoleID: "r1", IncludeShares: true}
+	for _, tc := range []struct {
+		name   string
+		shared bool
+		want   error
+	}{
+		{"share-only viewer → 403 RECORD_SHARED_READ_ONLY", true, ErrRecordSharedReadOnly},
+		{"stranger → 404", false, ErrRecordNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &shareOnlyStore{shared: tc.shared}
+			authz := &levelAuthz{level: "owner"}
+			_, err := shareTestService(store).WithACLAuthorizer(authz).ResolveWriteTarget(context.Background(), arriving, "tenant-1", "widgets", "rec-1", "view")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v; want %v", err, tc.want)
+			}
+			if len(authz.actions) == 0 || authz.actions[0] != "view" {
+				t.Fatalf("ACL asked %v; want the view grant first", authz.actions)
+			}
+			if len(store.readScopes) == 0 || store.readScopes[0].IncludeShares {
+				t.Fatalf("the write gate's read = %+v; want shares OFF", store.readScopes)
+			}
+		})
+	}
+}

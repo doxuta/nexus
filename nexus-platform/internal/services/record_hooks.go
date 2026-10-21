@@ -97,7 +97,7 @@ func (s *RecordService) checkBeforeUpdate(ctx context.Context, scope RecordScope
 		if readErr == nil || errors.Is(readErr, ErrRecordNotFound) {
 			// A record the caller reaches only through a share is 403, not 404 (#314) — the same
 			// answer the entity gives with no rule at all.
-			return nil, s.sharedReadOnlyOr(ctx, scope, tenantID, entity, id, ErrRecordNotFound)
+			return nil, s.ExplainWriteMiss(ctx, scope, tenantID, entity, id, ErrRecordNotFound)
 		}
 		return nil, fmt.Errorf("services.RecordService.checkBeforeUpdate: %w: %w", ErrRecordHooksUnavailable, readErr)
 	}
@@ -114,7 +114,7 @@ func (s *RecordService) checkBeforeUpdate(ctx context.Context, scope RecordScope
 // lookup and nothing else: the read stays best-effort exactly as before. With rules, an unreadable
 // record is refused (503), never deleted unjudged. A record the read did not find is left to
 // SoftDeleteRecord, which looks under the SAME row scope: it answers 404 — or 403 for a record the
-// caller only sees through a share (sharedReadOnlyOr) — exactly as it did before the feature.
+// caller only sees through a share (ExplainWriteMiss) — exactly as it did before the feature.
 func (s *RecordService) checkBeforeDelete(ctx context.Context, scope RecordScope, tenantID, entity, id string, stored map[string]any, found bool, readErr error) error {
 	rules, err := s.loadBeforeRules(ctx, tenantID, entity, workflow.TriggerBeforeDelete, workflow.SaveOpDelete)
 	if err != nil || len(rules) == 0 {
