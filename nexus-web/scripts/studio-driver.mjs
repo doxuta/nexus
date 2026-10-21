@@ -14,15 +14,20 @@ export function findChrome() {
     .find((p) => fs.existsSync(p)) ?? null;
 }
 
-// Labels come from the UI's own catalog by key (the UI renders t(key) in its default locale, Vietnamese), so a reworded
-// label cannot silently break a selector.
-const VI = Object.fromEntries(
-  [...fs.readFileSync(new URL("../lib/i18n/vi.ts", import.meta.url), "utf8").matchAll(/^\s*"([\w.]+)":\s*("(?:[^"\\]|\\.)*"),?\s*$/gm)]
+// Labels come from the UI's own catalog by key, so a reworded label cannot silently break a selector. NEXUS_LANG=en
+// drives the English UI (lib/i18n/en.ts, falling back to vi.ts key by key as the UI's t() does); anything else drives
+// the Vietnamese default. signIn() saves that language as each persona's preference: headless Chrome lists only
+// English, which the UI would otherwise follow (getLocale in lib/i18n).
+export const LANG = process.env.NEXUS_LANG === "en" ? "en" : "vi";
+const catalog = (name) => Object.fromEntries(
+  [...fs.readFileSync(new URL(`../lib/i18n/${name}.ts`, import.meta.url), "utf8").matchAll(/^\s*"([\w.]+)":\s*("(?:[^"\\]|\\.)*"),?\s*$/gm)]
     .map(([, k, v]) => [k, JSON.parse(v)]),
 );
+const VI = catalog("vi");
+const LABELS = LANG === "en" ? { ...VI, ...catalog("en") } : VI;
 export function t(key, vars = {}) {
   if (!(key in VI)) throw new Error(`lib/i18n/vi.ts has no key ${key}`);
-  return VI[key].replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
+  return LABELS[key].replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m));
 }
 export const attr = (v) => JSON.stringify(v); // a CSS attribute value
 
@@ -62,13 +67,14 @@ export function connect({ base, tenant, browser }) {
     page.setDefaultTimeout(30_000);
     errors.set(page, []);
     page.on("pageerror", (err) => errors.get(page).push(String(err.message ?? err)));
-    await page.evaluateOnNewDocument((s, tenant) => {
+    await page.evaluateOnNewDocument((s, tenant, lang) => {
+      localStorage.setItem("nexus.prefs.v1", JSON.stringify({ locale: lang }));
       localStorage.setItem("nexus_remember", "1");
       localStorage.setItem("nexus_token", s.accessToken);
       if (s.refreshToken) localStorage.setItem("nexus_refresh", s.refreshToken);
       if (s.user) localStorage.setItem("nexus_user", JSON.stringify(s.user));
       localStorage.setItem("nexus_tenant", tenant);
-    }, s, tenant);
+    }, s, tenant, LANG);
     return page;
   }
 

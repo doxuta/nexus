@@ -9,6 +9,7 @@ import { Toaster } from "@/components/slds/Toast";
 import { SessionExpiredGuard } from "@/components/ui/SessionExpiredGuard";
 import { VersionWarningToast } from "@/components/shell/VersionWarningToast";
 import { BrandingBoot } from "@/components/brand/BrandingBoot";
+import { HtmlLang } from "@/lib/i18n";
 
 // Inter (OFL-1.1): full Vietnamese subset AND a `tnum` feature, so numeric grid cells align
 // (RESEARCH-2026-09 §6.2 — Be Vietnam Pro has no tnum, which made every tabular-nums a no-op).
@@ -43,6 +44,7 @@ export default function RootLayout({
         {/* AO-THUONG-HIEU: cached branding applied on mount (accent vars/favicon/title), then
             refreshed from the public endpoint — root-mounted so /login is branded too. */}
         <BrandingBoot />
+        <HtmlLang />
         <NexusQueryProvider>
           <AuthProvider>
             {/* Active-app lens (Phase 2) — ROOT-mounted so the app Sidebar switcher AND the

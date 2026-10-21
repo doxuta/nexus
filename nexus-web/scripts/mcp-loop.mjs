@@ -108,6 +108,7 @@ async function signIn(persona) {
   errors.set(page, []);
   page.on("pageerror", (err) => errors.get(page).push(String(err.message ?? err)));
   await page.evaluateOnNewDocument((s, tenant) => {
+    localStorage.setItem("nexus.prefs.v1", JSON.stringify({ locale: "vi" })); // headless Chrome lists only English (lib/i18n getLocale)
     localStorage.setItem("nexus_remember", "1");
     localStorage.setItem("nexus_token", s.accessToken);
     if (s.refreshToken) localStorage.setItem("nexus_refresh", s.refreshToken);

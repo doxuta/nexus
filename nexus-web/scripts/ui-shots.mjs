@@ -119,6 +119,9 @@ try {
       const ctx = await browser.createBrowserContext();
       const page = await ctx.newPage();
       page.on("pageerror", (err) => errors.push(String(err.message ?? err)));
+      // NEXUS_LANG=en shoots the English UI; the default is Vietnamese (headless Chrome lists only English, which the
+      // UI would otherwise follow: getLocale in lib/i18n).
+      await page.evaluateOnNewDocument((locale) => localStorage.setItem("nexus.prefs.v1", JSON.stringify({ locale })), process.env.NEXUS_LANG === "en" ? "en" : "vi");
       if (!persona) {
         // Anonymous routes: demo mode (NEXT_PUBLIC_DEMO_MODE) would auto-login and bounce /login to
         // /home. The logout opt-out flag lib/api.ts honours keeps the page anonymous.

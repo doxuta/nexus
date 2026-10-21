@@ -9,7 +9,8 @@
 //
 // One screenshot per step into <out-dir>; the first failing step prints its name and the script exits 1.
 // NEXUS_PORT as for docker compose (default 8080), or NEXUS_URL · CHROME_PATH (default: the macOS app, else
-// google-chrome / chromium / chromium-browser on PATH). DEMO_LOOP_RECORD=<dir> (opt-in, never set in CI) also keeps
+// google-chrome / chromium / chromium-browser on PATH). NEXUS_LANG=en runs the loop in the English UI (studio-driver.mjs);
+// the default is Vietnamese. DEMO_LOOP_RECORD=<dir> (opt-in, never set in CI) also keeps
 // every frame each page paints, as <builder|rep>-<epoch ms>.jpg, and the steps' times in <dir>/timeline.json: the
 // raw material of the README's GIF (docs/media). The loop itself runs the same with or without it.
 //
