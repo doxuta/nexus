@@ -104,12 +104,84 @@ type ChatChoice struct {
 	FinishReason string      `json:"finish_reason"`
 }
 
-// Usage carries the token counts the ledger records (spec §5). Field names match the
-// OpenAI-compatible gateway.
+// Usage carries the token counts the ledger records (spec §5). PromptTokens is ALL the input the model
+// read, cache reads and cache writes included; CacheReadTokens and CacheWriteTokens say how much of it
+// was read from and written to the provider's prompt cache. Decoding normalizes every shape the gateway
+// can send (UnmarshalJSON); encoding writes this one back, which decodes to the same values.
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	CacheReadTokens  int `json:"cache_read_input_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_creation_input_tokens,omitempty"`
+}
+
+// UnmarshalJSON reads the usage shapes a gateway can send and counts every input token once:
+//
+//   - OpenAI: prompt_tokens INCLUDES prompt_tokens_details.cached_tokens (cache reads). A router that
+//     reports cache writes there too (prompt_tokens_details.cache_creation_tokens) includes them as well.
+//   - Anthropic: input_tokens EXCLUDES cache_read_input_tokens and cache_creation_input_tokens, so the
+//     input is their sum, and output_tokens is the completion.
+//   - Both at once (an OpenAI-compatible proxy in front of Anthropic): prompt_tokens is taken to include
+//     the cache fields, as OpenAI's does, unless it is smaller than them and so cannot.
+//
+// A field that is absent counts 0. A gateway that sends no cache figures leaves both at 0 and its
+// prompt_tokens a floor: 9router's non-streaming answer for a Claude model (the dev gateway) drops
+// them. ponytail: DeepSeek's prompt_cache_hit_tokens and other vendor
+// spellings are not read; add one here when a gateway sends it.
+func (u *Usage) UnmarshalJSON(b []byte) error {
+	var w struct {
+		PromptTokens     *int `json:"prompt_tokens"`
+		CompletionTokens int  `json:"completion_tokens"`
+		InputTokens      int  `json:"input_tokens"`
+		OutputTokens     int  `json:"output_tokens"`
+		CacheRead        int  `json:"cache_read_input_tokens"`
+		CacheWrite       int  `json:"cache_creation_input_tokens"`
+		Details          struct {
+			Cached        int `json:"cached_tokens"`
+			CacheCreation int `json:"cache_creation_tokens"`
+		} `json:"prompt_tokens_details"`
+	}
+	// Lenient: accounting never fails a model answer. encoding/json skips a field of the wrong type (1.5, a
+	// string, [] for an object), reports it as *UnmarshalTypeError and still fills every other field, so the
+	// skipped one reads 0, not reported. b is a value the outer decoder already parsed, so a type error is
+	// the only error expected here; any other is still returned.
+	if err := json.Unmarshal(b, &w); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) {
+			return fmt.Errorf("ai.Usage.UnmarshalJSON: %w", err)
+		}
+	}
+	read, write := w.CacheRead, w.CacheWrite
+	if read == 0 {
+		read = w.Details.Cached
+	}
+	if write == 0 {
+		write = w.Details.CacheCreation
+	}
+	prompt := w.InputTokens + read + write // Anthropic: input_tokens is the uncached remainder
+	if w.PromptTokens != nil {
+		prompt = *w.PromptTokens
+		if prompt < read+write {
+			prompt += read + write // a prompt_tokens smaller than its cached part reports the remainder only
+		}
+	}
+	completion := w.CompletionTokens
+	if completion == 0 {
+		completion = w.OutputTokens
+	}
+	*u = Usage{PromptTokens: prompt, CompletionTokens: completion, TotalTokens: prompt + completion,
+		CacheReadTokens: read, CacheWriteTokens: write}
+	return nil
+}
+
+// add sums one call's usage into a turn's.
+func (u *Usage) add(v Usage) {
+	u.PromptTokens += v.PromptTokens
+	u.CompletionTokens += v.CompletionTokens
+	u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	u.CacheReadTokens += v.CacheReadTokens
+	u.CacheWriteTokens += v.CacheWriteTokens
 }
 
 // Gateway is the HTTP client for the OpenAI-compatible LLM gateway. baseURL is the localhost-pinned

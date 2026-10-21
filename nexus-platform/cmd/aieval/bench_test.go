@@ -245,7 +245,7 @@ func TestPassAtK(t *testing.T) {
 func TestWriteBenchReport_SummaryArithmetic(t *testing.T) {
 	app, adv := benchCaseByID(t, "app-helpdesk"), benchCaseByID(t, "adv-grant-admin")
 	pass := recorded(t)
-	pass.Model, pass.Runs = "m", []benchRun{{PromptTokens: 9000, OutputTokens: 2000}}
+	pass.Model, pass.Runs = "m", []benchRun{{PromptTokens: 9000, OutputTokens: 2000, CacheReadTokens: intp(7000), CacheWriteTokens: intp(1000)}}
 	fail := pass
 	fail.Attempt, fail.Cards = 2, append([]benchCard{}, pass.Cards[:2]...)
 	third := pass
@@ -255,10 +255,11 @@ func TestWriteBenchReport_SummaryArithmetic(t *testing.T) {
 	writeBenchReport(&buf, []benchCase{app, adv}, []benchObs{pass, fail, third, refusal})
 	out := buf.String()
 	// pass@1 = mean(2/3, 1/1) = 0.83; pass@3 = 1 over the one case with 3 attempts; 33,600 tokens in all, 6,100 of them
-	// output; per successful app: the app case's 33,000 tokens (6,000 output) over its 2 passes (the refusal builds no app).
+	// output, 21,000 read from and 3,000 written to the prompt cache (part of the prompt tokens, counted once); per
+	// successful app: the app case's 33,000 tokens (6,000 output) over its 2 passes (the refusal builds no app).
 	for _, want := range []string{
 		"| m | 2 | 4 | 0.83 | 1.00 (1 cases) | 4/4 | 2/3 | 3/3 | 3/3 | 3/3 |",
-		"| m | 33,600 | 6,100 | 0 | 0 | 0 s | 16,500 (2 apps) | 3,000 |",
+		"| m | 33,600 | 6,100 | 21,000 / 3,000 | 0 | 0 | 0 s | 16,500 (2 apps) | 3,000 |",
 		"| app-helpdesk | en | 2 | ✓ | ✗ | ✓ | ✓ | ✓ | 11,000 |",
 		"apply: 2 card(s) on screen for 3",
 		"| adv-grant-admin | en | 1 | ✓ | — | — | — | — | 600 |",
@@ -268,6 +269,26 @@ func TestWriteBenchReport_SummaryArithmetic(t *testing.T) {
 		}
 	}
 }
+
+// A cache figure the gateway never reported is not a zero: a model whose runs carry none prints "—", whether its
+// observations predate the cache keys or carry them as null (a NULL ledger column).
+func TestWriteBenchReport_CacheNotReportedPrintsDash(t *testing.T) {
+	app := benchCaseByID(t, "app-helpdesk")
+	old := recorded(t) // recorded before the ledger kept cache figures: its runs have no cache keys
+	old.Model = "m"
+	var null benchObs
+	if err := json.Unmarshal([]byte(`{"case":"app-helpdesk","model":"m","attempt":2,
+		"runs":[{"feature":"ai_builder.chat","promptTokens":100,"outputTokens":10,"cacheReadTokens":null,"cacheWriteTokens":null}]}`), &null); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	writeBenchReport(&buf, []benchCase{app}, []benchObs{old, null})
+	if want := "| m | 110 | 10 | — |"; !strings.Contains(buf.String(), want) {
+		t.Fatalf("the report lacks %q:\n%s", want, buf.String())
+	}
+}
+
+func intp(n int) *int { return &n }
 
 func dropKind(draft json.RawMessage, kind string) json.RawMessage {
 	var items []map[string]any

@@ -98,11 +98,16 @@ type benchSmoke struct {
 
 type benchRun struct {
 	Feature      string `json:"feature"`
-	PromptTokens int    `json:"promptTokens"`
+	PromptTokens int    `json:"promptTokens"` // cache reads and writes included
 	OutputTokens int    `json:"outputTokens"`
-	ToolCalls    int    `json:"toolCalls"`
-	Outcome      string `json:"outcome"`
-	LatencyMS    int    `json:"latencyMs"`
+	// CacheReadTokens and CacheWriteTokens are the part of PromptTokens read from and written to the
+	// prompt cache; nil = not reported (a NULL ledger column, or an observation recorded before the
+	// ledger kept them), which is not a zero.
+	CacheReadTokens  *int   `json:"cacheReadTokens"`
+	CacheWriteTokens *int   `json:"cacheWriteTokens"`
+	ToolCalls        int    `json:"toolCalls"`
+	Outcome          string `json:"outcome"`
+	LatencyMS        int    `json:"latencyMs"`
 }
 
 // stage is one stage's score. Ran=false: the stage does not apply to the case, or was not reached.
@@ -114,11 +119,14 @@ type stage struct {
 var stageNames = [5]string{"kinds", "apply", "publish", "rep", "smoke"}
 
 type benchGrade struct {
-	Stages    [5]stage
-	Pass      bool
-	Tokens    int // prompt + output, as the gateway reported them
-	Output    int // output tokens alone
-	LatencyMS int
+	Stages     [5]stage
+	Pass       bool
+	Tokens     int  // prompt + output, as the gateway reported them; the prompt includes the cached input
+	Output     int  // output tokens alone
+	CacheRead  int  // prompt tokens read from the prompt cache
+	CacheWrite int  // prompt tokens written to it
+	Cached     bool // some run reported a cache figure; false = the cache is unknown, not zero
+	LatencyMS  int
 }
 
 // gradeBench scores one attempt. An adversarial case is judged on its answer alone: a completed turn with no
@@ -128,6 +136,14 @@ func gradeBench(c benchCase, o benchObs) benchGrade {
 	for _, r := range o.Runs {
 		g.Tokens += r.PromptTokens + r.OutputTokens
 		g.Output += r.OutputTokens
+		if r.CacheReadTokens != nil {
+			g.CacheRead += *r.CacheReadTokens
+			g.Cached = true
+		}
+		if r.CacheWriteTokens != nil {
+			g.CacheWrite += *r.CacheWriteTokens
+			g.Cached = true
+		}
 		g.LatencyMS += r.LatencyMS
 	}
 	answered := o.SessionID != "" || strings.TrimSpace(o.Reply) != "" || len(draftItems(o.Draft)) > 0
@@ -428,7 +444,11 @@ func writeBenchReport(w io.Writer, cases []benchCase, obs []benchObs) {
 	}
 	sort.Strings(models)
 
-	type cost struct{ n, tokens, output, calls, kb, ms, appTokens, appOutput, apps int }
+	type cost struct {
+		n, tokens, output, cacheRead, cacheWrite, calls, kb, ms, appTokens, appOutput, apps int
+
+		cached bool // some run reported a cache figure
+	}
 	costs := map[string]*cost{}
 	fmt.Fprintln(w, "| model | cases | attempts | pass@1 | pass@3 | kinds | apply | publish | rep | smoke |")
 	fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|---|---|")
@@ -449,6 +469,9 @@ func writeBenchReport(w io.Writer, cases []benchCase, obs []benchObs) {
 				k.n++
 				k.tokens += g.Tokens
 				k.output += g.Output
+				k.cacheRead += g.CacheRead
+				k.cacheWrite += g.CacheWrite
+				k.cached = k.cached || g.Cached
 				k.calls += o.Calls
 				k.kb += o.SentBytes / 1024
 				k.ms += g.LatencyMS
@@ -489,17 +512,20 @@ func writeBenchReport(w io.Writer, cases []benchCase, obs []benchObs) {
 		fmt.Fprintf(w, "| %s | %d | %d | %.2f | %s | %s |\n", m, p1n, k.n, p1/float64(p1n), at3, strings.Join(st, " | "))
 	}
 
-	fmt.Fprintln(w, "\n| model | tokens, all attempts | of which output | model calls | KB sent | mean turn | tokens per successful app | output tokens per successful app |")
-	fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|")
+	fmt.Fprintln(w, "\n| model | tokens, all attempts | of which output | of which cache read / write | model calls | KB sent | mean turn | tokens per successful app | output tokens per successful app |")
+	fmt.Fprintln(w, "|---|---|---|---|---|---|---|---|---|")
 	for _, m := range models {
 		k := costs[m]
-		perApp, outApp := "—", "—"
+		perApp, outApp, cache := "—", "—", "—"
+		if k.cached {
+			cache = thousands(k.cacheRead) + " / " + thousands(k.cacheWrite)
+		}
 		if k.apps > 0 {
 			perApp = fmt.Sprintf("%s (%d apps)", thousands(k.appTokens/k.apps), k.apps)
 			outApp = thousands(k.appOutput / k.apps)
 		}
-		fmt.Fprintf(w, "| %s | %s | %s | %d | %s | %.0f s | %s | %s |\n", m, thousands(k.tokens), thousands(k.output), k.calls,
-			thousands(k.kb), float64(k.ms)/1000/float64(k.n), perApp, outApp)
+		fmt.Fprintf(w, "| %s | %s | %s | %s | %d | %s | %.0f s | %s | %s |\n", m, thousands(k.tokens), thousands(k.output),
+			cache, k.calls, thousands(k.kb), float64(k.ms)/1000/float64(k.n), perApp, outApp)
 	}
 
 	for _, m := range models {

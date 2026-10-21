@@ -18,6 +18,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -136,4 +137,61 @@ func TestSQLRunRepository_Record_ErrorOutcome_NullTokens(t *testing.T) {
 	if tokens != nil {
 		t.Fatalf("prompt_tokens = %v; want NULL when the turn captured no token data", *tokens)
 	}
+}
+
+// The cache figures land in their own columns (migration 000099), NULL when none were reported, and
+// the daily budget counts the cached input once: prompt_tokens already holds it (issue #30 item 8).
+func TestSQLRunRepository_Record_PersistsCacheTokens(t *testing.T) {
+	db := connectAI(t)
+	const tenant = "aiaiaiai-9999-9999-9999-aiaiaiaiai03"
+	db.Exec(`DELETE FROM sys_ai_runs WHERE tenant_id = ?`, tenant)
+	t.Cleanup(func() { db.Exec(`DELETE FROM sys_ai_runs WHERE tenant_id = ?`, tenant) })
+
+	repo := NewSQLRunRepository(db)
+	base := Run{TenantID: tenant, UserID: "user0000-0000-0000-0000-000000000003", Feature: FeatureBuilderChat,
+		Model: "claude-opus-5-5", PromptHash: sha256Hex("cache"), Outcome: outcomeOK}
+	withCache, noCache := base, base
+	withCache.ID, withCache.PromptTokens, withCache.OutputTokens = "airun000-0000-0000-0000-000000000003", 34915, 1076
+	withCache.CacheReadTokens, withCache.CacheWriteTokens = 33906, 1007
+	noCache.ID, noCache.PromptTokens, noCache.OutputTokens = "airun000-0000-0000-0000-000000000004", 2002, 1064
+	for _, r := range []Run{withCache, noCache} {
+		if err := repo.Record(context.Background(), r); err != nil {
+			t.Fatalf("Record(%s): %v", r.ID, err)
+		}
+	}
+
+	for id, want := range map[string][2]*int{
+		withCache.ID: {ptr(33906), ptr(1007)},
+		noCache.ID:   {nil, nil},
+	} {
+		var got struct {
+			Read  *int `db:"cache_read_tokens"`
+			Write *int `db:"cache_write_tokens"`
+		}
+		if err := db.Get(&got, `SELECT cache_read_tokens, cache_write_tokens FROM sys_ai_runs WHERE id = ?`, id); err != nil {
+			t.Fatalf("read back %s: %v", id, err)
+		}
+		if !sameIntPtr(got.Read, want[0]) || !sameIntPtr(got.Write, want[1]) {
+			t.Fatalf("%s: cache read/write = %v/%v; want %v/%v", id, deref(got.Read), deref(got.Write), deref(want[0]), deref(want[1]))
+		}
+	}
+
+	used, err := repo.TokensSince(context.Background(), tenant, startOfUTCDay(time.Now()))
+	if err != nil {
+		t.Fatalf("TokensSince: %v", err)
+	}
+	if want := int64(34915 + 1076 + 2002 + 1064); used != want {
+		t.Fatalf("TokensSince = %d; want %d: every input token once, the cached ones included", used, want)
+	}
+}
+
+func ptr(n int) *int { return &n }
+
+func sameIntPtr(a, b *int) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
+
+func deref(p *int) any {
+	if p == nil {
+		return "NULL"
+	}
+	return *p
 }

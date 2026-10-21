@@ -87,7 +87,8 @@ type AIConfig struct {
 	// MaxConcurrent is the maximum number of in-flight chat turns per tenant.
 	MaxConcurrent int
 	// DailyTokenBudget caps SUM(prompt_tokens+output_tokens) per tenant per UTC day, read from
-	// the sys_ai_runs ledger. 0 disables the budget check (EXPLICIT opt-out — the default is
+	// the sys_ai_runs ledger. prompt_tokens includes the prompt-cache reads and writes at full weight
+	// (issue #30 item 8), so size it for the whole input a turn sends, not the uncached remainder. 0 disables the budget check (EXPLICIT opt-out — the default is
 	// always bounded; a negative or unparsable env value degrades to the default, not to 0).
 	DailyTokenBudget int64
 

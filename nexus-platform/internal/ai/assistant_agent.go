@@ -70,24 +70,25 @@ func (a *AssistantAgent) Ask(ctx context.Context, recordScope services.RecordSco
 	promptHash := sha256Hex(lastUserMessage(messages))
 
 	var (
-		promptTokens int
-		outputTokens int
-		toolCalls    int
-		outcome      = outcomeGatewayError // pessimistic default until a terminal path sets it
+		usage     Usage // summed over every billed call of the turn
+		toolCalls int
+		outcome   = outcomeGatewayError // pessimistic default until a terminal path sets it
 	)
 	defer func() {
 		a.recordRun(ctx, Run{
-			ID:           runID,
-			TenantID:     tenantID,
-			UserID:       recordScope.UserID,
-			Feature:      FeatureAssistantAsk,
-			Model:        model,
-			PromptHash:   promptHash,
-			PromptTokens: promptTokens,
-			OutputTokens: outputTokens,
-			ToolCalls:    toolCalls,
-			Outcome:      outcome,
-			LatencyMS:    int(time.Since(start).Milliseconds()),
+			ID:               runID,
+			TenantID:         tenantID,
+			UserID:           recordScope.UserID,
+			Feature:          FeatureAssistantAsk,
+			Model:            model,
+			PromptHash:       promptHash,
+			PromptTokens:     usage.PromptTokens,
+			OutputTokens:     usage.CompletionTokens,
+			CacheReadTokens:  usage.CacheReadTokens,
+			CacheWriteTokens: usage.CacheWriteTokens,
+			ToolCalls:        toolCalls,
+			Outcome:          outcome,
+			LatencyMS:        int(time.Since(start).Milliseconds()),
 		})
 	}()
 
@@ -120,8 +121,7 @@ func (a *AssistantAgent) Ask(ctx context.Context, recordScope services.RecordSco
 		}
 
 		// Sum real token spend across every billed call of the turn (same accounting as Chat).
-		promptTokens += resp.Usage.PromptTokens
-		outputTokens += resp.Usage.CompletionTokens
+		usage.add(resp.Usage)
 
 		if len(resp.Choices) == 0 {
 			outcome = outcomeGatewayError
@@ -135,7 +135,7 @@ func (a *AssistantAgent) Ask(ctx context.Context, recordScope services.RecordSco
 			return Result{
 				Reply:   msg.Content,
 				Draft:   exec.draft,
-				Usage:   Usage{PromptTokens: promptTokens, CompletionTokens: outputTokens, TotalTokens: promptTokens + outputTokens},
+				Usage:   usage,
 				RunID:   runID,
 				Outcome: outcome,
 			}, nil
@@ -159,7 +159,7 @@ func (a *AssistantAgent) Ask(ctx context.Context, recordScope services.RecordSco
 	outcome = outcomeMaxSteps
 	return Result{
 		Draft:   exec.draft,
-		Usage:   Usage{PromptTokens: promptTokens, CompletionTokens: outputTokens, TotalTokens: promptTokens + outputTokens},
+		Usage:   usage,
 		RunID:   runID,
 		Outcome: outcome,
 	}, nil

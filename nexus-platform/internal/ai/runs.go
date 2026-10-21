@@ -21,11 +21,15 @@ type Run struct {
 	Feature      string
 	Model        string
 	PromptHash   string
-	PromptTokens int
+	PromptTokens int // all input, cache reads and writes included
 	OutputTokens int
-	ToolCalls    int
-	Outcome      string
-	LatencyMS    int
+	// CacheReadTokens and CacheWriteTokens are the part of PromptTokens read from and written to the
+	// provider's prompt cache (stored NULL when 0, like the other token columns).
+	CacheReadTokens  int
+	CacheWriteTokens int
+	ToolCalls        int
+	Outcome          string
+	LatencyMS        int
 }
 
 // RunRecorder persists an AI-run ledger row. Declared consumer-side so the agent depends on the
@@ -55,11 +59,12 @@ func NewSQLRunRepository(db *sqlx.DB) *SQLRunRepository {
 func (r *SQLRunRepository) Record(ctx context.Context, run Run) error {
 	const q = `INSERT INTO sys_ai_runs
 		(id, tenant_id, user_id, feature, model, prompt_hash,
-		 prompt_tokens, output_tokens, tool_calls, outcome, latency_ms, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 prompt_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls, outcome, latency_ms, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if _, err := r.db.ExecContext(ctx, q,
 		run.ID, run.TenantID, run.UserID, run.Feature, run.Model, run.PromptHash,
-		nullableInt(run.PromptTokens), nullableInt(run.OutputTokens), run.ToolCalls,
+		nullableInt(run.PromptTokens), nullableInt(run.OutputTokens),
+		nullableInt(run.CacheReadTokens), nullableInt(run.CacheWriteTokens), run.ToolCalls,
 		run.Outcome, nullableInt(run.LatencyMS), r.now().UTC(),
 	); err != nil {
 		return fmt.Errorf("ai.SQLRunRepository.Record: %w", err)
@@ -68,7 +73,10 @@ func (r *SQLRunRepository) Record(ctx context.Context, run Run) error {
 }
 
 // TokensSince returns the tenant's total token spend (prompt + output) recorded in sys_ai_runs at
-// or after `since` — the M4 daily-budget reader (spec §12), called on every gated chat turn
+// or after `since` — the M4 daily-budget reader. prompt_tokens already holds the cached input (cache
+// reads and writes, issue #30 item 8), so the budget counts every input token once, at full weight,
+// as an OpenAI-shape gateway always reported it; cache_read_tokens/cache_write_tokens are a breakdown
+// of it and are not added again (spec §12), called on every gated chat turn
 // (BudgetGuard.Acquire step 3). Both token columns are nullable (a turn that never reached the
 // gateway stores NULL), so each is COALESCE'd to 0 before summing; the outer COALESCE keeps a
 // no-rows day at 0 instead of SQL NULL. created_at is always written UTC by Record (r.now().UTC()),
@@ -104,7 +112,7 @@ func (r *SQLRunRepository) TokensSinceByUser(ctx context.Context, tenantID, user
 }
 
 // nullableInt maps a 0 to SQL NULL and any other value to itself, so the nullable INT columns
-// (prompt_tokens/output_tokens/latency_ms) store NULL rather than a fabricated 0 when the metric
+// (prompt_tokens/output_tokens/cache_*_tokens/latency_ms) store NULL rather than a fabricated 0 when the metric
 // was never captured.
 func nullableInt(n int) sql.NullInt64 {
 	if n == 0 {

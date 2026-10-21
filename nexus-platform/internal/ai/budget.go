@@ -7,7 +7,8 @@
 //	(2) inflight — at most MaxConcurrent turns running at once (a turn can hold a gateway
 //	               connection for MaxSteps × Timeout — parallel spam is the expensive vector);
 //	(3) budget   — SUM(prompt+output tokens) per UTC day from the sys_ai_runs ledger must be
-//	               under DailyTokenBudget (0 = explicit opt-out).
+//	               under DailyTokenBudget (0 = explicit opt-out); the prompt side includes the
+//	               cached input, cache reads and writes counted once at full weight.
 //
 // AcquireUser (the every-user ⌘K assistant's entry point) adds a fourth, per-USER gate: (3b) the
 // caller's OWN UTC-day token sum must be under AssistantUserDailySharePct% of DailyTokenBudget, so
