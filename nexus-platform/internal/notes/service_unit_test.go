@@ -38,6 +38,27 @@ type fakeGuard struct {
 	gotScope     services.RecordScope
 	gotEntity    string
 	gotRecordID  string
+	gotAction    string // the grant ResolveWriteTarget was asked to re-resolve
+}
+
+// ResolveWriteTarget fakes services.RecordService.ResolveWriteTarget: the record under the caller's own
+// grant with shares OFF, a miss answered by the shared decision — RECORD_SHARED_READ_ONLY for a record
+// reachable only through a share.
+func (g *fakeGuard) ResolveWriteTarget(_ context.Context, scope services.RecordScope, _, entityName, recordID, action string) (string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.calls++
+	g.gotScope, g.gotEntity, g.gotRecordID, g.gotAction = scope, entityName, recordID, action
+	if g.resolveErr != nil {
+		return "", g.resolveErr
+	}
+	if g.onlyViaShare {
+		return "", services.ErrRecordSharedReadOnly
+	}
+	if g.entity != "" {
+		return g.entity, nil
+	}
+	return entityName, nil
 }
 
 func (g *fakeGuard) ResolveNoteTarget(_ context.Context, scope services.RecordScope, _, entityName, recordID string) (string, services.RecordScope, error) {
@@ -268,15 +289,17 @@ func TestService_Create(t *testing.T) {
 		}
 	})
 
-	t.Run("hồ sơ của mình (view, có cờ chia sẻ trong scope) → ghi được, guard thấy scope KHÔNG cờ chia sẻ", func(t *testing.T) {
+	t.Run("hồ sơ của mình (view, có cờ chia sẻ trong scope) → ghi được qua cổng GHI của quyền view", func(t *testing.T) {
 		guard := &fakeGuard{entity: "crm_accounts"} // visible without any share
 		own := services.RecordScope{UserID: "user-1", RoleID: "role-1", AccessLevel: "owner", IncludeShares: true}
 		svc, rec := newTestService(t, guard, nil)
 		if _, err := svc.Create(context.Background(), own, "tenant-a", "crm_accounts", "rec-1", "ghi chú trên phiếu của tôi"); err != nil {
 			t.Fatalf("Create on own record: %v", err)
 		}
-		if guard.gotScope.IncludeShares {
-			t.Error("the write-path guard call carried IncludeShares; a share must never authorize a note")
+		// The write gate (services.RecordService.ResolveWriteTarget) reads with shares OFF; the floor it
+		// re-resolves is "view" (specs/060 #349).
+		if guard.gotAction != "view" {
+			t.Errorf("write gate asked for %q; want the view floor", guard.gotAction)
 		}
 		mustContainSQL(t, rec.lastExec(t).query, "INSERT INTO sys_record_notes")
 	})

@@ -28,6 +28,9 @@ const MaxBodyRunes = 5000
 // hard-depend on the concrete record service beyond this one call — mirrors files.RecordGuard.
 type RecordGuard interface {
 	ResolveNoteTarget(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID string) (canonicalEntity string, viewScope services.RecordScope, err error)
+	// ResolveWriteTarget is the write-side gate of Create: the record under the caller's re-resolved
+	// grant for action, shares OFF, a miss answered like every record write (#43).
+	ResolveWriteTarget(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID, action string) (canonicalEntity string, err error)
 }
 
 // EntityAuthorizer resolves whether a role may perform an action on an entity. Satisfied by
@@ -75,39 +78,18 @@ func (s *Service) List(ctx context.Context, scope services.RecordScope, tenantID
 	return rows, total, nil
 }
 
-// sharedReadOnlyOr maps a miss on the write-side gate: the POST route resolves a scope WITHOUT the
-// share flag, so a caller who reaches the record only through a manual share (specs/051) used to get
-// the same 404 as a stranger. If the very same gate WITH the flag reaches the record they are a
-// share-only viewer — they already read it, so 403 RECORD_SHARED_READ_ONLY leaks nothing (the PUT/
-// DELETE answer, DAILY-QUEUE #225). Any other error, and a miss that survives the flag, is returned
-// unchanged.
-func (s *Service) sharedReadOnlyOr(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID string, err error) error {
-	if !errors.Is(err, services.ErrRecordNotFound) || scope.IsAdmin {
-		return err
-	}
-	probe := scope
-	probe.IncludeShares = true
-	if _, _, perr := s.guard.ResolveNoteTarget(ctx, probe, tenantID, entityName, recordID); perr == nil {
-		return services.ErrRecordSharedReadOnly
-	}
-	return err
-}
-
 // Create authorizes against the parent record (RecordGuard — same "ACL trước business logic"
 // order as everywhere else), then validates the body, then inserts. created_by is ALWAYS
 // scope.UserID — the verified authenticated caller — never a client-supplied value (mirrors the
 // A5 invariant "created_by là user THẬT").
 func (s *Service) Create(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID, body string) (*Note, error) {
-	// specs/060 (#349): the route floor is "view", so the scope arrives with IncludeShares set. A
-	// manual share is read-only (specs/051) and a note is a write on the record's conversation, so
-	// the record must be reachable WITHOUT the share. Strict first (the common path costs one read);
-	// only a miss pays a second probe, to tell "shared read-only" (403, like Delete) from "not
-	// visible at all" (404, no existence oracle).
-	strict := scope
-	strict.IncludeShares = false
-	canonical, _, err := s.guard.ResolveNoteTarget(ctx, strict, tenantID, entityName, recordID)
+	// specs/060 (#349): the floor is "view" — whoever can read the record can comment on it. A manual
+	// share is read-only (specs/051) and a note is a write on the record's conversation, so the record
+	// must be reachable under the view grant WITHOUT the share. A miss gets the shared write-miss answer
+	// (#43): 403 RECORD_SHARED_READ_ONLY for a share-only viewer, the 404 of a missing record otherwise.
+	canonical, err := s.guard.ResolveWriteTarget(ctx, scope, tenantID, entityName, recordID, "view")
 	if err != nil {
-		return nil, s.sharedReadOnlyOr(ctx, scope, tenantID, entityName, recordID, err)
+		return nil, err
 	}
 	trimmed := strings.TrimSpace(body)
 	if trimmed == "" {
