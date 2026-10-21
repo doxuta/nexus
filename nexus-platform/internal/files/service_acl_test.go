@@ -27,6 +27,12 @@ import (
 type scopeSpyGuard struct {
 	resolveScopes []services.RecordScope
 	setRefsScopes []services.RecordScope
+	explainScopes []services.RecordScope
+}
+
+func (g *scopeSpyGuard) ExplainWriteMiss(_ context.Context, sc services.RecordScope, _, _, _ string, err error) error {
+	g.explainScopes = append(g.explainScopes, sc)
+	return err
 }
 
 func (g *scopeSpyGuard) ResolveFileField(_ context.Context, sc services.RecordScope, _, entityName, _, _ string) (string, error) {
@@ -219,5 +225,35 @@ func TestUpload_ResolvesTheEditGrantNotTheRouteCreateGrant(t *testing.T) {
 	}
 	if got := guard.resolveScopes[0].AccessLevel; got != "owner" {
 		t.Errorf("record probe ran at %q; want \"owner\" — the EDIT grant's level, not the route's create grant", got)
+	}
+}
+
+// TestUpload_ExplainsAMissUnderTheResolvedEditScope — #43: an upload whose record probe missed is
+// explained (403 for a record the caller can read, else the 404) under the SAME scope the probe ran
+// at: the re-resolved edit grant, never the route's wider one and never with the share clause, so the
+// decision can read no wider than a PUT on that record would.
+func TestUpload_ExplainsAMissUnderTheResolvedEditScope(t *testing.T) {
+	guard := &scopeSpyGuard{}
+	// view but no edit grant: the edit scope resolves to none, so the record probe misses.
+	acl := &fakeACL{allow: map[string]string{"orders|create": "all", "orders|view": "all"}}
+	s, _ := newTestService(t, nil, &fakeBackend{}, Limits{MimeOK: allowAllMime})
+	s.guard = guard
+	s.WithACL(acl)
+
+	_, err := s.Upload(context.Background(), services.RecordScope{
+		UserID: "u1", RoleID: "r1", AccessLevel: "all", IncludeShares: true,
+	}, UploadInput{
+		TenantID: "tenant-a", EntityName: "orders", RecordID: "rec-1", FieldName: "avatar",
+		Mime: "image/png", Size: 3, Filename: "a.png", Content: strings.NewReader("png"),
+	})
+	if !errors.Is(err, services.ErrRecordNotFound) {
+		t.Fatalf("err = %v; want the decision's answer (this fake passes the miss through)", err)
+	}
+	if len(guard.explainScopes) != 1 {
+		t.Fatalf("decision asked %d times; want once", len(guard.explainScopes))
+	}
+	got := guard.explainScopes[0]
+	if got != guard.resolveScopes[0] || got.AccessLevel != string(dynrepo.AccessNone) || got.IncludeShares || got.UserID != "u1" || got.RoleID != "r1" {
+		t.Fatalf("decision scope = %+v; want the probe's own resolved edit scope %+v", got, guard.resolveScopes[0])
 	}
 }

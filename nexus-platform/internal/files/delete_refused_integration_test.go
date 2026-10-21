@@ -34,6 +34,10 @@ func (g *lockGuard) ResolveFileField(_ context.Context, _ services.RecordScope, 
 	return entity, nil
 }
 
+func (g *lockGuard) ExplainWriteMiss(_ context.Context, _ services.RecordScope, _, _, _ string, err error) error {
+	return err
+}
+
 func (g *lockGuard) SetFileRefs(context.Context, services.RecordScope, string, string, string, string, []map[string]any) error {
 	if g.locked {
 		return &services.ValidationError{Code: "RECORD_HOOK_VETO", Msg: "Hồ sơ đã khoá, không sửa được"}

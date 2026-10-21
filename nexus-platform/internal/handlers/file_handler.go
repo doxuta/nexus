@@ -187,6 +187,8 @@ func (h *FileHandler) respondFileError(c *gin.Context, err error, op string) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Entity không tồn tại", "code": "ENTITY_NOT_FOUND"})
 	case errors.Is(err, services.ErrRecordNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "Bản ghi không tồn tại", "code": "RECORD_NOT_FOUND"})
+	case errors.Is(err, services.ErrRecordEditForbidden): // #43: readable, outside the edit scope
+		respondRecordEditForbidden(c)
 	case errors.Is(err, files.ErrFileNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "File không tồn tại", "code": "FILE_NOT_FOUND"})
 	case errors.Is(err, files.ErrFileTooLarge):

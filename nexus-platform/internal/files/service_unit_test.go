@@ -27,6 +27,7 @@ type fakeGuard struct {
 	mu           sync.Mutex
 	entity       string // canonical entity name to return (defaults to the input name)
 	resolveErr   error
+	explainErr   error // what the shared write-miss decision answers (nil = the miss unchanged)
 	setRefsErr   error
 	onSetRefs    func() // runs inside SetFileRefs, before it answers (a test cancels the request here)
 	resolveCalls int
@@ -45,6 +46,13 @@ func (g *fakeGuard) ResolveFileField(_ context.Context, _ services.RecordScope, 
 		return g.entity, nil
 	}
 	return entityName, nil
+}
+
+func (g *fakeGuard) ExplainWriteMiss(_ context.Context, _ services.RecordScope, _, _, _ string, err error) error {
+	if g.explainErr != nil {
+		return g.explainErr
+	}
+	return err
 }
 
 func (g *fakeGuard) SetFileRefs(_ context.Context, _ services.RecordScope, _, _, _, _ string, refs []map[string]any) error {
@@ -231,6 +239,7 @@ func TestFileService_Upload_PolicyRejections(t *testing.T) {
 	tests := []struct {
 		name        string
 		guardErr    error
+		explainErr  error
 		limits      Limits
 		mutate      func(*UploadInput)
 		content     string
@@ -244,6 +253,15 @@ func TestFileService_Upload_PolicyRejections(t *testing.T) {
 			limits:   Limits{MaxBytes: 1024, MimeOK: allowAllMime},
 			content:  "hello",
 			wantErr:  services.ErrRecordNotFound,
+		},
+		{
+			// #43: the record is outside the edit scope but readable — the shared decision's 403 wins.
+			name:       "guard trượt, người gọi vẫn xem được hồ sơ → 403 của quyết định chung, không đụng storage",
+			guardErr:   services.ErrRecordNotFound,
+			explainErr: services.ErrRecordEditForbidden,
+			limits:     Limits{MaxBytes: 1024, MimeOK: allowAllMime},
+			content:    "hello",
+			wantErr:    services.ErrRecordEditForbidden,
 		},
 		{
 			name:    "mime ngoài whitelist → ErrMimeNotAllowed trước khi ghi byte nào",
@@ -279,7 +297,7 @@ func TestFileService_Upload_PolicyRejections(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			guard := &fakeGuard{entity: "orders", resolveErr: tt.guardErr}
+			guard := &fakeGuard{entity: "orders", resolveErr: tt.guardErr, explainErr: tt.explainErr}
 			backend := &fakeBackend{}
 			svc, _ := newTestService(t, guard, backend, tt.limits)
 			in := pngUpload(tt.content)
