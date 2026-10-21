@@ -950,7 +950,7 @@ func (h *DynamicRecordHandler) respondError(c *gin.Context, err error, op string
 
 // respondRecordEditForbidden answers services.ErrRecordEditForbidden (#18: the record is viewable but
 // outside the write scope) byte-identical with middleware.RequireACL's 403, on every route that can
-// raise it (record writes, share management).
+// raise it (record writes, share management, file upload, approval submit, relation link/unlink — #43).
 func respondRecordEditForbidden(c *gin.Context) {
 	c.JSON(http.StatusForbidden, gin.H{"error": services.ErrRecordEditForbidden.(*services.ValidationError).Msg, "code": "FORBIDDEN"})
 }
