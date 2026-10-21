@@ -1310,8 +1310,15 @@ func writeSeats(ctx context.Context, tx *sqlx.Tx, tenantID, instanceID string, w
 		// The open seats are read without a lock and closed one by one by primary key (#37): an
 		// UPDATE that finds them by instance scans a range of idx_bt_visit or idx_bt_inbox and takes
 		// next-key locks on the seats of neighbouring instances, whose writers could then wait on
-		// this one while it waits on them. Every seat writer holds the instance row first, so what
-		// is read here is still true when it is written.
+		// this one while it waits on them.
+		//
+		// The read is a consistent read, so it sees every open seat only under this invariant:
+		// every seat writer takes the instance row FOR UPDATE first, AND its transaction makes its
+		// first consistent read (which fixes the REPEATABLE READ snapshot) only after that lock.
+		// A consistent read added before the lock fixes the snapshot early: a seat that another
+		// writer of this instance inserts and commits in between (a delegation's new seat) is then
+		// missing here and stays open forever (TestParallel_DelegateThenFinishingVote_NoOrphanSeat).
+		// DecideTaskTx would still lose on its seq check; a vote matches no seq and writes past it.
 		var open []struct {
 			ID     string `db:"id"`
 			NodeID string `db:"node_id"`

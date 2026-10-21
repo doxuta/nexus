@@ -290,30 +290,50 @@ func (q *heldQueue) EnqueueExec(context.Context, sqlx.ExecerContext, jobs.Job) (
 	return "", nil
 }
 
-// holdNeighbour has the real repository approve instance id as actor (a single-seat decision or a
-// vote) and holds that transaction open right after its seat writes, where it parks the next step's
-// breach job. Every lock it then keeps on sys_bpm_tasks must be a record lock: a next-key or gap
-// lock on a seat index is what a neighbouring instance's seat write waits on (#35, #37).
-// release lets the write commit and returns its error; call it once.
-func (s *bpmStack) holdNeighbour(t *testing.T, tenant, id string, actor bpm.Actor) (release func() error) {
+// holdWrite runs op through a fresh real repository whose breach-job queue is a heldQueue: op's
+// transaction is held open right after its seat writes, where it parks the next step's breach job.
+// release lets it commit and returns op's error; call it once.
+func (s *bpmStack) holdWrite(t *testing.T, op func(repo *bpm.SQLRepository) error) (release func() error) {
 	t.Helper()
 	q := &heldQueue{held: make(chan struct{}), release: make(chan struct{})}
 	repo := bpm.NewSQLRepository(s.sdb, nil).WithSLADueJobs(q)
 	errs := make(chan error, 1)
-	go func() {
-		_, err := bpm.NewDecider(repo, repo, repo, nil, nil).Decide(context.Background(), tenant, id, bpm.DecisionApprove, "", actor)
-		errs <- err
-	}()
+	go func() { errs <- op(repo) }()
 	var let sync.Once
 	release = func() error { let.Do(func() { close(q.release) }); return <-errs }
 	t.Cleanup(func() { let.Do(func() { close(q.release) }) })
 	select {
 	case <-q.held:
 	case err := <-errs:
-		t.Fatalf("the neighbour's write ended before it parked its breach job: %v", err)
+		t.Fatalf("the held write ended before it parked its breach job: %v", err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("the neighbour's write never reached its breach job")
+		t.Fatal("the held write never reached its breach job")
 	}
+	return release
+}
+
+// waitLockWait blocks until a transaction waits on a lock of table: the second writer is queued
+// behind the held one, so the interleaving is forced, not hoped for.
+func (s *bpmStack) waitLockWait(t *testing.T, table string) {
+	t.Helper()
+	waitUntil(t, "a writer to queue on "+table, func() bool {
+		var n int
+		err := s.sdb.Get(&n, `SELECT COUNT(*) FROM performance_schema.data_locks
+			WHERE object_schema = DATABASE() AND object_name = ? AND lock_status = 'WAITING'`, table)
+		return err == nil && n > 0
+	})
+}
+
+// holdNeighbour has the real repository approve instance id as actor (a single-seat decision or a
+// vote) and holds it open after its seat writes (holdWrite). Every lock it then keeps on
+// sys_bpm_tasks must be a record lock: a next-key or gap lock on a seat index is what a
+// neighbouring instance's seat write waits on (#35, #37).
+func (s *bpmStack) holdNeighbour(t *testing.T, tenant, id string, actor bpm.Actor) (release func() error) {
+	t.Helper()
+	release = s.holdWrite(t, func(repo *bpm.SQLRepository) error {
+		_, err := bpm.NewDecider(repo, repo, repo, nil, nil).Decide(context.Background(), tenant, id, bpm.DecisionApprove, "", actor)
+		return err
+	})
 	var locks []string
 	if err := s.sdb.Select(&locks, `SELECT CONCAT(index_name, ' ', lock_mode, ' ', COALESCE(lock_data, ''))
 		FROM performance_schema.data_locks
@@ -385,20 +405,63 @@ func TestDecide_BesideHeldNeighbour_NoRangeLock(t *testing.T) {
 		return err
 	})
 
-	for _, x := range []string{id, next} {
-		inst, err := st.repo.GetInstance(ctx, tenant, x)
-		if err != nil {
-			t.Fatalf("GetInstance: %v", err)
-		}
-		if inst.Status != bpm.StatusPending || inst.CurrentStep != 1 || inst.CurrentApproverID != seatAp2 || approvedEntries(inst) != 1 {
-			t.Fatalf("%s: %s@%d approver %s, %d approvals; want pending on step 1 (%s), one approval",
-				x, inst.Status, inst.CurrentStep, inst.CurrentApproverID, approvedEntries(inst), seatAp2)
-		}
-		assertMirror(t, st.sdb, tenant, x, "beside the held neighbour")
-		if got := instState(t, st.sdb, tenant, x).Seq; got != 2 {
-			t.Fatalf("%s: seq = %d; want 2 (the arm + the one decision)", x, got)
+	wantSingleSeatAdvancedOnce(t, st, tenant, id, "the approval beside the held neighbour")
+	wantSingleSeatAdvancedOnce(t, st, tenant, next, "the held neighbour")
+}
+
+// wantSingleSeatAdvancedOnce: the armTwoStep instance id moved to step 1 (seatAp2) exactly once —
+// one approval, seq 2, the seat mirror consistent, and its s1 seat closed once, as approved.
+func wantSingleSeatAdvancedOnce(t *testing.T, st *bpmStack, tenant, id, label string) {
+	t.Helper()
+	inst, err := st.repo.GetInstance(context.Background(), tenant, id)
+	if err != nil {
+		t.Fatalf("%s: GetInstance: %v", label, err)
+	}
+	if inst.Status != bpm.StatusPending || inst.CurrentStep != 1 || inst.CurrentApproverID != seatAp2 || approvedEntries(inst) != 1 {
+		t.Fatalf("%s: %s@%d approver %s, %d approvals; want pending on step 1 (%s), one approval",
+			label, inst.Status, inst.CurrentStep, inst.CurrentApproverID, approvedEntries(inst), seatAp2)
+	}
+	if got := instState(t, st.sdb, tenant, id).Seq; got != 2 {
+		t.Fatalf("%s: seq = %d; want 2 (the arm + the one decision)", label, got)
+	}
+	assertMirror(t, st.sdb, tenant, id, label)
+	var s1 []seatRow
+	for _, s := range seatsOf(t, st.sdb, tenant, id) {
+		if s.NodeID == "s1" {
+			s1 = append(s1, s)
 		}
 	}
+	if len(s1) != 1 || s1[0].Status != "done" || str(s1[0].Outcome) != "approved" {
+		t.Fatalf("%s: s1 seats %+v; want exactly one, done/approved", label, s1)
+	}
+}
+
+// TestDecide_SameSeatTwoTabs_SecondQueued_409 (#37 review, forced): tab A's approval is held open
+// after its seat writes; tab B, which read the step before A committed, must queue on the instance
+// row, then lose with the conflict. The seat is closed once, by A.
+func TestDecide_SameSeatTwoTabs_SecondQueued_409(t *testing.T) {
+	st := bpmWire(t)
+	ctx := context.Background()
+	tenant, id := armTwoStep(t, st, "seatqueued")
+
+	release := st.holdWrite(t, func(repo *bpm.SQLRepository) error {
+		_, err := bpm.NewDecider(repo, repo, repo, nil, nil).Decide(ctx, tenant, id, bpm.DecisionApprove, "A", bpm.Actor{UserID: seatAp1})
+		return err
+	})
+	tabB := make(chan error, 1)
+	go func() {
+		_, err := st.approval.DecideAt(ctx, tenant, id, bpm.DecisionApprove, "B", bpm.Actor{UserID: seatAp1}, nil)
+		tabB <- err
+	}()
+	st.waitLockWait(t, "sys_approval_instances")
+	if err := release(); err != nil {
+		t.Fatalf("tab A: %v", err)
+	}
+	var ve *ValidationError
+	if err := <-tabB; !errors.As(err, &ve) || ve.Code != "APPROVAL_CONFLICT" {
+		t.Fatalf("tab B: %v; want APPROVAL_CONFLICT", err)
+	}
+	wantSingleSeatAdvancedOnce(t, st, tenant, id, "two tabs, the second queued")
 }
 
 // TestDecide_LateSecondClickOnNextStep_SecondGets409 (review finding on T068, MySQL): the same

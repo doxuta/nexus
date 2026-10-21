@@ -393,6 +393,65 @@ func TestParallel_FinishingVoteBesideHeldNeighbour_NoRangeLock(t *testing.T) {
 	wantAdvancedOnce(t, f, "the held neighbour", next)
 }
 
+// TestParallel_DelegateThenFinishingVote_NoOrphanSeat (#37 review, forced): writeSeats reads the open
+// seats WITHOUT a lock, so it must still see a seat a concurrent writer of the same instance
+// inserted. On an `any` council, seatAp2 hands their seat to seatAp4, a new open s1 seat, and that
+// delegation is held open after its seat writes; seatAp3's vote, which finishes the step and
+// supersedes every sibling, queues on the instance row meanwhile. The handed-on seat must be
+// superseded, not left open forever. Red when a consistent read precedes the instance lock (the
+// snapshot is then fixed before the delegation commits).
+func TestParallel_DelegateThenFinishingVote_NoOrphanSeat(t *testing.T) {
+	f := armCouncils(t, "pardeleg", "any", 1, users(seatAp1, seatAp2, seatAp3)...)
+	ctx := context.Background()
+	id := f.insts[0]
+
+	release := f.st.holdWrite(t, func(repo *bpm.SQLRepository) error {
+		_, err := bpm.NewRequester(repo, repo, repo, repo, nil).Delegate(ctx, f.tenant, id, seatAp4, "nghỉ phép", bpm.Actor{UserID: seatAp2})
+		return err
+	})
+	vote := make(chan error, 1)
+	go func() {
+		_, err := f.decide(t, id, bpm.DecisionApprove, "", bpm.Actor{UserID: seatAp3})
+		vote <- err
+	}()
+	f.st.waitLockWait(t, "sys_approval_instances")
+	if err := release(); err != nil {
+		t.Fatalf("delegate: %v", err)
+	}
+	if err := <-vote; err != nil {
+		t.Fatalf("finishing vote: %v", err)
+	}
+
+	inst, err := f.st.repo.GetInstance(ctx, f.tenant, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.Status != bpm.StatusPending || inst.CurrentStep != 1 || inst.CurrentApproverID != seatAp4 {
+		t.Fatalf("%s@%d approver %s; want pending on step 1 (%s)", inst.Status, inst.CurrentStep, inst.CurrentApproverID, seatAp4)
+	}
+	delegations := 0
+	for _, h := range inst.History {
+		if h.Action == bpm.HistoryDelegated {
+			delegations++
+		}
+	}
+	if delegations != 1 {
+		t.Fatalf("delegations in history = %d; want 1", delegations)
+	}
+	if open, approved, _, superseded := seatsByNode(t, f, id, "s1"); open != 0 || approved != 1 || superseded != 2 {
+		for _, s := range seatsOf(t, f.st.sdb, f.tenant, id) {
+			t.Logf("seat %s node=%s %s/%s status=%s outcome=%s", s.ID, s.NodeID, s.AssigneeType, s.AssigneeID, s.Status, str(s.Outcome))
+		}
+		t.Fatalf("s1 seats open=%d approved=%d superseded=%d; want 0/1/2 (seatAp1 and the handed-on seat superseded)", open, approved, superseded)
+	}
+	if open, _, _, _ := seatsByNode(t, f, id, "s2"); open != 1 {
+		t.Fatalf("s2 open seats = %d; want 1", open)
+	}
+	if got := instState(t, f.st.sdb, f.tenant, id).Seq; got != 3 {
+		t.Fatalf("seq = %d; want 3 (the arm + the delegation + the vote)", got)
+	}
+}
+
 // TestParallel_SameActorTwoSeats409_MySQL: the person named AND holding the seated role votes once.
 func TestParallel_SameActorTwoSeats409_MySQL(t *testing.T) {
 	f := armCouncils(t, "parsame", "all", 1,
