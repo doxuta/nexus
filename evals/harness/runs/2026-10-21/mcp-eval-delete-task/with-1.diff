@@ -1,0 +1,140 @@
+--- a/evals/mcp/README.md
++++ b/evals/mcp/README.md
+@@ -1,6 +1,6 @@
+ # MCP tool-use eval
+ 
+-Five plain requests to an outside agent connected over MCP (issue #3). Each must end in the right proposal, and only
++Six plain requests to an outside agent connected over MCP (issue #3). Each must end in the right proposal, and only
+ a proposal. Code graders read the proposals that the task's Studio conversation holds (their kinds and names). No
+ model grades another one. This is a smoke-sized eval; the real bench is #4.
+ 
+@@ -31,6 +31,10 @@
+ | 3 | Link CRM products and CRM contracts many-to-many, so a contract can list the products it covers. | a `relationship` between `crm_products` and `crm_contracts` |
+ | 4 | Propose a list layout for CRM leads that shows the name, the company and the status, newest first. | a `layout` of `crm_leads`, view `list` |
+ | 5 | Who can edit contacts? | no proposal at all |
++| 6 | Remove the Warehouses table. | a `delete_entity` of a table named `*warehouse*` |
++
++Task 6 needs a table named `*warehouse*` in the workspace, and the demo has none: task 1 only proposes one. Apply
++task 1's proposal in the Studio before running task 6, or the agent finds nothing to delete and the task fails.
+ 
+ ## Results (2026-10-17)
+ 
+@@ -46,8 +50,9 @@
+ | 4 | `layout:crm_leads/list` | list_entities, list_fields, get_layout, propose_layout | 208,661 (201,623) | 772 | pass |
+ | 5 | none | list_entities, list_roles, explain_access | 155,599 (149,237) | 636 | pass |
+ 
+-**5/5 pass.** The rule that a session must reach the server came after this run; the five recorded sessions all
+-connected and called `nexus_` tools, so the result stands (checked on the transcripts, not re-run). Notes:
++**5/5 pass** (task 6 came later and has not run yet). The rule that a session must reach the server came after this
++run; the five recorded sessions all connected and called `nexus_` tools, so the result stands (checked on the
++transcripts, not re-run). Notes:
+ 
+ - **Task 3 was rewritten.** Its first version asked to link contacts and opportunities. The CRM pack already
+   links those two N-N. The agent read the relationships, proposed nothing, and said why. That first run is the
+--- a/evals/mcp/run.py
++++ b/evals/mcp/run.py
+@@ -37,7 +37,10 @@
+ 
+ 
+ def label(d):
+-    """kind:name of one proposal, for the report (a layout is named by its table and view)."""
++    """kind:name of one proposal, for the report (a layout is named by its table and view, a deletion by the table it
++    deletes). A delete_entity proposal keeps its payload under deleteEntity."""
++    if d["kind"] == "delete_entity":
++        return f'delete_entity:{(d.get("deleteEntity") or {}).get("entity", "")}'
+     p = d.get(d["kind"]) or {}
+     return f'{d["kind"]}:{p.get("entity", "")}/{p.get("viewType", "")}' if d["kind"] == "layout" else f'{d["kind"]}:{p.get("name", "")}'
+ 
+@@ -60,6 +63,10 @@
+     (5, "Who can edit contacts?",
+      lambda ds: len(ds) == 0,
+      "no proposal at all (a read-only question)"),
++    # Needs a *warehouse* table in the workspace (task 1 applies nothing): with none, there is nothing to delete.
++    (6, "Remove the Warehouses table.",
++     lambda ds: has(ds, "delete_entity", lambda d: "warehouse" in d["deleteEntity"]["entity"]),
++     "a delete_entity proposal for a table named *warehouse*"),
+ ]
+ 
+ 
+--- a/evals/mcp/test_run.py
++++ b/evals/mcp/test_run.py
+@@ -14,6 +14,7 @@
+ 
+ HERE = os.path.dirname(os.path.abspath(__file__))
+ TASK_5 = next(t for t in run.TASKS if t[0] == 5)
++TASK_6 = next(t for t in run.TASKS if t[0] == 6)
+ 
+ 
+ def events(name):
+@@ -51,5 +52,31 @@
+         self.assertFalse(run.passes(TASK_5, events("recorded-task-5.jsonl"), [], 1))
+ 
+ 
++def delete_entity(name):
++    """A delete_entity proposal as the Studio conversation holds it (ai.DraftItem)."""
++    return {"kind": "delete_entity", "deleteEntity": {"entity": name, "label": name.title(), "fieldCount": 3}}
++
++
++class Task6(unittest.TestCase):
++    grade = staticmethod(TASK_6[2])
++
++    def test_a_proposal_to_delete_the_warehouses_table_passes(self):
++        self.assertTrue(self.grade([delete_entity("warehouses")]))
++        self.assertTrue(self.grade([{"kind": "entity", "entity": {"name": "suppliers", "fields": []}}, delete_entity("crm_warehouse")]))
++
++    def test_anything_else_fails(self):
++        for name, ds in [
++            ("no proposal", []),
++            ("another table deleted", [delete_entity("crm_contacts")]),
++            ("a warehouses table created", [{"kind": "entity", "entity": {"name": "warehouses", "fields": []}}]),
++            ("a field of warehouses deleted", [{"kind": "delete_field", "deleteField": {"entity": "warehouses", "field": "capacity"}}]),
++        ]:
++            with self.subTest(name):
++                self.assertFalse(self.grade(ds))
++
++    def test_the_report_names_the_deleted_table(self):
++        self.assertEqual(run.label(delete_entity("warehouses")), "delete_entity:warehouses")
++
++
+ if __name__ == "__main__":
+     unittest.main()
+--- /dev/null
++++ b/gates.txt
+@@ -0,0 +1,37 @@
++# Checks for MCP eval task 6 (2026-10-21)
++
++## Unit tests
++$ python3 evals/mcp/test_run.py -v
++test_a_failed_session_fails (__main__.PassRule) ... ok
++test_a_session_that_never_reached_the_server_fails_every_task (__main__.PassRule) ... ok
++test_either_signal_is_enough (__main__.PassRule) ... ok
++test_the_recorded_task_5_passes (__main__.PassRule) ... ok
++test_a_proposal_to_delete_the_warehouses_table_passes (__main__.Task6) ... ok
++test_anything_else_fails (__main__.Task6) ... ok
++test_the_report_names_the_deleted_table (__main__.Task6) ... ok
++
++----------------------------------------------------------------------
++Ran 7 tests in 0.007s
++
++OK
++exit 0
++
++## The tests go red when the change is broken (scratch copy in $TMPDIR, repo untouched)
++$ # break 1: task 6 grader ignores the kind (any proposal naming *warehouse* passes)
++1
++----------------------------------------------------------------------
++Ran 7 tests in 0.001s
++
++FAILED (failures=2)
++$ # break 2: label() without the delete_entity case (the pre-change label)
++FAIL: test_the_report_names_the_deleted_table (__main__.Task6)
++AssertionError: 'delete_entity:' != 'delete_entity:warehouses'
++Ran 7 tests in 0.001s
++FAILED (failures=1)
++$ # restored: the real run.py
++
++OK
++
++## Not run
++- python3 evals/mcp/run.py --only 6: needs a running demo and a logged-in Claude Code; this sandbox has no network or database.
++- Go gates: no Go file changed.

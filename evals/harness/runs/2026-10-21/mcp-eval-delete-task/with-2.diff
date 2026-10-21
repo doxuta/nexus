@@ -1,0 +1,137 @@
+--- a/evals/mcp/README.md
++++ b/evals/mcp/README.md
+@@ -1,6 +1,6 @@
+ # MCP tool-use eval
+ 
+-Five plain requests to an outside agent connected over MCP (issue #3). Each must end in the right proposal, and only
++Six plain requests to an outside agent connected over MCP (issue #3). Each must end in the right proposal, and only
+ a proposal. Code graders read the proposals that the task's Studio conversation holds (their kinds and names). No
+ model grades another one. This is a smoke-sized eval; the real bench is #4.
+ 
+@@ -31,6 +31,11 @@
+ | 3 | Link CRM products and CRM contracts many-to-many, so a contract can list the products it covers. | a `relationship` between `crm_products` and `crm_contracts` |
+ | 4 | Propose a list layout for CRM leads that shows the name, the company and the status, newest first. | a `layout` of `crm_leads`, view `list` |
+ | 5 | Who can edit contacts? | no proposal at all |
++| 6 | Remove the Warehouses table. | a `delete_entity` of a table named `*warehouse*` |
++
++Task 6 needs a Warehouses table in the workspace. The demo has none, and task 1 only proposes one, so apply that
++proposal before running task 6. Otherwise the agent has nothing to delete. The report names a deletion by its table
++(`delete_entity:warehouses`).
+ 
+ ## Results (2026-10-17)
+ 
+--- a/evals/mcp/run.py
++++ b/evals/mcp/run.py
+@@ -37,7 +37,9 @@
+ 
+ 
+ def label(d):
+-    """kind:name of one proposal, for the report (a layout is named by its table and view)."""
++    """kind:name of one proposal, for the report (a layout is named by its table and view, a deletion by its table)."""
++    if d["kind"] == "delete_entity":
++        return f'delete_entity:{(d.get("deleteEntity") or {}).get("entity", "")}'
+     p = d.get(d["kind"]) or {}
+     return f'{d["kind"]}:{p.get("entity", "")}/{p.get("viewType", "")}' if d["kind"] == "layout" else f'{d["kind"]}:{p.get("name", "")}'
+ 
+@@ -60,6 +62,11 @@
+     (5, "Who can edit contacts?",
+      lambda ds: len(ds) == 0,
+      "no proposal at all (a read-only question)"),
++    # The demo has no Warehouses table until one is applied (task 1 only proposes it): without it there is nothing
++    # to delete and the agent rightly proposes nothing.
++    (6, "Remove the Warehouses table.",
++     lambda ds: has(ds, "delete_entity", lambda d: "warehouse" in d["deleteEntity"]["entity"]),
++     "a delete_entity proposal for a table named *warehouse*"),
+ ]
+ 
+ 
+--- a/evals/mcp/test_run.py
++++ b/evals/mcp/test_run.py
+@@ -51,5 +51,37 @@
+         self.assertFalse(run.passes(TASK_5, events("recorded-task-5.jsonl"), [], 1))
+ 
+ 
++def delete_entity(name):
++    """A delete_entity proposal as the builder session returns it (ai.DraftItem)."""
++    return {"kind": "delete_entity", "deleteEntity": {"entity": name, "label": name.title(), "fieldCount": 4}}
++
++
++class DeleteTask(unittest.TestCase):
++    TASK_6 = next(t for t in run.TASKS if t[0] == 6)
++
++    def grade(self, drafts):
++        return self.TASK_6[2](drafts)
++
++    def test_the_request(self):
++        self.assertEqual(self.TASK_6[1], "Remove the Warehouses table.")
++
++    def test_a_proposal_to_delete_the_warehouses_table_passes(self):
++        self.assertTrue(self.grade([delete_entity("warehouses")]))
++        self.assertTrue(self.grade([{"kind": "field", "field": {"entity": "crm_contacts", "name": "x"}}, delete_entity("warehouses")]))
++
++    def test_anything_else_fails(self):
++        for name, drafts in {
++            "no proposal": [],
++            "another table deleted": [delete_entity("crm_contacts")],
++            "a warehouses table created": [{"kind": "entity", "entity": {"name": "warehouses", "fields": []}}],
++            "a field of warehouses deleted": [{"kind": "delete_field", "deleteField": {"entity": "warehouses", "field": "address"}}],
++        }.items():
++            with self.subTest(name):
++                self.assertFalse(self.grade(drafts))
++
++    def test_the_report_names_the_deleted_table(self):
++        self.assertEqual(run.label(delete_entity("warehouses")), "delete_entity:warehouses")
++
++
+ if __name__ == "__main__":
+     unittest.main()
+--- /dev/null
++++ b/gates.txt
+@@ -0,0 +1,47 @@
++# Gates for MCP eval task 6 (evals/mcp), 2026-10-21
++# Only Python files changed (evals/mcp/run.py, test_run.py, README.md); Go/web gates not affected and not run.
++
++## Green: the real tree
++$ python3 evals/mcp/test_run.py -v
++test_a_proposal_to_delete_the_warehouses_table_passes (__main__.DeleteTask) ... ok
++test_anything_else_fails (__main__.DeleteTask) ... ok
++test_the_report_names_the_deleted_table (__main__.DeleteTask) ... ok
++test_the_request (__main__.DeleteTask) ... ok
++test_a_failed_session_fails (__main__.PassRule) ... ok
++test_a_session_that_never_reached_the_server_fails_every_task (__main__.PassRule) ... ok
++test_either_signal_is_enough (__main__.PassRule) ... ok
++test_the_recorded_task_5_passes (__main__.PassRule) ... ok
++
++----------------------------------------------------------------------
++Ran 8 tests in 0.004s
++
++OK
++exit 0
++
++$ python3 -m py_compile evals/mcp/run.py evals/mcp/test_run.py
++exit 0
++
++## Red: the new tests fail on deliberately broken copies of run.py (the tree is untouched)
++$ # break 1 (copy of run.py): task 6 grader drops the *warehouse* name check
++68c68
++<      lambda ds: has(ds, "delete_entity", lambda d: "warehouse" in d["deleteEntity"]["entity"]),
++---
++>      lambda ds: has(ds, "delete_entity", lambda d: True),
++$ python3 test_run.py
++FAIL: test_anything_else_fails (__main__.DeleteTask) [another table deleted]
++AssertionError: True is not false
++Ran 8 tests in 0.001s
++FAILED (failures=1)
++
++$ # break 2 (copy of run.py): label() without the delete_entity case
++41,42d40
++<     if d["kind"] == "delete_entity":
++<         return f'delete_entity:{(d.get("deleteEntity") or {}).get("entity", "")}'
++$ python3 test_run.py
++FAIL: test_the_report_names_the_deleted_table (__main__.DeleteTask)
++AssertionError: 'delete_entity:' != 'delete_entity:warehouses'
++Ran 8 tests in 0.001s
++FAILED (failures=1)
++
++## Not run
++- python3 evals/mcp/run.py (live eval): needs a running demo server and a logged-in Claude Code; no network or server in this sandbox.

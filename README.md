@@ -173,13 +173,15 @@ fails any run where a test skips.
   apply and publish each failed once in 66 attempts, and the rep's checks never failed. Each failure is explained from
   its transcript; two of the three failing requests are engine gaps, not model errors
   ([report](evals/builder-bench/report.md)). About 2,000–2,700 output tokens per working app.
-- **Harness eval: WITH 1.00, W/OUT 1.00, Δ 0.00.** `claude plugin eval` loads `.claude/` (the builder and verifier
-  agents, the slice and verify-ui skills) as a plugin and runs four small changes to a scaffolded copy of the repo
-  with it and without it: fix a planted tenant-filter leak, add a field with its migration, add an endpoint with its
-  web caller, add a task to the MCP eval. Code graders only; a regrade with real commands (go test with held-out
-  tests, gofmt, vet, the orphan-endpoint gate) passed 8 of 8 runs in each arm too. `claude-opus-5-5`, two runs per
-  case per arm, $12.33, recorded on 2026-10-21. Zero means a ceiling, and that the harness never ran: no with-arm
-  run dispatched its agents or used its skills ([results](evals/harness/README.md)).
+- **Harness eval: regrade WITH 1.00, W/OUT 0.88, Δ +0.12; eval graders WITH 1.00, W/OUT 0.97, Δ +0.03.**
+  `claude plugin eval` loads `.claude/` (the builder and verifier agents, the slice and verify-ui skills) as a plugin
+  and runs four small changes to a scaffolded copy of the repo with it and without it: fix a planted tenant-filter
+  leak, add a field with its migration, add an endpoint with its web caller, add a task to the MCP eval. Code graders
+  only, then a regrade that calls the code: hidden behavioural tests, gofmt, vet, the gates from the base commit; a
+  self-test shows that doing nothing, gaming with comments and three wrong-but-plausible changes all fail it.
+  `claude-opus-5-5`, two runs per case per arm, $12.80, recorded on 2026-10-21. Each delta is one run, and neither is
+  the harness: no with-arm run dispatched its agents or used its skills. One W/OUT run left a file `gofmt` flags;
+  one correct W/OUT run missed a too-narrow eval pattern ([results](evals/harness/README.md)).
 
 ## How it was built
 

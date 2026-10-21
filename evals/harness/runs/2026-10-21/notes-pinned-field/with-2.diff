@@ -1,0 +1,396 @@
+--- /dev/null
++++ b/gates.txt
+@@ -0,0 +1,133 @@
++### Gates for: record notes pinned flag (nexus-platform/) — 2026-10-21T15:26:57Z
++
++$ gofmt -l .
++exit=0
++
++$ go vet ./...
++exit=0
++
++$ go vet -tags=integration ./internal/handlers/ ./internal/notes/
++exit=0
++
++$ go build ./cmd/server/
++exit=0
++
++$ go test ./internal/notes/ ./internal/handlers/ -run 'NotesRepository|NoteDTO' -v
++=== RUN   TestNotesRepository_Insert
++=== RUN   TestNotesRepository_Insert/named_insert_giữ_nguyên_thứ_tự_cột_+_tenant
++=== RUN   TestNotesRepository_Insert/lỗi_driver_được_wrap_kèm_method
++--- PASS: TestNotesRepository_Insert (0.00s)
++=== RUN   TestNotesRepository_ListByRecord
++=== RUN   TestNotesRepository_ListByRecord/filter_đủ_3_chiều_+_ghim_trước,_rồi_mới_nhất_trước_+_limit/offset
++=== RUN   TestNotesRepository_ListByRecord/không_có_ghi_chú_→_slice_rỗng,_không_lỗi
++=== RUN   TestNotesRepository_ListByRecord/lỗi_driver_được_wrap_kèm_method
++--- PASS: TestNotesRepository_ListByRecord (0.00s)
++=== RUN   TestNotesRepository_CountByRecord
++=== RUN   TestNotesRepository_CountByRecord/đếm_tenant-pinned
++=== RUN   TestNotesRepository_CountByRecord/lỗi_driver_được_wrap_kèm_method
++--- PASS: TestNotesRepository_CountByRecord (0.00s)
++=== RUN   TestNotesRepository_GetForRecord
++=== RUN   TestNotesRepository_GetForRecord/id_lạ_/_khác_tenant_/_khác_record_/_đã_xoá_→_ErrNoteNotFound
++=== RUN   TestNotesRepository_GetForRecord/row_sống_trả_đủ
++=== RUN   TestNotesRepository_GetForRecord/lỗi_driver_được_wrap_kèm_method
++--- PASS: TestNotesRepository_GetForRecord (0.00s)
++=== RUN   TestNotesRepository_SoftDelete
++=== RUN   TestNotesRepository_SoftDelete/tombstone_tenant-pinned
++=== RUN   TestNotesRepository_SoftDelete/double-delete_/_khác_tenant_→_ErrNoteNotFound
++=== RUN   TestNotesRepository_SoftDelete/lỗi_driver_được_wrap_kèm_method
++--- PASS: TestNotesRepository_SoftDelete (0.00s)
++PASS
++ok  	nexus/platform/internal/notes	(cached)
++=== RUN   TestNoteDTO_PinnedAlwaysOnTheWire
++--- PASS: TestNoteDTO_PinnedAlwaysOnTheWire (0.00s)
++PASS
++ok  	nexus/platform/internal/handlers	(cached)
++
++### Prove-the-test: ORDER BY pinned and DTO Pinned mapping removed on purpose, same run:
++FAIL
++FAIL	nexus/platform/internal/notes	0.397s
++    note_dto_test.go:27: dto[0] = {"id":"n1","body":"ghim","pinned":false,"createdBy":"","createdAt":"0001-01-01T00:00:00Z","updatedAt":"0001-01-01T00:00:00Z"}; want it to contain "pinned":true
++FAIL
++FAIL	nexus/platform/internal/handlers	0.532s
++FAIL
++(fix restored afterwards)
++
++$ go test ./...
++--- FAIL: TestApplyAndProbe_HappyPathAsksAllThreeQuestionsThenCleansUp (0.00s)
++FAIL	nexus/platform/cmd/aieval	0.181s
++ok  	nexus/platform/cmd/bootstrap-admin	0.399s
++ok  	nexus/platform/cmd/server	0.563s
++--- FAIL: TestRecord_AppendsEveryExchangeInOrder_NeverTheKey (0.00s)
++FAIL	nexus/platform/internal/ai	0.458s
++ok  	nexus/platform/internal/appmeta	0.429s
++ok  	nexus/platform/internal/audit	0.434s
++ok  	nexus/platform/internal/auth	0.494s
++ok  	nexus/platform/internal/bpm	0.527s
++ok  	nexus/platform/internal/cache	0.481s
++ok  	nexus/platform/internal/calendar	0.443s
++ok  	nexus/platform/internal/config	0.492s
++ok  	nexus/platform/internal/credential	0.433s
++ok  	nexus/platform/internal/crypto	0.419s
++ok  	nexus/platform/internal/dashboard	0.429s
++ok  	nexus/platform/internal/db	0.869s
++ok  	nexus/platform/internal/ddl	0.547s
++ok  	nexus/platform/internal/doctor	0.587s
++ok  	nexus/platform/internal/dynrepo	0.615s
++ok  	nexus/platform/internal/files	0.611s
++ok  	nexus/platform/internal/formula	0.552s
++--- FAIL: TestChatRoutes_ModelRefusal_200Refused (0.00s)
++FAIL	nexus/platform/internal/handlers	0.926s
++ok  	nexus/platform/internal/health	0.657s
++ok  	nexus/platform/internal/ittest	0.590s
++ok  	nexus/platform/internal/janitor	0.657s
++ok  	nexus/platform/internal/jobs	0.612s
++--- FAIL: TestAuth_Matrix (0.00s)
++FAIL	nexus/platform/internal/mcpserver	0.269s
++ok  	nexus/platform/internal/metadata	0.680s
++ok  	nexus/platform/internal/metadiff	0.608s
++ok  	nexus/platform/internal/metaversion	0.740s
++ok  	nexus/platform/internal/metrics	0.812s
++ok  	nexus/platform/internal/middleware	1.159s
++ok  	nexus/platform/internal/notes	0.463s
++ok  	nexus/platform/internal/notification	0.624s
++--- FAIL: TestSMTPSender_RefusesPlaintextWhenNoSTARTTLS (0.00s)
++FAIL
++FAIL	nexus/platform/internal/notify	0.435s
++ok  	nexus/platform/internal/report	0.631s
++ok  	nexus/platform/internal/sampledata	0.867s
++--- FAIL: TestDoctorC10_MigratesInlineSecretPreservingWireBytes (0.00s)
++FAIL	nexus/platform/internal/services	9.676s
++ok  	nexus/platform/internal/services/vertical_pack	0.765s
++ok  	nexus/platform/internal/shares	0.533s
++ok  	nexus/platform/internal/storage	0.463s
++ok  	nexus/platform/internal/tenantbackup	0.986s
++--- FAIL: TestHTTPWebhookSender_PostSuccessWithHMAC (0.00s)
++FAIL	nexus/platform/internal/workflow	0.438s
++FAIL
++
++### Failures above are all 'bind: operation not permitted' (sandbox forbids local listeners; httptest panics abort the package).
++   1     email_test.go:64: listen tcp 127.0.0.1:0: bind: operation not permitted
++   6 panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++
++$ go test <those 7 packages> -skip 'TestApplyAndProbe_HappyPathAsksAllThreeQuestionsThenCleansUp|TestRecord_AppendsEveryExchangeInOrder_NeverTheKey|TestChatRoutes_ModelRefusal_200Refused|TestAuth_Matrix|TestSMTPSender_RefusesPlaintextWhenNoSTARTTLS|TestDoctorC10_MigratesInlineSecretPreservingWireBytes|TestHTTPWebhookSender_PostSuccessWithHMAC'
++--- FAIL: TestApplyAndProbe_TableThatRefusesARowIsAFailure (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++FAIL	nexus/platform/cmd/aieval	0.389s
++--- FAIL: TestReplay_AnswersInOrderWithoutNetwork (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++FAIL	nexus/platform/internal/ai	0.279s
++ok  	nexus/platform/internal/handlers	2.313s
++--- FAIL: TestCall_ReadToolRunsAsTheBuilderAndLeavesTheThreadAlone (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++FAIL	nexus/platform/internal/mcpserver	0.250s
++ok  	nexus/platform/internal/notify	0.176s
++--- FAIL: TestDoctorC10_ShortLegacySecretMigrates (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++FAIL	nexus/platform/internal/services	9.516s
++--- FAIL: TestHTTPWebhookSender_NoSecretNoSignatureHeader (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++FAIL	nexus/platform/internal/workflow	0.189s
++FAIL
++
++### Not run here: make test-integration (no MySQL), scripts/acceptance-acl.py (no server), nexus-web gates (no node_modules; web untouched).
++### check-orphan-endpoints: no route added, not applicable.
+--- /dev/null
++++ b/nexus-platform/internal/handlers/note_dto_test.go
+@@ -0,0 +1,30 @@
++package handlers
++
++// note_dto_test.go — the wire shape always carries "pinned" (true or false, never omitted), so the
++// notes tab can tell a pinned note from an unpinned one without guessing from a missing key.
++
++import (
++	"context"
++	"encoding/json"
++	"strings"
++	"testing"
++
++	"nexus/platform/internal/notes"
++)
++
++func TestNoteDTO_PinnedAlwaysOnTheWire(t *testing.T) {
++	h := NewNoteHandler(nil, nil)
++	dtos := h.toDTOs(context.Background(), "t1", []notes.Note{
++		{ID: "n1", Body: "ghim", Pinned: true},
++		{ID: "n2", Body: "thường"},
++	})
++	for i, want := range []string{`"pinned":true`, `"pinned":false`} {
++		b, err := json.Marshal(dtos[i])
++		if err != nil {
++			t.Fatalf("marshal: %v", err)
++		}
++		if !strings.Contains(string(b), want) {
++			t.Errorf("dto[%d] = %s; want it to contain %s", i, b, want)
++		}
++	}
++}
+--- a/nexus-platform/internal/handlers/note_handler.go
++++ b/nexus-platform/internal/handlers/note_handler.go
+@@ -37,7 +37,7 @@
+ // mục 1 "Trao đổi trên hồ sơ") — a free-text note any user can attach to ANY record, for EVERY
+ // entity (not a CRM-only feature):
+ //
+-//	GET    /:entity/:id/notes           list, newest first, simple offset pagination
++//	GET    /:entity/:id/notes           list, pinned first then newest, offset pagination
+ //	POST   /:entity/:id/notes           add a note (body {"body": "..."})
+ //	DELETE /:entity/:id/notes/:noteId   soft-delete (note author OR entity delete-grant)
+ //
+@@ -93,6 +93,7 @@
+ type noteDTO struct {
+ 	ID            string    `json:"id"`
+ 	Body          string    `json:"body"`
++	Pinned        bool      `json:"pinned"`
+ 	CreatedBy     string    `json:"createdBy"`
+ 	CreatedByName string    `json:"createdByName,omitempty"`
+ 	CreatedAt     time.Time `json:"createdAt"`
+@@ -108,7 +109,7 @@
+ 	out := make([]noteDTO, len(rows))
+ 	for i, r := range rows {
+ 		out[i] = noteDTO{
+-			ID: r.ID, Body: r.Body, CreatedBy: r.CreatedBy,
++			ID: r.ID, Body: r.Body, Pinned: r.Pinned, CreatedBy: r.CreatedBy,
+ 			CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+ 		}
+ 	}
+@@ -146,7 +147,7 @@
+ 	return out
+ }
+ 
+-// List handles GET /:entity/:id/notes — simple offset pagination (?page=&limit=), newest first.
++// List handles GET /:entity/:id/notes — simple offset pagination (?page=&limit=), pinned first then newest.
+ func (h *NoteHandler) List(c *gin.Context) {
+ 	tenantID, ok := tenantOf(c)
+ 	if !ok {
+--- a/nexus-platform/internal/handlers/note_integration_test.go
++++ b/nexus-platform/internal/handlers/note_integration_test.go
+@@ -141,6 +141,7 @@
+ 		Body          string `json:"body"`
+ 		CreatedBy     string `json:"createdBy"`
+ 		CreatedByName string `json:"createdByName"`
++		Pinned        bool   `json:"pinned"`
+ 	} `json:"data"`
+ 	Pagination struct {
+ 		Total int `json:"total"`
+@@ -287,6 +288,26 @@
+ 		var env noteCreateEnvelope
+ 		_ = json.Unmarshal(wPost.Body.Bytes(), &env)
+ 		noteA2 = env.Data.ID
++	})
++
++	// --- PINNED: off by default, a pinned note lists first even when older ------------------------
++	t.Run("ghi chú được ghim đứng đầu danh sách dù cũ hơn", func(t *testing.T) {
++		// No endpoint sets the flag yet — pin the older note directly, tenant-pinned.
++		if _, err := sx.Exec("UPDATE sys_record_notes SET pinned = 1 WHERE tenant_id = ? AND id = ?", tenantID, noteA1); err != nil {
++			t.Fatalf("pin noteA1: %v", err)
++		}
++		w := doAuthed(t, rt.engine, http.MethodGet, "/api/v1/"+entity+"/"+recA+"/notes", aliceTok, nil, nil)
++		if w.Code != http.StatusOK {
++			t.Fatalf("GET notes: want 200, got %d %s", w.Code, w.Body.String())
++		}
++		var env noteListEnvelope
++		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
++			t.Fatalf("decode: %v (%s)", err, w.Body.String())
++		}
++		if len(env.Data) != 2 || env.Data[0].ID != noteA1 || !env.Data[0].Pinned ||
++			env.Data[1].ID != noteA2 || env.Data[1].Pinned {
++			t.Fatalf("list = %+v; want pinned noteA1 first, then unpinned noteA2 (default off)", env.Data)
++		}
+ 	})
+ 
+ 	// --- VALIDATION ---------------------------------------------------------------------------
+--- a/nexus-platform/internal/notes/repository.go
++++ b/nexus-platform/internal/notes/repository.go
+@@ -34,6 +34,7 @@
+ 	EntityName string       `db:"entity_name"`
+ 	RecordID   string       `db:"record_id"`
+ 	Body       string       `db:"body"`
++	Pinned     bool         `db:"pinned"`
+ 	CreatedBy  string       `db:"created_by"`
+ 	CreatedAt  time.Time    `db:"created_at"`
+ 	UpdatedAt  time.Time    `db:"updated_at"`
+@@ -64,12 +65,13 @@
+ }
+ 
+ // ListByRecord returns a page of live (not soft-deleted) notes attached to (entityName, recordID)
+-// within a tenant, newest-first (created_at DESC, id DESC as a stable tie-break).
++// within a tenant, pinned notes first, then newest-first (created_at DESC, id DESC as a stable
++// tie-break).
+ func (r *Repository) ListByRecord(ctx context.Context, tenantID, entityName, recordID string, limit, offset int) ([]Note, error) {
+-	const q = `SELECT id, tenant_id, entity_name, record_id, body, created_by, created_at, updated_at, deleted_at
++	const q = `SELECT id, tenant_id, entity_name, record_id, body, pinned, created_by, created_at, updated_at, deleted_at
+ 	           FROM sys_record_notes
+ 	           WHERE tenant_id = ? AND entity_name = ? AND record_id = ? AND deleted_at IS NULL
+-	           ORDER BY created_at DESC, id DESC
++	           ORDER BY pinned DESC, created_at DESC, id DESC
+ 	           LIMIT ? OFFSET ?`
+ 	var out []Note
+ 	if err := r.db.SelectContext(ctx, &out, q, tenantID, entityName, recordID, limit, offset); err != nil {
+@@ -95,7 +97,7 @@
+ // /:entity/:id/notes/:noteId, so a noteId that belongs to a DIFFERENT record must 404 here rather
+ // than let the caller's (entity, record)-level authorization apply to a note it does not own.
+ func (r *Repository) GetForRecord(ctx context.Context, tenantID, entityName, recordID, id string) (*Note, error) {
+-	const q = `SELECT id, tenant_id, entity_name, record_id, body, created_by, created_at, updated_at, deleted_at
++	const q = `SELECT id, tenant_id, entity_name, record_id, body, pinned, created_by, created_at, updated_at, deleted_at
+ 	           FROM sys_record_notes
+ 	           WHERE tenant_id = ? AND entity_name = ? AND record_id = ? AND id = ? AND deleted_at IS NULL`
+ 	var n Note
+--- a/nexus-platform/internal/notes/repository_unit_test.go
++++ b/nexus-platform/internal/notes/repository_unit_test.go
+@@ -20,14 +20,14 @@
+ func noteCols() []string {
+ 	return []string{
+ 		"id", "tenant_id", "entity_name", "record_id", "body",
+-		"created_by", "created_at", "updated_at", "deleted_at",
++		"pinned", "created_by", "created_at", "updated_at", "deleted_at",
+ 	}
+ }
+ 
+ func sampleNoteRow(id, body string) []driver.Value {
+ 	return []driver.Value{
+ 		id, "tenant-a", "crm_accounts", "rec-1", body,
+-		"user-1", testTime, testTime, nil,
++		false, "user-1", testTime, testTime, nil,
+ 	}
+ }
+ 
+@@ -71,23 +71,25 @@
+ }
+ 
+ func TestNotesRepository_ListByRecord(t *testing.T) {
+-	t.Run("filter đủ 3 chiều + mới nhất trước + limit/offset", func(t *testing.T) {
+-		db, rec := newFakeDB(t)
+-		repo := NewRepository(db)
++	t.Run("filter đủ 3 chiều + ghim trước, rồi mới nhất trước + limit/offset", func(t *testing.T) {
++		db, rec := newFakeDB(t)
++		repo := NewRepository(db)
++		pinnedRow := sampleNoteRow("note-1", "note cũ đã ghim")
++		pinnedRow[5] = true
+ 		rec.queueQuery(noteCols(), [][]driver.Value{
+-			sampleNoteRow("note-2", "note mới"), sampleNoteRow("note-1", "note cũ"),
++			pinnedRow, sampleNoteRow("note-2", "note mới"),
+ 		}, nil)
+ 		got, err := repo.ListByRecord(context.Background(), "tenant-a", "crm_accounts", "rec-1", 20, 0)
+ 		if err != nil {
+ 			t.Fatalf("ListByRecord: %v", err)
+ 		}
+-		if len(got) != 2 || got[0].ID != "note-2" || got[1].ID != "note-1" {
+-			t.Errorf("notes = %+v; want note-2, note-1 in driver order (newest first)", got)
++		if len(got) != 2 || got[0].ID != "note-1" || !got[0].Pinned || got[1].ID != "note-2" || got[1].Pinned {
++			t.Errorf("notes = %+v; want pinned note-1 then unpinned note-2 in driver order", got)
+ 		}
+ 		call := rec.lastQuery(t)
+-		mustContainSQL(t, call.query,
++		mustContainSQL(t, call.query, "pinned",
+ 			"tenant_id = ?", "entity_name = ?", "record_id = ?",
+-			"deleted_at IS NULL", "ORDER BY created_at DESC, id DESC", "LIMIT ? OFFSET ?")
++			"deleted_at IS NULL", "ORDER BY pinned DESC, created_at DESC, id DESC", "LIMIT ? OFFSET ?")
+ 		wantArgs := []driver.Value{"tenant-a", "crm_accounts", "rec-1", int64(20), int64(0)}
+ 		if len(call.args) != len(wantArgs) {
+ 			t.Fatalf("args = %v; want %v", call.args, wantArgs)
+@@ -168,7 +170,7 @@
+ 		if err != nil {
+ 			t.Fatalf("GetForRecord: %v", err)
+ 		}
+-		if got.ID != "note-1" || got.Body != "nội dung" || got.CreatedBy != "user-1" {
++		if got.ID != "note-1" || got.Body != "nội dung" || got.CreatedBy != "user-1" || got.Pinned {
+ 			t.Errorf("note mismatched: %+v", got)
+ 		}
+ 	})
+--- a/nexus-platform/internal/notes/service.go
++++ b/nexus-platform/internal/notes/service.go
+@@ -54,9 +54,10 @@
+ 	return &Service{repo: repo, guard: guard, authz: authz, newID: uuid.NewString}
+ }
+ 
+-// List returns a page of live notes on (entityName, recordID), newest first, plus the total count
+-// for the offset-pagination envelope. Authorizes via RecordGuard first — a caller who may not view
+-// the parent record gets that EXACT error (ErrEntityNotFound / ErrRecordNotFound), never a note.
++// List returns a page of live notes on (entityName, recordID), pinned first then newest, plus the
++// total count for the offset-pagination envelope. Authorizes via RecordGuard first — a caller who
++// may not view the parent record gets that EXACT error (ErrEntityNotFound / ErrRecordNotFound),
++// never a note.
+ func (s *Service) List(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID string, page, limit int) ([]Note, int, error) {
+ 	canonical, _, err := s.guard.ResolveNoteTarget(ctx, scope, tenantID, entityName, recordID)
+ 	if err != nil {
+--- /dev/null
++++ b/nexus-platform/migrations/000100_record_notes_pinned.down.sql
+@@ -0,0 +1,14 @@
++-- Reverse 000100: drop the pinned flag of sys_record_notes. Notes keep their body and order falls
++-- back to newest first.
++DROP PROCEDURE IF EXISTS _notes100_revert;
++CREATE PROCEDURE _notes100_revert()
++BEGIN
++    IF EXISTS (
++        SELECT 1 FROM information_schema.COLUMNS
++        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sys_record_notes' AND COLUMN_NAME = 'pinned'
++    ) THEN
++        ALTER TABLE sys_record_notes DROP COLUMN pinned;
++    END IF;
++END;
++CALL _notes100_revert();
++DROP PROCEDURE IF EXISTS _notes100_revert;
+--- /dev/null
++++ b/nexus-platform/migrations/000100_record_notes_pinned.up.sql
+@@ -0,0 +1,19 @@
++-- Record notes can be pinned: a pinned note stays at the top of the record's notes (ListByRecord
++-- orders pinned DESC before created_at DESC). Off by default, so every existing note stays unpinned;
++-- setting the flag (API/UI) is a later change.
++--
++-- ONE ALTER statement, guarded by information_schema (MySQL 8 has no ADD COLUMN IF NOT EXISTS): DDL
++-- auto-commits, so a single statement cannot leave a half-applied (dirty) migration.
++DROP PROCEDURE IF EXISTS _notes100_apply;
++CREATE PROCEDURE _notes100_apply()
++BEGIN
++    IF NOT EXISTS (
++        SELECT 1 FROM information_schema.COLUMNS
++        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sys_record_notes' AND COLUMN_NAME = 'pinned'
++    ) THEN
++        ALTER TABLE sys_record_notes
++            ADD COLUMN pinned TINYINT(1) NOT NULL DEFAULT 0 AFTER body;
++    END IF;
++END;
++CALL _notes100_apply();
++DROP PROCEDURE IF EXISTS _notes100_apply;

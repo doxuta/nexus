@@ -1,0 +1,129 @@
+--- a/evals/mcp/README.md
++++ b/evals/mcp/README.md
+@@ -1,6 +1,6 @@
+ # MCP tool-use eval
+ 
+-Five plain requests to an outside agent connected over MCP (issue #3). Each must end in the right proposal, and only
++Six plain requests to an outside agent connected over MCP (issue #3). Each must end in the right proposal, and only
+ a proposal. Code graders read the proposals that the task's Studio conversation holds (their kinds and names). No
+ model grades another one. This is a smoke-sized eval; the real bench is #4.
+ 
+@@ -31,6 +31,11 @@
+ | 3 | Link CRM products and CRM contracts many-to-many, so a contract can list the products it covers. | a `relationship` between `crm_products` and `crm_contracts` |
+ | 4 | Propose a list layout for CRM leads that shows the name, the company and the status, newest first. | a `layout` of `crm_leads`, view `list` |
+ | 5 | Who can edit contacts? | no proposal at all |
++| 6 | Remove the Warehouses table. | a `delete_entity` of a table named `*warehouse*` |
++
++Task 6 needs a Warehouses table in the workspace: `propose_delete_entity` refuses a table that does not exist, and
++no pack or demo seed has one (task 1 only proposes it). Create it before running task 6. The report names the
++table a deletion proposes, e.g. `delete_entity:warehouses`.
+ 
+ ## Results (2026-10-17)
+ 
+--- a/evals/mcp/run.py
++++ b/evals/mcp/run.py
+@@ -37,7 +37,10 @@
+ 
+ 
+ def label(d):
+-    """kind:name of one proposal, for the report (a layout is named by its table and view)."""
++    """kind:name of one proposal, for the report (a layout is named by its table and view, a deletion by the table it
++    deletes)."""
++    if d["kind"] == "delete_entity":
++        return f'delete_entity:{(d.get("deleteEntity") or {}).get("entity", "")}'
+     p = d.get(d["kind"]) or {}
+     return f'{d["kind"]}:{p.get("entity", "")}/{p.get("viewType", "")}' if d["kind"] == "layout" else f'{d["kind"]}:{p.get("name", "")}'
+ 
+@@ -60,6 +63,10 @@
+     (5, "Who can edit contacts?",
+      lambda ds: len(ds) == 0,
+      "no proposal at all (a read-only question)"),
++    # The tool refuses a table that does not exist: the workspace needs a Warehouses table first.
++    (6, "Remove the Warehouses table.",
++     lambda ds: has(ds, "delete_entity", lambda d: "warehouse" in d["deleteEntity"]["entity"]),
++     "a delete_entity proposal for a table named *warehouse*"),
+ ]
+ 
+ 
+--- a/evals/mcp/test_run.py
++++ b/evals/mcp/test_run.py
+@@ -14,6 +14,7 @@
+ 
+ HERE = os.path.dirname(os.path.abspath(__file__))
+ TASK_5 = next(t for t in run.TASKS if t[0] == 5)
++TASK_6 = next(t for t in run.TASKS if t[0] == 6)
+ 
+ 
+ def events(name):
+@@ -51,5 +52,33 @@
+         self.assertFalse(run.passes(TASK_5, events("recorded-task-5.jsonl"), [], 1))
+ 
+ 
++def delete_entity(name):
++    return {"kind": "delete_entity", "deleteEntity": {"entity": name, "label": name.title(), "fieldCount": 3}}
++
++
++class DeleteGrader(unittest.TestCase):
++    """Task 6 passes only on a proposal to delete a table named *warehouse*."""
++
++    grade = staticmethod(TASK_6[2])
++
++    def test_deleting_warehouses_passes(self):
++        self.assertTrue(self.grade([delete_entity("warehouses")]))
++        self.assertTrue(self.grade([delete_entity("crm_suppliers"), delete_entity("warehouse")]))
++
++    def test_anything_else_fails(self):
++        cases = {
++            "no proposal": [],
++            "another table deleted": [delete_entity("crm_suppliers")],
++            "warehouses created, not deleted": [{"kind": "entity", "entity": {"name": "warehouses", "fields": []}}],
++            "a warehouse field deleted": [{"kind": "delete_field", "deleteField": {"entity": "warehouses", "field": "capacity"}}],
++        }
++        for name, ds in cases.items():
++            with self.subTest(name):
++                self.assertFalse(self.grade(ds))
++
++    def test_the_report_names_the_deleted_table(self):
++        self.assertEqual(run.label(delete_entity("warehouses")), "delete_entity:warehouses")
++
++
+ if __name__ == "__main__":
+     unittest.main()
+--- /dev/null
++++ b/gates.txt
+@@ -0,0 +1,35 @@
++$ python3 evals/mcp/test_run.py -v
++test_anything_else_fails (__main__.DeleteGrader) ... ok
++test_deleting_warehouses_passes (__main__.DeleteGrader) ... ok
++test_the_report_names_the_deleted_table (__main__.DeleteGrader) ... ok
++test_a_failed_session_fails (__main__.PassRule) ... ok
++test_a_session_that_never_reached_the_server_fails_every_task (__main__.PassRule) ... ok
++test_either_signal_is_enough (__main__.PassRule) ... ok
++test_the_recorded_task_5_passes (__main__.PassRule) ... ok
++
++----------------------------------------------------------------------
++Ran 7 tests in 0.001s
++
++OK
++exit 0
++
++$ python3 -m py_compile evals/mcp/run.py evals/mcp/test_run.py
++exit 0
++
++$ python3 evals/mcp/run.py --help
++usage: run.py [-h] [--base BASE] [--only ONLY] [--out OUT]
++
++A small tool-use eval of the MCP endpoint (issue #3): can an outside agent
++
++--- proof: grader broken on purpose (accepts any deleted table) ---
++AssertionError: True is not false
++
++----------------------------------------------------------------------
++Ran 7 tests in 0.001s
++
++FAILED (failures=1)
++
++--- grader restored ---
++Ran 7 tests in 0.001s
++
++OK

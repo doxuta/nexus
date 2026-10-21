@@ -25,90 +25,112 @@ So the comparison is the plugin and nothing else, with these limits:
 
 ## Cases
 
-Each case is a request a person would type, ending with "save the output of the checks you ran to gates.txt". Doing
-nothing scores 0 on every grader of every case; a correct change scores 1 (both checked on hand-made solutions).
+Each case is a request a person would type, ending with "save the output of the checks you ran to gates.txt".
 
-| Case | Request | Graders in the eval (free, from files) | Regrade (real commands, `regrade.py`) |
+| Case | Request | Graders in the eval (free, read files) | Regrade (`regrade.py`, runs the code) |
 |---|---|---|---|
-| [`notes-tenant-leak`](notes-tenant-leak/) | Notes from another workspace show up on a record; find the cause and fix it. The scaffold plants the bug: the notes list and count lose their `tenant_id` filter and the unit tests that pinned it are loosened, so the package is green. | `ListByRecord` and `CountByRecord` filter `tenant_id` again; gates.txt shows `ok nexus/platform/internal/notes` | gofmt, go vet, go build; `go test ./internal/notes/` with a held-out test that the tenant is filtered and bound |
-| [`notes-pinned-field`](notes-pinned-field/) | Add a `pinned` flag to record notes: stored (off by default), returned by the API, pinned first. | migration `000100_*.up.sql` and `.down.sql` created; `db:"pinned"`; `ORDER BY pinned DESC`; `json:"pinned"`; notes tests ok | gofmt, vet, build; notes tests with a held-out test; handlers tests; one migration pair, up adds the column with a default, down drops it |
-| [`notes-newest-endpoint`](notes-newest-endpoint/) | Add `GET /api/v1/:entity/:id/notes/newest` and its client function in `nexus-web/lib/api.ts`. | route in `note_handler.go`; caller in `lib/api.ts`; gates.txt shows the orphan-endpoint gate passing and handlers tests ok | gofmt, vet, build; route registered; `check-orphan-endpoints.py --strict`; handlers and notes tests |
-| [`mcp-eval-delete-task`](mcp-eval-delete-task/) | Add task 6 to the MCP eval ([`evals/mcp`](../mcp/README.md)): "Remove the Warehouses table." passes only on a proposal to delete it. | task 6 in `run.py`; `run.py` and `test_run.py` read the draft key the engine really writes (`deleteEntity`); gates.txt shows the unittest `OK` | `test_run.py`; a held-out check that task 6 accepts the real deletion draft, rejects no proposal, another table and a creation, and that the report names the table |
+| [`notes-tenant-leak`](notes-tenant-leak/) | Notes from another workspace show up on a record; find the cause and fix it. The scaffold plants the bug: the notes list and count lose their `tenant_id` filter and the unit tests that pinned it are loosened, so the package is green. | `ListByRecord` and `CountByRecord` filter `tenant_id` again; gates.txt shows `ok nexus/platform/internal/notes` | gofmt, go vet, go build; a hidden test calls both and wants `WHERE tenant_id = ? AND entity_name = ?`, no `OR`, the tenant bound first |
+| [`notes-pinned-field`](notes-pinned-field/) | Add a `pinned` flag to record notes: stored (off by default), returned by the API, pinned first. | migration `000100_*.up.sql` and `.down.sql` created; `db:"pinned"`; `ORDER BY pinned DESC`; `json:"pinned"`; notes tests ok | gofmt, vet, build; hidden tests: a pinned row comes back pinned and first, and `GET /:entity/:id/notes` returns `"pinned": true`; one migration pair, up adds the column with a default and down drops it, comments ignored |
+| [`notes-newest-endpoint`](notes-newest-endpoint/) | Add `GET /api/v1/:entity/:id/notes/newest` and its client function in `nexus-web/lib/api.ts`. | route in `note_handler.go`; GET call in `lib/api.ts`; gates.txt shows the orphan-endpoint gate passing and handlers tests ok | gofmt, vet, build; the orphan-endpoint gate (script from BASE); an exported function in `lib/api.ts` that GETs the path, comments ignored; a hidden test that gets `{"data": null}` with no notes and the newest note otherwise |
+| [`mcp-eval-delete-task`](mcp-eval-delete-task/) | Add task 6 to the MCP eval ([`evals/mcp`](../mcp/README.md)): "Remove the Warehouses table." passes only on a proposal to delete it. | task 6 in `run.py`; `run.py` and `test_run.py` read the draft key the engine really writes (`deleteEntity`); gates.txt shows the unittest `OK` | BASE's `test_run.py` against the agent's `run.py`; a hidden check that task 6 accepts the real deletion draft, rejects no proposal, another table and a creation, and that the report names the table |
 
 The last case is the MCP one: what an outside agent may do over `/mcp` is propose, and the eval grades proposals, so
 the case is about grading a deletion that is only ever proposed. Its trap is the draft's shape: `run.py` reads
 `d[d["kind"]]`, but a deletion is stored under `deleteEntity`, which only reading `internal/ai/tools.go` tells you.
 
 `claude plugin eval` has no custom-code graders, so its score reads the files the agent left and the gates.txt it
-wrote. `regrade.py` checks the same runs with real commands, on a copy of each kept workspace, adding tests the agent
-never saw (`<case>/hidden/`); `notes-newest-endpoint`'s regrade does not check the response body.
+wrote: a comment can pass it. The regrade is the check that counts. It copies each kept workspace, overwrites the gate
+scripts and test files it relies on with BASE's, and adds tests the agent never saw (`<case>/hidden/`,
+[`lib/hidden/`](lib/hidden/)). Those tests carry their own SQL driver and serve the notes routes through the real
+`RegisterAPIRoutes` over the real `notes.Service`, so they call whatever the agent wrote, wherever it mounted it.
+
+**The regrade runs code the agent wrote** (its Go code and tests, its `run.py`) as you, outside any sandbox. Grade only
+runs you produced, or run it in a container.
+
+[`selftest.py`](selftest.py) proves both kinds of grader without a model, on hand-written variants of each case:
+
+| Variant | Eval graders | Regrade |
+|---|---|---|
+| nothing (the untouched workspace) | 0.00 in every case | fails in every case |
+| gaming (comments that match the eval graders, a fake gates.txt) | 1.00 in every case | fails in every case |
+| wrong but plausible: `leak-or` (`WHERE tenant_id = ? OR …`), `pin-dto-never-set` (the response field is declared, never set), `newest-wrong-handler` (the route serves the whole list) | 1.00 | fails |
+| reference (a correct change; for the endpoint, both a handler-only one and one with a new service method) | 1.00 | passes |
 
 ## Run it
 
 ```bash
 bash evals/harness/prepare.sh   # once: Go modules and a warm build cache in .cache/harness-eval (gitignored)
+python3 evals/harness/selftest.py   # no model: the 16 variants above, about 5 minutes
 claude plugin eval . --eval-dir evals/harness --ablation with-without --scaffold \
   --allow-tools Bash Edit Write --trust-plugin --no-publish --keep-temp \
   --runs 2 --max-cost-usd 30 --model <id> --output-dir evals/harness/results/<name>
-python3 evals/harness/regrade.py evals/harness/results/<name>/aggregate-result.json --clean
+python3 evals/harness/regrade.py evals/harness/results/<name>/aggregate-result.json --archive evals/harness/runs/<date> --clean
 ```
 
-- **Validate without spending:** the same command with `--max-cost-usd 0` loads every case and the plugin, prints
+- **Validate without spending:** the eval command with `--max-cost-usd 0` loads every case and the plugin, prints
   `Ablation: 2 arms × 4 cases (16 runs)`, and stops before the first run (exit 2, `cost ceiling $0 hit`).
-- **Go:** the scaffold clones your Go root, the modules and the warm cache into each run's home and sets them with
-  `go env -w`, because the sandbox can run `go` but cannot read your home directory or `/tmp`. Tested on macOS (APFS
-  clones make it a second); on Linux it copies.
+- **Go:** `prepare.sh` takes the modules from your module cache, else from proxy.golang.org. The scaffold clones your
+  Go root, the modules and the warm cache into each run's home and sets them with `go env -w`, because the sandbox
+  can run `go` but cannot read your home directory or `/tmp`. Tested on macOS (APFS clones make it a second); on
+  Linux it copies.
 - **Credentials:** runs need a Claude login (`/login`) or `ANTHROPIC_API_KEY`. A gateway set through
   `ANTHROPIC_AUTH_TOKEN` (for example in `~/.claude/settings.json`) cannot be passed to the runs, which then fail with
   "Not logged in"; the runs below used `env -i … claude --setting-sources project,local plugin eval …` to skip it.
-- `--keep-temp` keeps every run's directory under `/tmp` for `regrade.py`; `--clean` removes each once graded.
+- `--keep-temp` keeps every run's directory under `/tmp` for `regrade.py`. `--archive` writes a small, redacted record
+  of every run for committing (summary, one diff per run, the regrade log); `--clean` removes the kept directories.
 
 ## Results (2026-10-21)
 
-Suite at `8d6614b`, cases at `BASE` `59b2f94`, Claude Code 2.1.305, agent `claude-opus-5-5` (the default model the
-pilot ran on, pinned for the full run), no judge model (no `llm` grader). Two runs per case per arm, 16 runs, two at
-a time (`-j 2`). Cost is Claude Code's list-price estimate of the model calls.
+The second run of the suite, at `e84f541` (the hardened regrade), cases at `BASE` `59b2f94`, Claude Code 2.1.305,
+agent `claude-opus-5-5` (the default model the pilot ran on, pinned), no judge model. Two runs per case per arm, 16
+runs, two at a time (`-j 2`). Cost is Claude Code's list-price estimate. Every run is archived in
+[`runs/2026-10-21/`](runs/2026-10-21/): `summary.json`, one diff per run, `regrade.log`.
 
-| Case | WITH | W/OUT | Δ | Regrade WITH | Regrade W/OUT | Cost WITH | Cost W/OUT | Turns WITH | Turns W/OUT | Minutes WITH | Minutes W/OUT |
+| Case | Eval WITH | Eval W/OUT | Eval Δ | Regrade WITH | Regrade W/OUT | Cost WITH | Cost W/OUT | Turns WITH | Turns W/OUT | Minutes WITH | Minutes W/OUT |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `mcp-eval-delete-task` | 1.00 | 1.00 | 0.00 | 2/2 | 2/2 | $1.03 | $0.94 | 18, 18 | 18, 18 | 1.6, 1.3 | 1.4, 1.4 |
-| `notes-newest-endpoint` | 1.00 | 1.00 | 0.00 | 2/2 | 2/2 | $1.79 | $1.80 | 22, 29 | 32, 23 | 2.7, 3.2 | 4.4, 4.5 |
-| `notes-pinned-field` | 1.00 | 1.00 | 0.00 | 2/2 | 2/2 | $2.41 | $2.02 | 39, 29 | 25, 33 | 8.3, 5.9 | 4.0, 4.0 |
-| `notes-tenant-leak` | 1.00 | 1.00 | 0.00 | 2/2 | 2/2 | $1.20 | $1.14 | 21, 21 | 19, 24 | 1.9, 3.0 | 1.9, 2.3 |
-| **All** | **1.00** | **1.00** | **0.00** | **8/8** | **8/8** | **$6.43** | **$5.90** | 24.6 mean | 24.0 mean | 3.5 mean | 3.0 mean |
+| `mcp-eval-delete-task` | 1.00 | 1.00 | 0.00 | 2/2 | 2/2 | $1.00 | $0.92 | 18, 16 | 16, 15 | 2.0, 1.6 | 1.2, 1.1 |
+| `notes-newest-endpoint` | 1.00 | 0.88 | +0.13 | 2/2 | 2/2 | $1.83 | $1.92 | 24, 24 | 30, 30 | 3.8, 11.2 | 5.7, 5.6 |
+| `notes-pinned-field` | 1.00 | 1.00 | 0.00 | 2/2 | 1/2 | $1.97 | $2.19 | 37, 21 | 32, 34 | 11.5, 3.6 | 4.5, 3.5 |
+| `notes-tenant-leak` | 1.00 | 1.00 | 0.00 | 2/2 | 2/2 | $1.55 | $1.43 | 28, 22 | 22, 24 | 7.2, 2.3 | 5.2, 2.8 |
+| **All** | **1.00** | **0.97** | **+0.03** | **8/8 (1.00)** | **7/8 (0.88)** | **$6.35** | **$6.45** | 23.8 mean | 25.4 mean | 5.4 mean | 3.7 mean |
 
-The suite took 1,596 s and $12.33. Before it, the pilot (`notes-tenant-leak`, one run per arm) scored 1.00 in both
-arms for $0.53 and $0.58, in 2.4 and 1.9 minutes, and its regrade passed both. Everything spent on this issue, the
-pilot, the suite and a few one-command `claude-haiku-5-5` probes of the sandbox (under $0.02 together), comes to
-about $13.46.
+The suite took 2,203 s and $12.80. Both nonzero deltas come from one run each, and neither is the harness:
 
-**Δ is zero, and it means two things.**
+- **Eval, `notes-newest-endpoint` W/OUT run 1 (0.75):** a grader false negative. The run wrote
+  `` `/${encodeURIComponent(entity)}/${encodeURIComponent(recordId)}/notes/newest` ``, which the `web-caller` pattern
+  (`\$\{\w+\}`) did not match; the regrade passed it. The pattern now takes any `${…}`; the scores above are the
+  run's, under the old one.
+- **Regrade, `notes-pinned-field` W/OUT run 2:** a real failure. The change works, every hidden test passes, but it
+  added an integration test that `gofmt -l .` flags (`internal/handlers/note_integration_test.go`).
+- **The harness never ran.** No with-arm run dispatched `nexus-harness:builder` or `:verifier` or invoked a skill
+  (`agentsInvoked` and `skillsInvoked` are empty in all 16 rows of `summary.json`), and it did not run the gates
+  more: over the 8 runs of each arm, `gofmt` 9 times against 12, `go vet` 13 against 14, `go test` 36 against 36, the
+  orphan-endpoint gate 7 against 13 (counted from the transcripts before they were cleaned up; later archives carry
+  these counts as `gateCommands`). So the with-arm differs only by the plugin's descriptions in its context, and one
+  failed run in eight is inside the noise of two runs per case.
 
-- **A ceiling.** Without the harness, `claude-opus-5-5` already does all four tasks: every grader passes in every run
-  of both arms, and so does every real-command check, including the held-out tests. These cases cannot show what the
-  harness adds on this model. Every run of both arms also updated the tests its change broke, and the diffs are of
-  the same size.
-- **The harness never ran.** The with-arm loaded it (each run's init event lists `nexus-harness:builder`,
-  `nexus-harness:verifier`, `nexus-harness:slice` and `nexus-harness:verify-ui`), but none of the eight runs
-  dispatched an agent or invoked a skill: Claude did each task itself. What was measured is the harness sitting in
-  the tool list: $6.43 against $5.90 (+9%, inside the spread of eight runs) for the same score and about the same
-  number of turns.
+**What it means.** On these four tasks `claude-opus-5-5` does the work without the harness, and with the harness
+loaded it does not use it. Δ measures the harness's presence in the tool list, which is zero within the noise of 16
+runs. It does not show the harness is useless: the harness is written for the lights-on loop (a slice contract, the
+builder, a verifier with a fresh context, a human reading the evidence), which a single headless prompt never
+exercises. Cases that could move Δ, not tried here: a review case for the verifier (a diff with a planted bug to
+refute), a slice whose acceptance needs the non-admin rep, a run on a smaller model.
 
-So this does not show that the harness is useless; it shows that on one-prompt tasks this size, the plugin's
-descriptions do not make Claude use it, and the model does not need it. The harness is written for the
-lights-on loop (a slice contract, the builder, a verifier with a fresh context, a human reading the evidence), which
-a single headless prompt never exercises. Cases that could move Δ, not tried here: a review case for the verifier (a
-diff with a planted bug to refute), a slice whose acceptance needs the non-admin rep, or a run on a smaller model.
+**Earlier runs.** The pilot (`notes-tenant-leak`, one run per arm, `--max-cost-usd 3`) scored 1.00 in both arms for
+$0.53 and $0.58. The first full run (at `8d6614b`, $12.33) scored 1.00 in both arms on every case, and its regrade,
+the text-matching one that the verifier then broke with two comment lines, passed all 16. Its runs were not archived.
+Spent on this issue in all: the pilot $1.11, the two full runs $12.33 and $12.80, and a few one-command
+`claude-haiku-5-5` probes of the sandbox (under $0.02), about **$26.26**.
 
 Commands, verbatim (`env -i … --setting-sources project,local` for the credential reason above):
 
 ```bash
 # pilot
 env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" TERM=xterm-256color LANG=en_US.UTF-8 claude --setting-sources project,local plugin eval . --eval-dir evals/harness --case notes-tenant-leak --runs 1 --ablation with-without --scaffold --allow-tools Bash Edit Write --trust-plugin --no-publish --max-cost-usd 3 --keep-temp --output-dir evals/harness/results/pilot
-# suite
-env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" TERM=xterm-256color LANG=en_US.UTF-8 claude --setting-sources project,local plugin eval . --eval-dir evals/harness --ablation with-without --scaffold --allow-tools Bash Edit Write --trust-plugin --no-publish --keep-temp --runs 2 --max-cost-usd 30 --model claude-opus-5-5 -j 2 --output-dir evals/harness/results/full
-# real-command regrade of the 16 kept runs
-python3 evals/harness/regrade.py evals/harness/results/full/aggregate-result.json
+# suite (both full runs; the second wrote to results/full2)
+env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" TERM=xterm-256color LANG=en_US.UTF-8 claude --setting-sources project,local plugin eval . --eval-dir evals/harness --ablation with-without --scaffold --allow-tools Bash Edit Write --trust-plugin --no-publish --keep-temp --runs 2 --max-cost-usd 30 --model claude-opus-5-5 -j 2 --output-dir evals/harness/results/full2
+# regrade of the 16 kept runs, archived
+python3 evals/harness/regrade.py evals/harness/results/full2/aggregate-result.json --archive evals/harness/runs/2026-10-21 --clean
 ```
 
 The minutes come from two runs sharing the machine (`-j 2`), so they are rough.
