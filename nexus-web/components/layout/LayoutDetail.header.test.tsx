@@ -15,7 +15,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LayoutDetail } from "./LayoutDetail";
 import {
   ensureAuth, getLayout, listFields, getRecord, listEntities, deleteRecord, ApiError,
-  listUserDirectory, listRecordShares, listRecordNotes, listRecordApprovals,
+  listUserDirectory, listRecordShares, listRecordNotes, listRecordApprovals, listStartableProcesses,
   type EntityLayout, type FieldMeta, type ApiRecord, type EntityMeta,
 } from "@/lib/api";
 
@@ -42,6 +42,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     listRecordShares: vi.fn(),
     listRecordNotes: vi.fn(),
     listRecordApprovals: vi.fn(),
+    listStartableProcesses: vi.fn(),
   };
 });
 
@@ -84,6 +85,7 @@ beforeEach(() => {
   vi.mocked(deleteRecord).mockReset();
   vi.mocked(listUserDirectory).mockReset().mockResolvedValue([]);
   vi.mocked(listRecordShares).mockReset().mockResolvedValue([]);
+  vi.mocked(listStartableProcesses).mockReset().mockResolvedValue([]);
 });
 
 describe("LayoutDetail — SLDS record home", () => {
@@ -212,9 +214,10 @@ describe("LayoutDetail — SLDS record home", () => {
 
   // DAILY-QUEUE #223: a record seen ONLY through a share is read-only. Even with an entity-level edit
   // grant, the page says so on open and offers no Sửa / Xoá / Đổi chủ / Chia sẻ (each would be refused
-  // with 403 RECORD_SHARED_READ_ONLY); read-only actions stay.
-  it("a record shared with me (sharedWithMe) opens read-only: notice, no write actions", async () => {
-    vi.mocked(getRecord).mockResolvedValue({ ...RECORD, sharedWithMe: true });
+  // with 403 RECORD_SHARED_READ_ONLY); read-only actions stay. The server marks it canEdit:false (#43:
+  // the page decides from canEdit, sharedWithMe only picks the sentence).
+  it("a record shared with me outside my edit scope opens read-only: notice, no write actions", async () => {
+    vi.mocked(getRecord).mockResolvedValue({ ...RECORD, sharedWithMe: true, canEdit: false });
     renderDetail();
     expect(await screen.findByText("Hồ sơ này được chia sẻ để xem — bạn không sửa hay xoá được.")).toBeInTheDocument();
     expect(screen.getByTitle("In chứng từ này")).toBeInTheDocument();
@@ -247,7 +250,7 @@ describe("LayoutDetail — SLDS record home", () => {
   // DAILY-QUEUE #251: the Trao đổi / Tệp / Duyệt tabs get the same flag, so their write controls are
   // gone too (the server would refuse each of them).
   it("a shared-with-me record: the Trao đổi, Tệp and Duyệt tabs offer no write control", async () => {
-    vi.mocked(getRecord).mockResolvedValue({ ...RECORD, sharedWithMe: true });
+    vi.mocked(getRecord).mockResolvedValue({ ...RECORD, sharedWithMe: true, canEdit: false });
     vi.mocked(listFields).mockResolvedValue([...FIELDS, { name: "docs", label: "Tài liệu", fieldType: "file" }]);
     vi.mocked(listRecordNotes).mockResolvedValue({ notes: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 1 } });
     vi.mocked(listRecordApprovals).mockResolvedValue([]);
@@ -265,6 +268,33 @@ describe("LayoutDetail — SLDS record home", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Duyệt" }));
     await screen.findByText("Chưa gửi duyệt");
     expect(screen.queryByRole("button", { name: "Gửi duyệt" })).toBeNull();
+  });
+
+  // #43: role view=own / edit=team, a TEAM record that is also shared with me. GET says sharedWithMe
+  // (my view scope reaches it only through the share) but no canEdit:false (my edit scope reaches it;
+  // PUT answers 200). A share grants a read and takes nothing away, so this is an editable record: Sửa,
+  // no "shared for viewing" notice, upload and "Gửi duyệt" offered. Only Trao đổi stays read-only — a
+  // note's floor is the VIEW scope without the share (specs/060 #349), and the server refuses it.
+  it("a shared record my edit scope reaches (sharedWithMe, no canEdit:false) stays editable", async () => {
+    vi.mocked(getRecord).mockResolvedValue({ ...RECORD, sharedWithMe: true });
+    vi.mocked(listFields).mockResolvedValue([...FIELDS, { name: "docs", label: "Tài liệu", fieldType: "file" }]);
+    vi.mocked(listRecordNotes).mockResolvedValue({ notes: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 1 } });
+    vi.mocked(listRecordApprovals).mockResolvedValue([]);
+    const { container } = renderDetail();
+    expect(await screen.findByRole("button", { name: "Sửa" })).toBeInTheDocument();
+    expect(screen.queryByText("Hồ sơ này được chia sẻ để xem — bạn không sửa hay xoá được.")).toBeNull();
+    expect(screen.queryByText("Hồ sơ này thuộc người khác — bạn xem được nhưng không sửa được.")).toBeNull();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Tệp" }));
+    await screen.findByText(/Tài liệu/);
+    expect(container.querySelector('input[type="file"]')).not.toBeNull();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Duyệt" }));
+    expect(await screen.findByRole("button", { name: "Gửi duyệt" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Trao đổi" }));
+    await screen.findByText("Chưa có trao đổi nào");
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 });
 

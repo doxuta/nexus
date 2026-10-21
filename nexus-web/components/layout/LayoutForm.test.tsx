@@ -151,12 +151,26 @@ describe("LayoutForm — RecordFormPage (SLDS)", () => {
 
   // specs/051 · DAILY-QUEUE #223/#35: a record seen only through a share is read-only. Reaching its edit
   // form (a pasted /edit link) says so up front; a save the server refuses shows the refusal's sentence.
-  it("share-only record: the edit form says it is read-only on open", async () => {
-    seam.getRecord.mockResolvedValue({ id: "opp-1", version: 3, data: { name: "Hợp đồng A", note: "" }, sharedWithMe: true });
+  it("share-only record (canEdit:false): the edit form says it is read-only on open, Save off", async () => {
+    seam.getRecord.mockResolvedValue({ id: "opp-1", version: 3, data: { name: "Hợp đồng A", note: "" }, sharedWithMe: true, canEdit: false });
     render(<LayoutForm entity="crm_opportunities" recordId="opp-1" />);
     const note = (await screen.findByText("Hồ sơ này được chia sẻ để xem — bạn không sửa hay xoá được."))
       .closest(".slds-scoped-notification");
     expect(note).toHaveClass("slds-scoped-notification_light"); // RecordFormPage's info tone
+    expect(within(footer()).getByRole("button", { name: "Lưu thay đổi" })).toBeDisabled();
+  });
+
+  // #43: view=own / edit=team on a shared team record — sharedWithMe, but the edit scope reaches it
+  // (no canEdit:false) and PUT answers 200. A share takes nothing away: an ordinary edit form.
+  it("shared record my edit scope reaches (no canEdit:false): no read-only notice, Lưu saves", async () => {
+    seam.getRecord.mockResolvedValue({ id: "opp-1", version: 3, data: { name: "Hợp đồng A", note: "" }, sharedWithMe: true });
+    render(<LayoutForm entity="crm_opportunities" recordId="opp-1" />);
+    await screen.findByRole("textbox", { name: /Tên cơ hội/ });
+    expect(screen.queryByText("Hồ sơ này được chia sẻ để xem — bạn không sửa hay xoá được.")).toBeNull();
+    const save = within(footer()).getByRole("button", { name: "Lưu thay đổi" });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => expect(seam.updateRecord).toHaveBeenCalled());
   });
 
   // DAILY-QUEUE #334: edit=own on a colleague's record (canEdit:false) — a pasted /edit link says so up front.

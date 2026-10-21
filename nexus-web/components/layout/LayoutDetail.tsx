@@ -12,11 +12,11 @@
 //   • Actions: Sửa / Nhân bản / Xoá follow the caller's grants; In and Đổi chủ are always there
 //     (print is read-only; owner change is authorized server-side with a real message);
 //     Chia sẻ (specs/051) for an editor; QR thanh toán only when the tenant is configured and the
-//     entity has a money field. A record the caller sees ONLY through a share (record.sharedWithMe)
-//     is read-only: a notice says so and Sửa / Xoá / Đổi chủ / Chia sẻ are not offered. Likewise a
-//     record outside the caller's EDIT scope (record.canEdit === false, e.g. edit=own on a colleague's
-//     lead) hides Sửa / Chia sẻ and says why — the entity-level grant alone would offer a save the server
-//     refuses with 403 FORBIDDEN (#18).
+//     entity has a money field. Whether THIS record takes a write is the server's per-record canEdit
+//     (#43), not how the record reached me: canEdit === false hides Sửa / Đổi chủ / Chia sẻ and says
+//     why — "shared for viewing" when it came only through a share (then Xoá goes too), "belongs to
+//     someone else" otherwise (e.g. edit=own on a colleague's lead; the server answers 403, #18). A
+//     shared record my edit scope reaches anyway (view=own, edit=team) stays editable.
 //     Chia sẻ opens ./detail/ShareDialog.
 //   • Tabs (one mounted at a time, so a tab's requests fire only when it is opened):
 //     Tổng quan · Trao đổi · Quan hệ · Tệp · Lịch sử · Duyệt — each lives in ./detail/*.
@@ -412,14 +412,16 @@ export function LayoutDetail({ entity, recordId, onEdit, onClone, onDeleted, tra
     ...(ownerLabel ? [{ label: t("page.record.header.owner"), value: ownerLabel }] : []),
   ];
 
-  // specs/051 FR-009: seen only through a share ⇒ read-only, whatever the entity-level grants say —
-  // every write action would come back 403 RECORD_SHARED_READ_ONLY.
-  const sharedReadOnly = !!record.sharedWithMe;
-  // DAILY-QUEUE #334: the entity-level grant (mayEdit) says nothing about THIS record — a rep with
-  // edit=own sees a colleague's lead (view=all) and the save would be refused 403 FORBIDDEN (#18). The server
-  // says so per record.
-  const outOfEditScope = record.canEdit === false && !sharedReadOnly;
-  const canWrite = mayEdit && !sharedReadOnly && !outOfEditScope;
+  // #43: the entity-level grant (mayEdit) says nothing about THIS record; the server's canEdit does
+  // (DAILY-QUEUE #334) — false when my edit scope misses it, also for a share-only record (specs/051:
+  // a share is read-only). sharedWithMe alone decides nothing: a share takes no edit right away
+  // (view=own, edit=team on a shared team record → canEdit absent, the save answers 200).
+  const readOnly = record.canEdit === false;
+  // Which notice explains it: seen only through a share (403 RECORD_SHARED_READ_ONLY on every write)…
+  const sharedReadOnly = readOnly && !!record.sharedWithMe;
+  // …or a record that is someone else's (403 FORBIDDEN, #18).
+  const outOfEditScope = readOnly && !sharedReadOnly;
+  const canWrite = mayEdit && !readOnly;
 
   const actions: PageAction[] = [
     ...(onEdit && canWrite ? [{ label: t("page.record.action.edit"), onSelect: onEdit }] : []),
@@ -436,7 +438,7 @@ export function LayoutDetail({ entity, recordId, onEdit, onClone, onDeleted, tra
     // Đổi chủ — gone when the record is share-only or outside my edit scope (SetOwner needs edit=all or
     // admin, so either case is a certain 403); otherwise authorization stays server-side and a 403 shows
     // its message in the dialog.
-    ...(!sharedReadOnly && !outOfEditScope
+    ...(!readOnly
       ? [{ label: t("page.record.action.owner"), title: t("page.record.action.ownerTitle"), onSelect: () => setOwnerOpen(true) }]
       : []),
     // Chia sẻ — whoever may edit the record may share it (Q4a); the server re-checks the edit scope.
@@ -460,11 +462,14 @@ export function LayoutDetail({ entity, recordId, onEdit, onClone, onDeleted, tra
         tech={isAdminUser ? { entity, recordId } : undefined}
       />
     ),
-    notes: () => <NotesTab entity={entity} recordId={recordId} readOnly={sharedReadOnly} />,
+    // A note's floor is the VIEW scope without the share (specs/060 #349), not the edit scope: a share-only
+    // reader may not note, a colleague's record (view=all, edit=own) may be noted.
+    notes: () => <NotesTab entity={entity} recordId={recordId} readOnly={!!record.sharedWithMe} />,
     related: () => <RelatedTab entity={entity} recordId={recordId} allFields={allFields} />,
-    files: () => <FilesTab entity={entity} recordId={recordId} record={record} allFields={allFields} readOnly={sharedReadOnly} />,
+    // Upload and "Gửi duyệt" are edit-gated on the server, so they follow canEdit like Sửa.
+    files: () => <FilesTab entity={entity} recordId={recordId} record={record} allFields={allFields} readOnly={readOnly} />,
     history: () => <HistoryTab entity={entity} recordId={recordId} allFields={allFields} />,
-    approvals: () => <ApprovalsTab entity={entity} recordId={recordId} readOnly={sharedReadOnly} />,
+    approvals: () => <ApprovalsTab entity={entity} recordId={recordId} readOnly={readOnly} />,
   };
   const TAB_LABELS: Record<TabId, string> = {
     overview: t("page.record.tab.overview"),
