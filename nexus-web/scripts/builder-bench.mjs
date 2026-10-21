@@ -359,10 +359,11 @@ async function smoke(nx, rep, c, tables, newApps) {
 
 // ── what the attempt cost ──
 function ledger() {
-  return sql("SELECT feature, COALESCE(prompt_tokens,0), COALESCE(output_tokens,0), tool_calls, outcome, COALESCE(latency_ms,0) FROM sys_ai_runs ORDER BY created_at, id")
+  // prompt_tokens includes the cached input; the cache columns say how much of it was read from and written to the cache.
+  return sql("SELECT feature, COALESCE(prompt_tokens,0), COALESCE(output_tokens,0), COALESCE(cache_read_tokens,0), COALESCE(cache_write_tokens,0), tool_calls, outcome, COALESCE(latency_ms,0) FROM sys_ai_runs ORDER BY created_at, id")
     .split("\n").filter(Boolean).map((l) => {
-      const [feature, p, o, calls, outcome, ms] = l.split("\t");
-      return { feature, promptTokens: +p, outputTokens: +o, toolCalls: +calls, outcome, latencyMs: +ms };
+      const [feature, p, o, cr, cw, calls, outcome, ms] = l.split("\t");
+      return { feature, promptTokens: +p, outputTokens: +o, cacheReadTokens: +cr, cacheWriteTokens: +cw, toolCalls: +calls, outcome, latencyMs: +ms };
     });
 }
 function transcript(file) {

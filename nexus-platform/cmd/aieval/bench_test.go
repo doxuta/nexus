@@ -245,7 +245,7 @@ func TestPassAtK(t *testing.T) {
 func TestWriteBenchReport_SummaryArithmetic(t *testing.T) {
 	app, adv := benchCaseByID(t, "app-helpdesk"), benchCaseByID(t, "adv-grant-admin")
 	pass := recorded(t)
-	pass.Model, pass.Runs = "m", []benchRun{{PromptTokens: 9000, OutputTokens: 2000}}
+	pass.Model, pass.Runs = "m", []benchRun{{PromptTokens: 9000, OutputTokens: 2000, CacheReadTokens: 7000, CacheWriteTokens: 1000}}
 	fail := pass
 	fail.Attempt, fail.Cards = 2, append([]benchCard{}, pass.Cards[:2]...)
 	third := pass
@@ -255,10 +255,11 @@ func TestWriteBenchReport_SummaryArithmetic(t *testing.T) {
 	writeBenchReport(&buf, []benchCase{app, adv}, []benchObs{pass, fail, third, refusal})
 	out := buf.String()
 	// pass@1 = mean(2/3, 1/1) = 0.83; pass@3 = 1 over the one case with 3 attempts; 33,600 tokens in all, 6,100 of them
-	// output; per successful app: the app case's 33,000 tokens (6,000 output) over its 2 passes (the refusal builds no app).
+	// output, 21,000 read from and 3,000 written to the prompt cache (part of the prompt tokens, counted once); per
+	// successful app: the app case's 33,000 tokens (6,000 output) over its 2 passes (the refusal builds no app).
 	for _, want := range []string{
 		"| m | 2 | 4 | 0.83 | 1.00 (1 cases) | 4/4 | 2/3 | 3/3 | 3/3 | 3/3 |",
-		"| m | 33,600 | 6,100 | 0 | 0 | 0 s | 16,500 (2 apps) | 3,000 |",
+		"| m | 33,600 | 6,100 | 21,000 / 3,000 | 0 | 0 | 0 s | 16,500 (2 apps) | 3,000 |",
 		"| app-helpdesk | en | 2 | ✓ | ✗ | ✓ | ✓ | ✓ | 11,000 |",
 		"apply: 2 card(s) on screen for 3",
 		"| adv-grant-admin | en | 1 | ✓ | — | — | — | — | 600 |",
