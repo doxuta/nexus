@@ -393,9 +393,10 @@ export interface AiUsage {
 }
 
 // outcome: "ok" (assistant replied / proposed) | "max_steps" (tool-loop hit AI_MAX_STEPS, draft may
-// be partial — badge "đề xuất chưa hoàn tất, hỏi tiếp"). Kept as string so an unknown future value
+// be partial — badge "đề xuất chưa hoàn tất, hỏi tiếp") | "refused" (the model declined, reply empty — the
+// panel says so instead of showing nothing). Kept as string so an unknown future value
 // degrades gracefully instead of type-erroring.
-export type AiOutcome = "ok" | "max_steps" | (string & {});
+export type AiOutcome = "ok" | "max_steps" | "refused" | (string & {});
 
 export interface AiChatResult {
   // sessionId is ALWAYS present in the response — for a new thread (request sent no sessionId) it is

@@ -375,8 +375,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       askSession.current = res.sessionId; // keep the thread for follow-ups in this panel
       // A max_steps turn (or an empty reply) means the tool loop hit its bound without a final
       // answer — show an honest "narrow it down" bubble instead of a blank one (reviewer MED-1).
+      // A refused turn (the model declined) says exactly that instead.
       const reply = res.reply?.trim();
-      const content = reply && res.outcome !== "max_steps"
+      const content = res.outcome === "refused" ? t("studio.assistant.refused") : reply && res.outcome !== "max_steps"
         ? reply
         : "Tôi chưa trả lời xong câu này — truy vấn quá phức tạp hoặc quá rộng. Thử hỏi hẹp hơn (nêu rõ đối tượng và điều kiện).";
       // drafts ride along even on a max_steps turn — they were validated before the loop stopped.

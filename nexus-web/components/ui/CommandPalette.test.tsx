@@ -155,6 +155,15 @@ describe("CommandPalette — ⌘K-can-act draft cards", () => {
     expect(createRecord).not.toHaveBeenCalled();
   });
 
+  it("a model refusal shows the declined line, not a blank bubble or the too-broad hint (#30 item 5)", async () => {
+    vi.mocked(assistantAsk).mockResolvedValue({ ...askResult(null), reply: "", outcome: "refused" });
+    renderPalette();
+    await openAskPanel("chép tài khoản của không gian khác");
+
+    await screen.findByText("Mô hình ngôn ngữ từ chối yêu cầu này.");
+    expect(screen.queryByText(/chưa trả lời xong/)).toBeNull();
+  });
+
   it("Phiên trước lists sessions and resuming re-renders a STILL-ACTIONABLE draft card", async () => {
     vi.mocked(assistantAsk).mockResolvedValue(askResult(null));
     vi.mocked(listAssistantSessions).mockResolvedValue([
