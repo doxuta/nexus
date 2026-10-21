@@ -54,12 +54,20 @@ class RepBook(unittest.TestCase):
         # A table missing here is a table the rep opens empty on a fresh demo.
         self.assertEqual(set(seed.rep_book(tenant())), set(seed.BOOK))
 
+    def test_a_complete_book_has_no_gap(self):
+        rows = tenant()
+        self.assertEqual(seed.book_gaps(rows, seed.rep_book(rows)), [])
+
     def test_without_the_account_the_book_is_empty_so_the_seed_fails(self):
         rows = tenant()
         rows["crm_accounts"] = [row("a2", name="Acme Corp")]
-        book = seed.rep_book(rows)
-        self.assertEqual([e for e in seed.BOOK if not book[e]],
+        self.assertEqual(seed.book_gaps(rows, seed.rep_book(rows)),
                          [e for e in seed.BOOK if e != "crm_leads"])
+
+    def test_a_renamed_lead_fails_the_seed_though_its_table_is_not_empty(self):
+        rows = tenant()
+        rows["crm_leads"][1] = row("d2", full_name="Frank N.")
+        self.assertEqual(seed.book_gaps(rows, seed.rep_book(rows)), [f"lead {seed.REP_LEADS[1]}"])
 
 
 if __name__ == "__main__":

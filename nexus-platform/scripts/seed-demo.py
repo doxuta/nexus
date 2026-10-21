@@ -93,6 +93,12 @@ def rep_book(rows):
     return book
 
 
+def book_gaps(rows, book):
+    """What the book misses — a table with no row, a named lead not found. The seed fails on any of them."""
+    leads = {(r.get("data") or {}).get("full_name") for r in rows["crm_leads"] if r["id"] in book["crm_leads"]}
+    return [e for e in BOOK if not book.get(e)] + [f"lead {n}" for n in REP_LEADS if n not in leads]
+
+
 def hand_over_book(base, adm, rep_id):
     rows = {}
     for e in BOOK:
@@ -101,9 +107,9 @@ def hand_over_book(base, adm, rep_id):
             fail(f"list {e}: {code} {body.get('code', '')}")
         rows[e] = body.get("data") or []
     book = rep_book(rows)
-    empty = [e for e in BOOK if not book[e]]
-    if empty:
-        fail(f"the rep's book ({REP_ACCOUNT}, {', '.join(REP_LEADS)}) has no rows in {', '.join(empty)}"
+    gaps = book_gaps(rows, book)
+    if gaps:
+        fail(f"the rep's book ({REP_ACCOUNT}, {', '.join(REP_LEADS)}) misses {', '.join(gaps)}"
              " — did the CRM pack's sample data change?")
     owner = {r["id"]: r.get("ownerId") for e in BOOK for r in rows[e]}
     moved = 0
@@ -115,8 +121,8 @@ def hand_over_book(base, adm, rep_id):
             if code != 200:
                 fail(f"hand {e}/{rid} to the rep: {code} {body.get('code', '')} {body.get('error', '')}")
             moved += 1
-    print(f"seed-demo: the rep owns {sum(map(len, book.values()))} sample records ({REP_ACCOUNT} and its records,"
-          f" {len(REP_LEADS)} leads; {moved} handed over now)")
+    print(f"seed-demo: the rep owns {sum(map(len, book.values()))} sample records"
+          f" ({', '.join(f'{e} {len(book[e])}' for e in BOOK)}; {moved} handed over now)")
 
 
 def main():
