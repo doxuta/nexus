@@ -13,7 +13,7 @@ produced, or run it in a container.
 
 --archive DIR writes what each run left, small and redacted, for committing: summary.json (score, graders, turns,
 cost, tool calls, which plugin agents and skills were invoked, how often it ran each gate, the regrade checks),
-<case>/<arm>-<n>.diff (the workspace against its scaffold) and regrade.log. --clean removes each kept run directory
+<case>/<arm>-<n>.diff (the workspace against its scaffold) and regrade.txt. --clean removes each kept run directory
 once it is graded.
 Standard library only.
 """
@@ -166,7 +166,7 @@ def fmt(x):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("result", help="aggregate-result.json (or the --json file) of a --keep-temp run")
-    ap.add_argument("--archive", help="write summary.json, one diff per run and regrade.log here")
+    ap.add_argument("--archive", help="write summary.json, one diff per run and regrade.txt here")
     ap.add_argument("--clean", action="store_true", help="remove each kept run directory once graded")
     a = ap.parse_args()
     with open(a.result) as f:
@@ -221,7 +221,7 @@ def main():
                    "model": result["suite"].get("modelOverride"), "runs": out}
         with open(os.path.join(a.archive, "summary.json"), "w") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False)
-        with open(os.path.join(a.archive, "regrade.log"), "w") as f:
+        with open(os.path.join(a.archive, "regrade.txt"), "w") as f:
             f.write("\n".join(log) + "\n")
 
 

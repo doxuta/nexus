@@ -84,7 +84,7 @@ python3 evals/harness/regrade.py evals/harness/results/<name>/aggregate-result.j
 The second run of the suite, at `e84f541` (the hardened regrade), cases at `BASE` `59b2f94`, Claude Code 2.1.305,
 agent `claude-opus-5-5` (the default model the pilot ran on, pinned), no judge model. Two runs per case per arm, 16
 runs, two at a time (`-j 2`). Cost is Claude Code's list-price estimate. Every run is archived in
-[`runs/2026-10-21/`](runs/2026-10-21/): `summary.json`, one diff per run, `regrade.log`.
+[`runs/2026-10-21/`](runs/2026-10-21/): `summary.json`, one diff per run, `regrade.txt`.
 
 | Case | Eval WITH | Eval W/OUT | Eval Δ | Regrade WITH | Regrade W/OUT | Cost WITH | Cost W/OUT | Turns WITH | Turns W/OUT | Minutes WITH | Minutes W/OUT |
 |---|---|---|---|---|---|---|---|---|---|---|---|

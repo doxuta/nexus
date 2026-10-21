@@ -1,0 +1,97 @@
+mcp-eval-delete-task with run 1: regrade pass (eval score 1)
+   PASS python3 evals/mcp/test_run.py (BASE's tests on the agent's run.py)
+   PASS task 6 grades the real deletion draft (hidden)
+mcp-eval-delete-task with run 2: regrade pass (eval score 1)
+   PASS python3 evals/mcp/test_run.py (BASE's tests on the agent's run.py)
+   PASS task 6 grades the real deletion draft (hidden)
+mcp-eval-delete-task without run 1: regrade pass (eval score 1)
+   PASS python3 evals/mcp/test_run.py (BASE's tests on the agent's run.py)
+   PASS task 6 grades the real deletion draft (hidden)
+mcp-eval-delete-task without run 2: regrade pass (eval score 1)
+   PASS python3 evals/mcp/test_run.py (BASE's tests on the agent's run.py)
+   PASS task 6 grades the real deletion draft (hidden)
+notes-newest-endpoint with run 1: regrade pass (eval score 1)
+   PASS gofmt -l . is empty
+   PASS go vet ./...
+   PASS go build ./...
+   PASS check-orphan-endpoints.py --strict (the script from BASE)
+   PASS nexus-web/lib/api.ts exports a function that GETs /notes/newest (comments ignored)
+   PASS go test ./internal/handlers/ ./internal/notes/ (hidden: null with no notes, else the newest)
+notes-newest-endpoint with run 2: regrade pass (eval score 1)
+   PASS gofmt -l . is empty
+   PASS go vet ./...
+   PASS go build ./...
+   PASS check-orphan-endpoints.py --strict (the script from BASE)
+   PASS nexus-web/lib/api.ts exports a function that GETs /notes/newest (comments ignored)
+   PASS go test ./internal/handlers/ ./internal/notes/ (hidden: null with no notes, else the newest)
+notes-newest-endpoint without run 1: regrade pass (eval score 0.75)
+   PASS gofmt -l . is empty
+   PASS go vet ./...
+   PASS go build ./...
+   PASS check-orphan-endpoints.py --strict (the script from BASE)
+   PASS nexus-web/lib/api.ts exports a function that GETs /notes/newest (comments ignored)
+   PASS go test ./internal/handlers/ ./internal/notes/ (hidden: null with no notes, else the newest)
+notes-newest-endpoint without run 2: regrade pass (eval score 1)
+   PASS gofmt -l . is empty
+   PASS go vet ./...
+   PASS go build ./...
+   PASS check-orphan-endpoints.py --strict (the script from BASE)
+   PASS nexus-web/lib/api.ts exports a function that GETs /notes/newest (comments ignored)
+   PASS go test ./internal/handlers/ ./internal/notes/ (hidden: null with no notes, else the newest)
+notes-pinned-field with run 1: regrade pass (eval score 1)
+   PASS gofmt -l . is empty
+   PASS go vet ./...
+   PASS go build ./...
+   PASS go test ./internal/notes/ (hidden: pinned is read, pinned notes first)
+   PASS go test ./internal/handlers/ (hidden: the notes list returns pinned)
+   PASS one new migration, 000100, up and down
+   PASS up adds pinned to sys_record_notes, off by default (comments ignored)
+   PASS down drops pinned (comments ignored)
+notes-pinned-field with run 2: regrade pass (eval score 1)
+   PASS gofmt -l . is empty
+   PASS go vet ./...
+   PASS go build ./...
+   PASS go test ./internal/notes/ (hidden: pinned is read, pinned notes first)
+   PASS go test ./internal/handlers/ (hidden: the notes list returns pinned)
+   PASS one new migration, 000100, up and down
+   PASS up adds pinned to sys_record_notes, off by default (comments ignored)
+   PASS down drops pinned (comments ignored)
+notes-pinned-field without run 1: regrade pass (eval score 1)
+   PASS gofmt -l . is empty
+   PASS go vet ./...
+   PASS go build ./...
+   PASS go test ./internal/notes/ (hidden: pinned is read, pinned notes first)
+   PASS go test ./internal/handlers/ (hidden: the notes list returns pinned)
+   PASS one new migration, 000100, up and down
+   PASS up adds pinned to sys_record_notes, off by default (comments ignored)
+   PASS down drops pinned (comments ignored)
+notes-pinned-field without run 2: regrade FAIL (eval score 1)
+   FAIL gofmt -l . is empty
+        internal/handlers/note_integration_test.go
+   PASS go vet ./...
+   PASS go build ./...
+   PASS go test ./internal/notes/ (hidden: pinned is read, pinned notes first)
+   PASS go test ./internal/handlers/ (hidden: the notes list returns pinned)
+   PASS one new migration, 000100, up and down
+   PASS up adds pinned to sys_record_notes, off by default (comments ignored)
+   PASS down drops pinned (comments ignored)
+notes-tenant-leak with run 1: regrade pass (eval score 1)
+   PASS gofmt -l . is empty
+   PASS go vet ./...
+   PASS go build ./...
+   PASS go test ./internal/notes/ (hidden: WHERE tenant_id = ? AND …, no OR, tenant bound first)
+notes-tenant-leak with run 2: regrade pass (eval score 1)
+   PASS gofmt -l . is empty
+   PASS go vet ./...
+   PASS go build ./...
+   PASS go test ./internal/notes/ (hidden: WHERE tenant_id = ? AND …, no OR, tenant bound first)
+notes-tenant-leak without run 1: regrade pass (eval score 1)
+   PASS gofmt -l . is empty
+   PASS go vet ./...
+   PASS go build ./...
+   PASS go test ./internal/notes/ (hidden: WHERE tenant_id = ? AND …, no OR, tenant bound first)
+notes-tenant-leak without run 2: regrade pass (eval score 1)
+   PASS gofmt -l . is empty
+   PASS go vet ./...
+   PASS go build ./...
+   PASS go test ./internal/notes/ (hidden: WHERE tenant_id = ? AND …, no OR, tenant bound first)
