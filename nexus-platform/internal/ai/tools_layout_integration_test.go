@@ -25,6 +25,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 
+	"nexus/platform/internal/dynrepo"
 	"nexus/platform/internal/metadata"
 	"nexus/platform/internal/services"
 )
@@ -208,5 +209,80 @@ func TestToolsLayout_IT_GetLayout_TenantIsolation(t *testing.T) {
 	}
 	if strings.Contains(resB, `"isCustom":true`) {
 		t.Fatalf("tenant B leaked tenant A's layout rows (want no custom view): %s", resB)
+	}
+}
+
+// #30 items 1 and 2, apply side, on the REAL services: a table, an index and the layouts that lean
+// on them, all proposed in ONE draft. The layouts are refused by SaveLayout while what they lean on is
+// still a draft (the apply path re-validates against the real schema), and accepted VERBATIM once the
+// entity / the field edit is applied first — the FE's apply order (entities first, the rest in draft
+// order).
+func TestToolsLayout_IT_SameDraftTableAndIndex_ApplyInOrder(t *testing.T) {
+	repo, gdb := newRelITReader(t)
+	sx := connectAI(t)
+	ctx := context.Background()
+	const tenant = "aiaiaiai-l30l-4444-8888-tenant000030"
+	const name = "it_ai_l30_cands"
+	clean := func() {
+		gdb.Exec(`DELETE FROM sys_layouts WHERE tenant_id = ?`, tenant)
+		gdb.Exec(`DELETE FROM sys_fields WHERE tenant_id = ?`, tenant)
+		gdb.Exec(`DELETE FROM sys_entities WHERE tenant_id = ?`, tenant)
+		gdb.Exec(`DROP TABLE IF EXISTS obj_` + name)
+	}
+	clean()
+	t.Cleanup(clean)
+
+	layouts := services.NewLayoutService(repo, metadata.NewLayoutRepository(gdb), nil)
+	e := &toolExecutor{reader: repo, tenantID: tenant, docs: &DocReaders{Layouts: layouts}}
+	mustBuffer(t, e, "propose_entity", `{"name":"`+name+`","label":"Ứng viên","fields":[
+		{"name":"full_name","label":"Họ tên","fieldType":"text","required":true},
+		{"name":"email","label":"Email","fieldType":"email"},
+		{"name":"code","label":"Mã","fieldType":"text","options":{"maxLength":40}}]}`)
+	mustBuffer(t, e, "propose_layout", `{"entity":"`+name+`","viewType":"edit","layoutJson":{
+		"version":1,"sections":[{"columns":2,"fields":["full_name","email","code"]}]}}`)
+	edit := e.draft[1].Layout
+
+	// Apply out of order: the layout of a table that does not exist yet is refused.
+	if _, err := layouts.SaveLayout(ctx, tenant, services.SaveLayoutInput{EntityName: edit.Entity, ViewType: edit.ViewType, LayoutJSON: edit.LayoutJSON}); err == nil {
+		t.Fatal("SaveLayout accepted a layout for a table that is still only a draft")
+	}
+
+	// Apply in order: the entity, then the layout verbatim.
+	d := e.draft[0].Entity
+	in := services.CreateEntityInput{Name: d.Name, Label: d.Label}
+	for _, f := range d.Fields {
+		in.Fields = append(in.Fields, services.FieldInput{Name: f.Name, Label: f.Label, FieldType: f.FieldType, IsRequired: f.Required, Options: f.Options})
+	}
+	if _, _, err := services.NewEntityService(dynrepo.New(sx), repo).CreateEntity(ctx, tenant, in); err != nil {
+		t.Fatalf("apply entity: %v", err)
+	}
+	if _, err := layouts.SaveLayout(ctx, tenant, services.SaveLayoutInput{EntityName: edit.Entity, ViewType: edit.ViewType, LayoutJSON: edit.LayoutJSON}); err != nil {
+		t.Fatalf("parity broken: SaveLayout refused the same-draft layout once its table exists: %v", err)
+	}
+
+	// Verifier round 1 of #39: the table is live now and its draft is still in the buffer (an MCP
+	// thread replays earlier proposals, applied ones included). A leading-space spelling must still
+	// resolve to the LIVE table: an update with a Before, never a create that overwrites it at Apply.
+	mustBuffer(t, e, "propose_layout", `{"entity":" `+name+`","viewType":"edit","layoutJson":{
+		"version":1,"sections":[{"columns":1,"fields":["full_name","email","code"]}]}}`)
+	if it := e.draft[len(e.draft)-1]; it.Layout.Entity != name || it.Change == nil || it.Change.Op != "update" || it.Change.Before == nil {
+		t.Fatalf("spaced name: layout card = %+v / %+v; want an update of the live %s with a Before", it.Layout, it.Change, name)
+	}
+
+	// Item 2: a list sorted by "code" leans on an index proposed in the same draft.
+	e.draft = nil
+	mustBuffer(t, e, "propose_edit_field", `{"entity":"`+name+`","field":"code","changes":{"options":{"maxLength":40,"indexed":true}}}`)
+	mustBuffer(t, e, "propose_layout", `{"entity":"`+name+`","viewType":"list","layoutJson":{
+		"version":1,"columns":[{"field":"full_name"},{"field":"code"}],"defaultSort":{"field":"code","order":"asc"}}}`)
+	list := e.draft[1].Layout
+	if _, err := layouts.SaveLayout(ctx, tenant, services.SaveLayoutInput{EntityName: list.Entity, ViewType: list.ViewType, LayoutJSON: list.LayoutJSON}); err == nil {
+		t.Fatal("SaveLayout accepted a sort on a field whose index is still only a draft")
+	}
+	ef := e.draft[0].EditField
+	if _, err := services.NewFieldService(dynrepo.New(sx), repo).EditField(ctx, tenant, services.EditFieldInput{FieldID: ef.FieldID, Options: ef.After.Options}); err != nil {
+		t.Fatalf("apply edit_field: %v", err)
+	}
+	if _, err := layouts.SaveLayout(ctx, tenant, services.SaveLayoutInput{EntityName: list.Entity, ViewType: list.ViewType, LayoutJSON: list.LayoutJSON}); err != nil {
+		t.Fatalf("parity broken: SaveLayout refused the list once its index exists: %v", err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -209,7 +210,7 @@ func toolDefinitionsBase() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "propose_layout",
-				Description: "Đề xuất BỐ CỤC (layout) cho MỘT view của entity ĐÃ TỒN TẠI. Chỉ đưa vào draft — KHÔNG lưu. Shape edit/detail: {version:1, sections:[{title?, columns:1-4, collapsed?, fields:[cell]}]} với cell = \"tên_field\" | {field, labelOverride?, required?, readonly?, fullWidth?, colspan?, helpText?, visibleWhen?} | {spacer:true}. visibleWhen = {field, op, value?}: CHỈ hiện ô khi trường điều khiển `field` (một ô KHÁC trong cùng bố cục, kiểu picklist/boolean/text/email/number/rating) thoả op ∈ eq|neq (value = một giá trị đúng kiểu, picklist phải thuộc danh sách) | in|notIn (value = mảng giá trị) | empty|notEmpty (không value) — vd {field:\"customer_type\", op:\"eq\", value:\"business\"}; KHÔNG đặt lên field bắt buộc, không vòng. Shape list: {version:1, columns:[{field, labelOverride?, width?}], defaultSort:{field: created_at|updated_at|id HOẶC field có index (unique/relation/user/indexed), order: asc|desc} (relation/user sắp theo mã nội bộ, KHÔNG theo nhãn hiển thị — ưu tiên field vô hướng có index), kanbanField?, calendarField?}. kanbanField = tên MỘT field kiểu picklist mà bảng Kanban chia cột theo; calendarField = tên MỘT field kiểu date/datetime mà màn Lịch trải theo. Bỏ trống cả hai nếu không chắc — app sẽ tự đoán; khai sai tên hoặc sai kiểu bị từ chối. Edit view PHẢI chứa ĐỦ mọi field bắt buộc; mỗi field xuất hiện tối đa một lần.",
+				Description: "Đề xuất BỐ CỤC (layout) cho MỘT view của entity ĐÃ TỒN TẠI hoặc vừa propose_entity TRONG CÙNG lượt (người duyệt Apply entity trước, bố cục sau). Chỉ đưa vào draft — KHÔNG lưu. Shape edit/detail: {version:1, sections:[{title?, columns:1-4, collapsed?, fields:[cell]}]} với cell = \"tên_field\" | {field, labelOverride?, required?, readonly?, fullWidth?, colspan?, helpText?, visibleWhen?} | {spacer:true}. visibleWhen = {field, op, value?}: CHỈ hiện ô khi trường điều khiển `field` (một ô KHÁC trong cùng bố cục, kiểu picklist/boolean/text/email/number/rating) thoả op ∈ eq|neq (value = một giá trị đúng kiểu, picklist phải thuộc danh sách) | in|notIn (value = mảng giá trị) | empty|notEmpty (không value) — vd {field:\"customer_type\", op:\"eq\", value:\"business\"}; KHÔNG đặt lên field bắt buộc, không vòng. Shape list: {version:1, columns:[{field, labelOverride?, width?}], defaultSort:{field: created_at|updated_at|id HOẶC field có index (unique/relation/user/indexed — kể cả indexed vừa đề xuất TRONG CÙNG lượt bằng propose_edit_field/propose_field/propose_entity), order: asc|desc} (relation/user sắp theo mã nội bộ, KHÔNG theo nhãn hiển thị — ưu tiên field vô hướng có index), kanbanField?, calendarField?}. kanbanField = tên MỘT field kiểu picklist mà bảng Kanban chia cột theo; calendarField = tên MỘT field kiểu date/datetime mà màn Lịch trải theo. Bỏ trống cả hai nếu không chắc — app sẽ tự đoán; khai sai tên hoặc sai kiểu bị từ chối. Edit view PHẢI chứa ĐỦ mọi field bắt buộc; mỗi field xuất hiện tối đa một lần.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -1284,16 +1285,19 @@ func (e *toolExecutor) listRoles(ctx context.Context) string {
 // omits a required field) for self-correction in-chat instead of failing at Apply. The parity
 // map, same order as SaveLayout:
 //  1. entity exists in THIS tenant — GetEntityByName (→ ENTITY_NOT_FOUND). reader is
-//     tenant-scoped: the model can never probe or target another tenant's entities.
-//  2. live fields — the same ListFields read SaveLayout performs before validating.
-//  3. ValidateLayoutConfig(viewType, layoutJson, liveFields) — every ../specs/041-layout-engine/spec.md §4.4 rule (strict viewType
+//     tenant-scoped: the model can never probe or target another tenant's entities. Not live →
+//     a table propose_entity'd in this draft (#30 item 1, see layoutFields).
+//  2. fields — the same ListFields read SaveLayout performs before validating, with this draft's
+//     pending field adds/edits laid over them (#30 item 2: an index proposed this turn counts).
+//  3. ValidateLayoutConfig(viewType, layoutJson, fields) — every ../specs/041-layout-engine/spec.md §4.4 rule (strict viewType
 //     enum, version, shape per view, field allowlist, duplicates, floor rule, required-omitted,
 //     bounds, unknown-key strict-reject).
 //
 // Unlike propose_entity/propose_relationship there is NO DB-dependent reject left for Apply:
-// SaveLayout is an upsert on (tenant, entity, view) — no duplicate conflict exists. The only
-// apply-time divergence is a concurrent metadata change between propose and Apply (e.g. a field
-// deleted in the meantime), which the apply path re-validates against.
+// SaveLayout is an upsert on (tenant, entity, view) — no duplicate conflict exists. The apply-time
+// divergences are a concurrent metadata change between propose and Apply (e.g. a field deleted in
+// the meantime) and a pending entity/field/edit this layout leans on that was not applied first;
+// the apply path re-validates against the real schema either way.
 //
 // The draft stores the CANONICAL resolved entity name (ent.Name, not the raw model input) so the
 // Apply POST body carries the exact stored name.
@@ -1307,29 +1311,96 @@ func (e *toolExecutor) proposeLayout(ctx context.Context, argsJSON string) strin
 		return toolErr("INVALID_ARGS: %v", err)
 	}
 
-	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, a.Entity)
-	if err != nil {
-		if errors.Is(err, metadata.ErrEntityNotFound) {
-			return toolErr("ENTITY_NOT_FOUND: entity %q không tồn tại trong tenant hiện tại — nếu nó mới nằm trong draft, người duyệt phải Apply entity đó trước", a.Entity)
-		}
-		return toolErr("PROPOSE_LAYOUT_FAILED: %v", err)
+	name, live, fields, errStr := e.layoutFields(ctx, a.Entity)
+	if errStr != "" {
+		return errStr
 	}
-	liveFields, err := e.reader.ListFields(ctx, e.tenantID, ent.ID)
-	if err != nil {
-		return toolErr("PROPOSE_LAYOUT_FAILED: %v", err)
-	}
-
-	if code, msg, ok := validationOf(services.ValidateLayoutConfig(a.ViewType, a.LayoutJSON, liveFields)); !ok {
+	if code, msg, ok := validationOf(services.ValidateLayoutConfig(a.ViewType, a.LayoutJSON, fields)); !ok {
 		return toolErr("%s: %s", code, msg)
 	}
 
-	dl := &DraftLayout{Entity: ent.Name, ViewType: a.ViewType, LayoutJSON: a.LayoutJSON}
-	change, errStr := e.layoutChange(ctx, dl)
+	dl := &DraftLayout{Entity: name, ViewType: a.ViewType, LayoutJSON: a.LayoutJSON}
+	change, errStr := e.layoutChange(ctx, dl, live)
 	if errStr != "" {
 		return errStr
 	}
 	e.draft = append(e.draft, DraftItem{Kind: "layout", Layout: dl, Change: change})
-	return toolOK(map[string]any{"buffered": fmt.Sprintf("layout %s cho %q", a.ViewType, ent.Name)})
+	return toolOK(map[string]any{"buffered": fmt.Sprintf("layout %s cho %q", a.ViewType, name)})
+}
+
+// layoutFields resolves propose_layout's table and the fields its layout is judged against, as they
+// will stand once this draft is applied (apply order: entities first, then the rest in draft order,
+// so every item buffered before the layout lands before it — #30 items 1 and 2):
+//   - the LIVE registry first: its fields, with this draft's propose_edit_field changes laid over
+//     them (an index proposed this turn counts for defaultSort). A live table always wins on a name:
+//     a draft entity of the same name (an older thread's proposal) is never read, so it can neither
+//     relabel nor reshape the table the card names (the PR #21 lesson);
+//   - else a table propose_entity'd in this draft: its drafted fields;
+//   - either way plus the fields propose_field adds to that table, when the name is still free.
+//
+// The result is a copy — the registry's own definitions are never mutated. SaveLayout re-validates
+// the layout against the real schema at Apply. live reports which branch resolved.
+func (e *toolExecutor) layoutFields(ctx context.Context, raw string) (string, bool, []metadata.FieldDefinition, string) {
+	var fields []metadata.FieldDefinition
+	name := canonicalEntityName(raw)
+	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, name)
+	live := err == nil
+	switch {
+	case live:
+		name = ent.Name
+		liveFields, lerr := e.reader.ListFields(ctx, e.tenantID, ent.ID)
+		if lerr != nil {
+			return "", false, nil, toolErr("PROPOSE_LAYOUT_FAILED: %v", lerr)
+		}
+		fields = slices.Clone(liveFields)
+	case !errors.Is(err, metadata.ErrEntityNotFound):
+		return "", false, nil, toolErr("PROPOSE_LAYOUT_FAILED: %v", err)
+	default:
+		d, ok := e.draftedEntities()[name]
+		if !ok {
+			return "", false, nil, toolErr("ENTITY_NOT_FOUND: entity %q không tồn tại và cũng chưa được propose_entity trong lượt này — propose_entity trước rồi propose_layout trong CÙNG lượt", raw)
+		}
+		for _, f := range d.Fields {
+			fields = append(fields, draftFieldDefinition(f.Name, f.Label, f.FieldType, f.Required, f.Options))
+		}
+	}
+
+	at := func(field string) int {
+		return slices.IndexFunc(fields, func(f metadata.FieldDefinition) bool { return f.Name == field })
+	}
+	for _, it := range e.draft {
+		switch {
+		case it.Kind == "field" && it.Field != nil && strings.ToLower(strings.TrimSpace(it.Field.Entity)) == name:
+			if at(it.Field.Name) < 0 { // an existing field wins; a duplicate add fails at Apply
+				fields = append(fields, draftFieldDefinition(it.Field.Name, it.Field.Label, it.Field.FieldType, it.Field.Required, it.Field.Options))
+			}
+		case live && it.Kind == "edit_field" && it.EditField != nil && it.EditField.Entity == name:
+			if i := at(it.EditField.Field); i >= 0 {
+				a := it.EditField.After
+				fields[i].Label, fields[i].IsRequired, fields[i].DefaultVal, fields[i].Description = a.Label, a.IsRequired, a.DefaultValue, a.Description
+				fields[i].Options = optionsJSON(a.Options)
+			}
+		}
+	}
+	return name, live, fields, ""
+}
+
+// draftFieldDefinition is a proposed field in the registry's shape, for validators that read one.
+func draftFieldDefinition(name, label, fieldType string, required bool, opts map[string]any) metadata.FieldDefinition {
+	return metadata.FieldDefinition{Name: name, Label: label, FieldType: fieldType, IsRequired: required, Options: optionsJSON(opts)}
+}
+
+// optionsJSON stores options as the registry does: a JSON object, NULL when unset.
+func optionsJSON(opts map[string]any) *string {
+	if opts == nil {
+		return nil
+	}
+	b, err := json.Marshal(opts)
+	if err != nil {
+		return nil
+	}
+	s := string(b)
+	return &s
 }
 
 // DraftRelationship is a proposed N-N relationship between two EXISTING entities (M5). It maps
@@ -2469,6 +2540,12 @@ func (e *toolExecutor) resolveEntityField(ctx context.Context, entity, field str
 // the tool runs the SAME exported function body the apply path runs.
 // ---------------------------------------------------------------------------------------------
 
+// canonicalEntityName is the ONE spelling a draft-aware tool looks a table up by, in the live
+// registry AND the draft buffer: trimmed and lowercase, as stored names are (ValidateCreateEntity →
+// SanitizeIdentifier). Probing the two with different spellings let " name" miss the live table and
+// fall to a stale draft of the same name (verifier round 1 of #39).
+func canonicalEntityName(raw string) string { return strings.ToLower(strings.TrimSpace(raw)) }
+
 // draftedEntities returns the entities already buffered as drafts THIS turn, keyed by their
 // canonical (lowercase — ValidateCreateEntity → SanitizeIdentifier) name. It is the ONE shared
 // scan behind every "entity exists OR was drafted this turn" tool rule
@@ -2489,14 +2566,14 @@ func (e *toolExecutor) draftedEntities() map[string]*DraftEntity {
 // the same-turn draft buffer (shape-only; apply order is entity first, so referencing it is
 // structurally sound). Returns ("", errJSON) when neither resolves.
 func (e *toolExecutor) resolveEntityLiveOrDrafted(ctx context.Context, raw string) (string, string) {
-	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, raw)
+	canonical := canonicalEntityName(raw)
+	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, canonical)
 	if err == nil {
 		return ent.Name, ""
 	}
 	if !errors.Is(err, metadata.ErrEntityNotFound) {
 		return "", toolErr("RESOLVE_ENTITY_FAILED: %v", err)
 	}
-	canonical := strings.ToLower(strings.TrimSpace(raw))
 	if _, ok := e.draftedEntities()[canonical]; ok {
 		return canonical, ""
 	}
