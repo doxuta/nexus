@@ -8,7 +8,8 @@ project a third person can use:
   2. creates the sales rep — a NON-admin user on the pack's crm_sales_rep role, so access control is visible
      (an admin bypasses every ACL, so "it works for me" proves nothing);
   3. puts the rep in the pack's sales team, so lead routing assigns leads to someone who can see them;
-  4. publishes the first version (baseline): from then on the builder's changes are drafts that the rep does
+  4. hands the rep a book of sample records (rep_book), so the rep's own-rows grants show data;
+  5. publishes the first version (baseline): from then on the builder's changes are drafts that the rep does
      not see until Publish.
 Idempotent: a second run finds everything in place and changes nothing. Standard library only.
 
@@ -24,6 +25,15 @@ import urllib.request
 
 PACK_ROLE = "crm_sales_rep"
 PACK_TEAM = "Đội Sales"
+
+# The rep's book: one account and everything filed under it, plus two open leads. The pack's sample rows belong to
+# the installer, and the rep's role sees only its own rows (view: owner, or team) on every CRM table but accounts and
+# products, so without a book the rep opened seven empty tables (#30 item 7). A share, not everything: the other
+# accounts' deals stay the builder's, so row-level access is still something you can see.
+REP_ACCOUNT = "Globex Inc"
+REP_LEADS = ("Eve Martinez", "Frank Nguyen")
+BOOK = ("crm_accounts", "crm_contacts", "crm_opportunities", "crm_activities", "crm_quotes", "crm_quote_lines",
+        "crm_contracts", "crm_leads")
 
 
 def req(base, method, path, token=None, body=None):
@@ -68,6 +78,45 @@ def login(base, tenant, email, password):
     if code != 200 or not token:
         fail(f"login {email} failed ({code} {body.get('code', '')})")
     return token
+
+
+def rep_book(rows):
+    """{entity: ids the rep should own}, from {entity: rows as GET /<entity> returns them}."""
+    def ids(entity, keep):
+        return {r["id"] for r in rows[entity] if keep(r.get("data") or {})}
+
+    book = {"crm_accounts": ids("crm_accounts", lambda d: d.get("name") == REP_ACCOUNT)}
+    for e in ("crm_contacts", "crm_opportunities", "crm_activities", "crm_quotes", "crm_contracts"):
+        book[e] = ids(e, lambda d: d.get("account") in book["crm_accounts"])
+    book["crm_quote_lines"] = ids("crm_quote_lines", lambda d: d.get("quote") in book["crm_quotes"])
+    book["crm_leads"] = ids("crm_leads", lambda d: d.get("full_name") in REP_LEADS)
+    return book
+
+
+def hand_over_book(base, adm, rep_id):
+    rows = {}
+    for e in BOOK:
+        code, body = req(base, "GET", f"/{e}?limit=100", adm)
+        if code != 200:
+            fail(f"list {e}: {code} {body.get('code', '')}")
+        rows[e] = body.get("data") or []
+    book = rep_book(rows)
+    empty = [e for e in BOOK if not book[e]]
+    if empty:
+        fail(f"the rep's book ({REP_ACCOUNT}, {', '.join(REP_LEADS)}) has no rows in {', '.join(empty)}"
+             " — did the CRM pack's sample data change?")
+    owner = {r["id"]: r.get("ownerId") for e in BOOK for r in rows[e]}
+    moved = 0
+    for e in BOOK:
+        for rid in sorted(book[e]):
+            if owner[rid] == rep_id:
+                continue  # a re-run after a failure: already the rep's, and no second assignment notice
+            code, body = req(base, "PUT", f"/{e}/{rid}/owner", adm, {"userId": rep_id})
+            if code != 200:
+                fail(f"hand {e}/{rid} to the rep: {code} {body.get('code', '')} {body.get('error', '')}")
+            moved += 1
+    print(f"seed-demo: the rep owns {sum(map(len, book.values()))} sample records ({REP_ACCOUNT} and its records,"
+          f" {len(REP_LEADS)} leads; {moved} handed over now)")
 
 
 def main():
@@ -121,12 +170,18 @@ def main():
             fail(f"add rep to {PACK_TEAM}: {code} {body.get('code', '')}")
 
     if not delivered:
+        hand_over_book(a.base, adm, rep["id"])
         code, body = req(a.base, "POST", "/admin/publish/baseline", adm, {"note": "Demo seed: first published version"})
         if code >= 300:
             fail(f"baseline: {code} {body.get('code', '')} {body.get('error', '')}")
         print("seed-demo: first version published (baseline) — builder changes are drafts from now on")
 
-    login(a.base, tenant, rep_email, rep_pass)  # the rep can sign in
+    rep_token = login(a.base, tenant, rep_email, rep_pass)  # the rep can sign in
+    if not delivered:
+        # The book is where the demo starts, not news: each hand-over left the rep an assignment notice, read them.
+        code, body = req(a.base, "POST", "/notifications/read-all", rep_token)
+        if code != 200:
+            fail(f"read the rep's assignment notices: {code} {body.get('code', '')}")
     print(f"seed-demo: ready · workspace '{tenant}' · builder {admin_email} · sales rep {rep_email}")
 
 
