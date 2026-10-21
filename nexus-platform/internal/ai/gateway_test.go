@@ -236,3 +236,37 @@ func TestGateway_Complete_ReportsCacheTokens(t *testing.T) {
 		t.Fatalf("usage = %+v; want %+v", resp.Usage, want)
 	}
 }
+
+// Accounting never fails a model answer: a usage field of the wrong type is read as not reported, and the
+// answer and every well-typed figure still come through (a decode error here used to turn the whole call
+// into a 502).
+func TestGateway_Complete_BadUsageNeverFailsTheAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name, usage string
+		want        Usage
+	}{
+		{"fractional cached_tokens", `{"prompt_tokens":20000,"completion_tokens":300,"prompt_tokens_details":{"cached_tokens":1.5}}`,
+			Usage{PromptTokens: 20000, CompletionTokens: 300, TotalTokens: 20300}},
+		{"prompt_tokens_details is an array", `{"prompt_tokens":20000,"completion_tokens":300,"prompt_tokens_details":[]}`,
+			Usage{PromptTokens: 20000, CompletionTokens: 300, TotalTokens: 20300}},
+		{"cache_read_input_tokens is a string", `{"input_tokens":2,"output_tokens":7,"cache_read_input_tokens":"lots","cache_creation_input_tokens":40}`,
+			Usage{PromptTokens: 42, CompletionTokens: 7, TotalTokens: 49, CacheWriteTokens: 40}},
+		{"usage is a string", `"n/a"`, Usage{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g, _ := newMockGateway(t, 5*time.Second, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":` + tc.usage + `}`))
+			})
+			resp, err := g.Complete(context.Background(), ChatRequest{Model: "m"})
+			if err != nil {
+				t.Fatalf("Complete: %v; want the answer despite the bad usage", err)
+			}
+			if len(resp.Choices) != 1 || resp.Choices[0].Message.Content != "ok" {
+				t.Fatalf("choices = %+v; want the answer", resp.Choices)
+			}
+			if resp.Usage != tc.want {
+				t.Fatalf("usage = %+v; want %+v", resp.Usage, tc.want)
+			}
+		})
+	}
+}

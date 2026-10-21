@@ -142,8 +142,15 @@ func (u *Usage) UnmarshalJSON(b []byte) error {
 			CacheCreation int `json:"cache_creation_tokens"`
 		} `json:"prompt_tokens_details"`
 	}
+	// Lenient: accounting never fails a model answer. encoding/json skips a field of the wrong type (1.5, a
+	// string, [] for an object), reports it as *UnmarshalTypeError and still fills every other field, so the
+	// skipped one reads 0, not reported. b is a value the outer decoder already parsed, so a type error is
+	// the only error expected here; any other is still returned.
 	if err := json.Unmarshal(b, &w); err != nil {
-		return fmt.Errorf("ai.Usage.UnmarshalJSON: %w", err)
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) {
+			return fmt.Errorf("ai.Usage.UnmarshalJSON: %w", err)
+		}
 	}
 	read, write := w.CacheRead, w.CacheWrite
 	if read == 0 {
