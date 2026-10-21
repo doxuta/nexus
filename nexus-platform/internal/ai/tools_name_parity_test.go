@@ -7,10 +7,24 @@ package ai
 
 import (
 	"context"
+	"regexp"
+	"strings"
 	"testing"
 
+	"nexus/platform/internal/ddl"
 	"nexus/platform/internal/services"
 )
+
+func toolDescription(t *testing.T, name string) string {
+	t.Helper()
+	for _, tool := range ToolDefinitions() {
+		if tool.Function.Name == name {
+			return tool.Function.Description
+		}
+	}
+	t.Fatalf("tool %s not found", name)
+	return ""
+}
 
 // #30 item 3: the same field twice in one draft cost a bench attempt 11 model calls and then failed
 // at Apply ("Trường đã tồn tại"). propose_field refuses a name the table already has — live, drafted
@@ -38,6 +52,51 @@ func TestTools_ProposeField_LiveTableWinsOverADraftOfTheSameName(t *testing.T) {
 		Fields: []DraftField{{Name: "note", Label: "Ghi chú", FieldType: "text"}}}})
 	mustBuffer(t, e, "propose_field", `{"entity":"patients","name":"note","label":"Ghi chú","fieldType":"text"}`)
 	mustReject(t, e, "propose_field", `{"entity":"patients","name":"full_name","label":"Tên","fieldType":"text"}`, "FIELD_ALREADY_EXISTS")
+}
+
+// #30 item 6: six bench attempts named a person field `owner` and retried on FIELD_NAME_RESERVED.
+// Both field tools list the reserved names, generated from ddl.MandatoryColumns (the list
+// ddl.IsReservedColumn reads). Pinned both ways: every name the validators refuse as reserved is
+// listed, and every listed name is refused.
+func TestFieldTools_DescribeEveryReservedName(t *testing.T) {
+	descs := map[string]string{"propose_entity": toolDescription(t, "propose_entity"), "propose_field": toolDescription(t, "propose_field")}
+	options := map[string]map[string]any{"text": nil, "user": nil,
+		"relation": {"relatedEntity": "patients"}, "polymorphic_relation": {"targetEntities": []any{"patients"}}}
+	refused := map[string]bool{}
+	for _, c := range ddl.MandatoryColumns {
+		for _, name := range []string{c.Name, strings.TrimSuffix(c.Name, "_id"), strings.TrimSuffix(c.Name, "_type")} {
+			for fieldType, opts := range options {
+				f := services.FieldInput{Name: name, Label: "x", FieldType: fieldType, Options: opts}
+				for _, err := range []error{
+					services.ValidateCreateEntity(services.CreateEntityInput{Name: "things", Label: "x", Fields: []services.FieldInput{f}}),
+					services.ValidateAddField(services.AddFieldInput{EntityName: "things", Field: f}),
+				} {
+					if code, _, _ := validationOf(err); code == "FIELD_NAME_RESERVED" {
+						refused[name] = true
+					}
+				}
+			}
+		}
+	}
+	if !refused["owner"] || !refused["owner_id"] {
+		t.Fatalf("fixture: a user field named owner (it derives owner_id) must be refused; refused = %v", refused)
+	}
+	for name := range refused {
+		for tool, desc := range descs {
+			if !strings.Contains(desc, "`"+name+"`") {
+				t.Errorf("%s description does not list the reserved name %q", tool, name)
+			}
+		}
+	}
+	listed := regexp.MustCompile("`([a-z_]+)`").FindAllStringSubmatch(reservedFieldNamesNote(), -1)
+	if len(listed) == 0 {
+		t.Fatal("reservedFieldNamesNote lists no name")
+	}
+	for _, m := range listed {
+		if !refused[m[1]] {
+			t.Errorf("the note lists %q, which no validator refuses as reserved", m[1])
+		}
+	}
 }
 
 // The same LOW in checkAddFieldRefs (propose_field's dependent-picklist check): it read the live

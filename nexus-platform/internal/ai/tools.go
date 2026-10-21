@@ -159,7 +159,7 @@ func toolDefinitionsBase() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "propose_entity",
-				Description: "Đề xuất một entity MỚI kèm các field khởi tạo. Chỉ đưa vào draft — KHÔNG tạo. Tên phải khớp ^[a-z][a-z0-9_]{0,25}$.",
+				Description: "Đề xuất một entity MỚI kèm các field khởi tạo. Chỉ đưa vào draft — KHÔNG tạo. Tên phải khớp ^[a-z][a-z0-9_]{0,25}$. " + reservedFieldNamesNote(),
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -175,7 +175,7 @@ func toolDefinitionsBase() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "propose_field",
-				Description: "Đề xuất THÊM một field vào entity đã có. Chỉ đưa vào draft — KHÔNG tạo. Mỗi field đề xuất MỘT lần: tên field bảng đã có (đang chạy, hoặc đã đề xuất trong lượt này) bị từ chối FIELD_ALREADY_EXISTS — sửa field đang có thì dùng propose_edit_field.",
+				Description: "Đề xuất THÊM một field vào entity đã có. Chỉ đưa vào draft — KHÔNG tạo. Mỗi field đề xuất MỘT lần: tên field bảng đã có (đang chạy, hoặc đã đề xuất trong lượt này) bị từ chối FIELD_ALREADY_EXISTS — sửa field đang có thì dùng propose_edit_field. " + reservedFieldNamesNote(),
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -666,6 +666,24 @@ func workflowActionArraySchema() map[string]any {
 			"required": []string{"type"},
 		},
 	}
+}
+
+// reservedFieldNamesNote tells the model, in propose_entity's and propose_field's descriptions, the
+// field names refused with FIELD_NAME_RESERVED (#30 item 6: six bench attempts named a person field
+// `owner` and retried). Generated from ddl.MandatoryColumns, the list ddl.IsReservedColumn reads, so
+// it cannot drift from the validator. A relation/user/polymorphic_relation field <x> also makes the
+// column <x>_id, so the base of every system *_id column is taken too.
+func reservedFieldNamesNote() string {
+	var cols, linked []string
+	for _, c := range ddl.MandatoryColumns {
+		cols = append(cols, "`"+c.Name+"`")
+		if base, ok := strings.CutSuffix(c.Name, "_id"); ok {
+			linked = append(linked, "`"+base+"`")
+		}
+	}
+	return "Tên field KHÔNG được trùng cột hệ thống (FIELD_NAME_RESERVED): " + strings.Join(cols, ", ") +
+		". Field relation/user/polymorphic_relation còn tạo cột <tên>_id, nên cũng KHÔNG đặt tên " + strings.Join(linked, ", ") +
+		" (người phụ trách: đặt vd 'assignee')."
 }
 
 // fieldArraySchema is the JSON-schema fragment for the fields[] array inside propose_entity.
