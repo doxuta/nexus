@@ -2,8 +2,8 @@
 // components/studio/assistant/*.test.tsx; this file pins the module contract directly.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as api from "@/lib/api";
-import { applyProposal, proposalKey, needsLiveConfirm } from "./aiApply";
-import type { AiDraftItem } from "./aiBuilder";
+import { applyProposal, proposalKey, proposalPlace, needsLiveConfirm } from "./aiApply";
+import { serverMessagesToTurns, type AiDraftItem } from "./aiBuilder";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -302,6 +302,11 @@ describe("applyProposal — scope guard (FR-108)", () => {
 
 describe("helpers", () => {
   it("proposalKey is turn:index", () => expect(proposalKey("t1", 2)).toBe("t1:2"));
+  it("proposalPlace reads a saved turn's seq back from its key; a turn of this tab has none (issue #42)", () => {
+    const [turn] = serverMessagesToTurns([{ seq: 7, role: "assistant", content: "", draft: null, createdAt: "" }]);
+    expect(proposalPlace(proposalKey(turn.id, 2))).toEqual({ seq: 7, index: 2 });
+    expect(proposalPlace(proposalKey("0b7c9e4a-1f2d-4c3b-9a8e-5d6f7a8b9c0d", 0))).toBeNull();
+  });
   it("needsLiveConfirm: only a delivered project asks, for records / app-scoped table / app", () => {
     expect(needsLiveConfirm(RECORDS, false)).toBe(false);
     expect(needsLiveConfirm(RECORDS, true)).toBe(false); // sample rows (default) are not live — specs/076 ai10

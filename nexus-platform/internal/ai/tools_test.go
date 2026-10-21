@@ -17,7 +17,8 @@ type fakeMetaReader struct {
 	fields   map[string]map[string][]metadata.FieldDefinition // tenantID -> entityID -> fields
 	rels     map[string][]metadata.RelationshipDefinition     // tenantID -> relationships
 	roles    map[string][]string
-	aggUsers map[string][]string // "entity.field" -> rollups aggregating it (#234 guard)
+	aggUsers map[string][]string                              // "entity.field" -> rollups aggregating it (#234 guard)
+	deleted  map[string]map[string][]metadata.FieldDefinition // tenantID -> entityID -> soft-deleted fields
 }
 
 func (f *fakeMetaReader) ListEntities(tenantID string) ([]metadata.EntityDefinition, error) {
@@ -35,6 +36,11 @@ func (f *fakeMetaReader) GetEntityByName(_ context.Context, tenantID, name strin
 
 func (f *fakeMetaReader) ListFields(_ context.Context, tenantID, entityID string) ([]metadata.FieldDefinition, error) {
 	return f.fields[tenantID][entityID], nil
+}
+
+// ListFieldsIncludingDeleted is the live list plus the soft-deleted rows, as the registry returns it.
+func (f *fakeMetaReader) ListFieldsIncludingDeleted(_ context.Context, tenantID, entityID string) ([]metadata.FieldDefinition, error) {
+	return append(slices.Clone(f.fields[tenantID][entityID]), f.deleted[tenantID][entityID]...), nil
 }
 
 func (f *fakeMetaReader) ListAllRelationships(_ context.Context, tenantID string) ([]metadata.RelationshipDefinition, error) {

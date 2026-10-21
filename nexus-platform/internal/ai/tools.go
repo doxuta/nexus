@@ -43,6 +43,9 @@ type MetadataReader interface {
 	// ListRollupsAggregating backs the #234/#284 formula guards in propose_edit_field. It is part
 	// of the interface (not an optional assertion) so the wrapper readers cannot hide it.
 	ListRollupsAggregating(ctx context.Context, tenantID, childEntity, aggField string) ([]string, error)
+	// ListFieldsIncludingDeleted backs propose_field's name check: AddField refuses a name a
+	// soft-deleted field still holds, so the proposal must too (issue #42).
+	ListFieldsIncludingDeleted(ctx context.Context, tenantID, entityID string) ([]metadata.FieldDefinition, error)
 }
 
 // DraftItem is one proposed metadata change accumulated during a Chat turn. Exactly one of the
@@ -1120,7 +1123,7 @@ func (e *toolExecutor) proposeField(ctx context.Context, argsJSON string) string
 	if code, msg, ok := validationOf(services.ValidateAddField(in)); !ok {
 		return toolErr("%s: %s", code, msg)
 	}
-	_, _, fields, err := e.pendingFields(ctx, withEntity.Entity)
+	entity, live, fields, err := e.pendingFields(ctx, withEntity.Entity)
 	if err != nil && !errors.Is(err, metadata.ErrEntityNotFound) {
 		return toolErr("PROPOSE_FIELD_FAILED: %v", err)
 	}
@@ -1132,15 +1135,47 @@ func (e *toolExecutor) proposeField(ctx context.Context, argsJSON string) string
 		}
 		return toolErr("FIELD_ALREADY_EXISTS: field %q của bảng %q đã nằm trong draft này (đề xuất trước đó trong lượt, hoặc cùng propose_entity của bảng) — thẻ đó vẫn giữ, KHÔNG đề xuất lại; muốn đổi thì người duyệt bỏ thẻ đó rồi đề xuất lại (field của bảng đang draft: bỏ thẻ propose_entity rồi propose_entity lại cả bảng), field mới thì đặt tên khác", a.Name, withEntity.Entity)
 	}
+	if live {
+		if msg := e.deletedFieldName(ctx, entity, a.Name); msg != "" {
+			return msg
+		}
+	}
 
 	// specs/052 (queue #230): the cross-field half of AddField - controllingField must be a sibling
 	// picklist (live, or drafted this turn), keys among its values, no cycle - judged now, not at Apply.
 	if code, msg, ok := validationOf(e.checkAddFieldRefs(ctx, withEntity.Entity, a.toFieldInput())); !ok {
 		return toolErr("%s: %s", code, msg)
 	}
+	// Issue #42: a relation or user field derives `<name>_id`; Apply's own check says whether a live
+	// table already has that column (owner ⇒ owner_id). A table only drafted has no columns to read.
+	if c, ok := e.reader.(AccessProbeCarrier); ok && live {
+		if p := c.AccessProbes(); p != nil && p.Columns != nil {
+			if code, msg, ok := validationOf(services.CheckRelationColumn(ctx, p.Columns, entity, a.Name, a.FieldType)); !ok {
+				return toolErr("%s: %s", code, msg)
+			}
+		}
+	}
 
 	e.draft = append(e.draft, DraftItem{Kind: "field", Field: ptrDraftField(a.toDraftField(withEntity.Entity))})
 	return toolOK(map[string]any{"buffered": fmt.Sprintf("field %q trên %q", a.Name, withEntity.Entity)})
+}
+
+// deletedFieldName refuses a name a soft-deleted field of the live table still holds, as AddField's
+// dup-check (ListFieldsIncludingDeleted) does at Apply: the delete keeps the name, and a unique
+// field's column too (issue #42 — a field applied then deleted is not free again). "" = free.
+func (e *toolExecutor) deletedFieldName(ctx context.Context, entity, field string) string {
+	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, entity)
+	if err != nil {
+		return toolErr("PROPOSE_FIELD_FAILED: %v", err)
+	}
+	all, err := e.reader.ListFieldsIncludingDeleted(ctx, e.tenantID, ent.ID)
+	if err != nil {
+		return toolErr("PROPOSE_FIELD_FAILED: %v", err)
+	}
+	if slices.ContainsFunc(all, func(f metadata.FieldDefinition) bool { return f.Name == field && f.DeletedAt.Valid }) {
+		return toolErr("FIELD_ALREADY_EXISTS: bảng %q từng có field %q và nó đã bị xoá — tên đó vẫn bị giữ (Apply từ chối), đặt tên khác cho field mới", entity, field)
+	}
+	return ""
 }
 
 // checkAddFieldRefs runs services.ValidateAddFieldRefs against the entity's siblings as this draft
@@ -2269,10 +2304,12 @@ func (e *toolExecutor) proposeDeleteEntity(ctx context.Context, argsJSON string)
 //     still unpersisted when apply resolves refs, so a same-call sibling reference could never
 //     resolve either way — letting it through here would buffer a draft guaranteed to fail later.
 //
+// A "$ref" whose parent card was already applied — an MCP thread no longer replays it (issue #42) —
+// resolves through the registry Apply itself reads (appliedRecordRef), TTL included.
+//
 // NOT mirrored (DB-dependent, surfaces at APPLY exactly like propose_entity's duplicate-name):
-// relation/polymorphic existence probes, unique collisions, field-ACL, and whether a
-// cross-turn/cross-call "@ref" ACTUALLY resolves (that is the registry's job, authoritatively, at
-// apply time). Rows are buffered RAW (refs mangled in place) — the apply path recomputes
+// relation/polymorphic existence probes, unique collisions, field-ACL, and whether a ref of a
+// card still pending will resolve once its parent is applied (the registry's job at apply time). Rows are buffered RAW (refs mangled in place) — the apply path recomputes
 // clean/normalized payloads itself.
 func (e *toolExecutor) proposeRecords(ctx context.Context, argsJSON string) string {
 	var a struct {
@@ -2332,7 +2369,11 @@ func (e *toolExecutor) proposeRecords(ctx context.Context, argsJSON string) stri
 		for _, ref := range recordRefsOf(row, specs) {
 			name := strings.TrimPrefix(ref.raw, "@")
 			mangled := mangleRef(e.turnTag, name)
-			if entity, ok := priorRefs[mangled]; ok {
+			entity, ok := priorRefs[mangled]
+			if !ok {
+				entity, ok = e.appliedRecordRef(mangled)
+			}
+			if ok {
 				if ref.typ != "" && ref.typ != entity {
 					return toolErr("RECORD_REF_UNRESOLVED: dòng %d: field %q tham chiếu %q — ref này là record của entity %q, không phải %q; đặt type đúng entity của record đó", i+1, ref.field, ref.raw, entity, ref.typ)
 				}
@@ -2386,6 +2427,19 @@ func (e *toolExecutor) priorRecordRefs() map[string]string {
 		}
 	}
 	return out
+}
+
+// appliedRecordRef resolves a "$ref" whose card is no longer in the draft because the builder
+// applied it (an MCP thread replays only pending cards, issue #42): the record engine's registry,
+// the same lookup and TTL Apply's resolveBulkRefs uses, so the proposal accepts exactly what Apply
+// will resolve. Unwired: nothing resolves.
+func (e *toolExecutor) appliedRecordRef(token string) (string, bool) {
+	if c, ok := e.reader.(AccessProbeCarrier); ok {
+		if p := c.AccessProbes(); p != nil && p.Refs != nil {
+			return p.Refs.RefEntity(e.tenantID, token)
+		}
+	}
+	return "", false
 }
 
 // recordRef is one "@name" reference carried by a propose_records row: a `relation` value, or
@@ -3096,6 +3150,18 @@ type AccessProbes struct {
 	// Published is OPTIONAL and not part of complete(): propose_access asks it whether a live table
 	// is already the customer's. Unwired, every live table counts as published (fail closed).
 	Published publishCutoff // *services.DraftGate
+	// Columns is OPTIONAL and not part of complete(): propose_field asks it whether a relation or user
+	// field's `<name>_id` column is taken (issue #42, services.CheckRelationColumn — Apply's own check).
+	// Unwired, the proposal skips the check and Apply still refuses.
+	Columns services.ColumnChecker // *dynrepo.Repository
+	// Refs is OPTIONAL and not part of complete(): propose_records asks it for a "@ref" whose parent
+	// card was already applied (issue #42). Unwired, only refs of cards still in the draft resolve.
+	Refs recordRefLookup // *services.RecordService
+}
+
+// recordRefLookup resolves a "@ref" token the record engine registered when its row was created.
+type recordRefLookup interface {
+	RefEntity(tenantID, token string) (string, bool)
 }
 
 // complete reports whether every probe is wired — explain_access degrades honestly when not.

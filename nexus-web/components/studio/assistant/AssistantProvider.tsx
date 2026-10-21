@@ -14,11 +14,11 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode,
 } from "react";
 import { Sparkles } from "lucide-react";
-import { adminApp, adminApps, aiHealth, getAiSession, listEntities } from "@/lib/api";
+import { adminApp, adminApps, aiHealth, getAiSession, listEntities, settleAiProposal } from "@/lib/api";
 import { emitDraftsChanged } from "@/lib/draftEvents";
 import { hasDrafts, newTurnId, draftApplyRank, isDestructiveDraft, serverMessagesToTurns, type AiDraftItem, type ChatTurn } from "@/lib/aiBuilder";
-import { applyTracked, cardMode, deliveryOf, planUndo, proposalKey, undoProposal, type Delivery } from "@/lib/aiApply";
-import { loadApplyState, saveApplyState, type ApplyState } from "@/lib/aiApplyState";
+import { applyTracked, cardMode, deliveryOf, planUndo, proposalKey, proposalPlace, undoProposal, type Delivery } from "@/lib/aiApply";
+import { isTerminal, loadApplyState, saveApplyState, type ApplyState } from "@/lib/aiApplyState";
 import { invalidateAfterApply } from "@/lib/aiInvalidate";
 import { ASSISTANT_OPEN_EVENT, setAssistantOpen, toggleAssistant, useAssistantOpen } from "@/lib/assistantOpen";
 import { t } from "@/lib/i18n";
@@ -146,7 +146,13 @@ export function AssistantProvider({ slug, projectName, route, params, panel, chi
 
   // ── what was applied (terminal outcomes survive a reload, per project + conversation) ──
   const [applyMap, setApplyMap] = useState<Record<string, ApplyState>>({});
-  const setApply = useCallback((key: string, s: ApplyState) => setApplyMap((m) => ({ ...m, [key]: s })), []);
+  const setApply = useCallback((key: string, s: ApplyState) => {
+    setApplyMap((m) => ({ ...m, [key]: s }));
+    // Issue #42: a card of a saved thread that is applied, discarded or undone is settled on the server, so the thread's MCP
+    // agent stops replaying it. Best effort: a miss leaves the agent judging against a stale card, and Apply re-validates.
+    const at = proposalPlace(key);
+    if (at && sessionId && isTerminal(s.status) && assertScope()) void settleAiProposal(sessionId, at.seq, at.index).catch(() => {});
+  }, [sessionId, assertScope]);
   const [asSample, setAsSample] = useState(true);
   const publishQ = usePublishState(slug);
   const delivery = deliveryOf(publishQ);
@@ -160,7 +166,7 @@ export function AssistantProvider({ slug, projectName, route, params, panel, chi
     setApply(key, { status: "applying" });
     const { error, reportable, ...state } = await applyTracked(item, { asSample, assertScope }, cardMode(item, delivery, asSample));
     const landed = state.status === "done" || state.status === "warn";
-    setApplyMap((m) => ({ ...m, [key]: state }));
+    setApply(key, state);
     if (landed) invalidateAfterApply(qc);
     // The model can read and correct a 400/409/422 (FR-112); the hook sends it only when the scope still holds.
     if (error !== undefined && reportable) void reportApplyFailure(item, error);

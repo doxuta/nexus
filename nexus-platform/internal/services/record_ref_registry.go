@@ -118,6 +118,15 @@ func (reg *recordRefRegistry) get(tenantID, token string) (recordRefEntry, bool)
 	return e, true
 }
 
+// RefEntity says which entity a "@ref" token's record was created in, when an earlier CreateBulk of
+// this process registered it and its TTL has not lapsed: the lookup Apply's resolveBulkRefs runs.
+// propose_records asks it for a parent card the builder already applied (issue #42: an MCP thread no
+// longer replays applied cards, and the registry is where an applied "$ref" lives).
+func (s *RecordService) RefEntity(tenantID, token string) (string, bool) {
+	e, ok := s.refRegistry.get(tenantID, token)
+	return e.entity, ok
+}
+
 // janitor evicts every entry older than recordRefTTL so the map cannot grow without bound across
 // the life of the process (mirrors memRateLimiter.janitor — auth_ratelimit.go).
 func (reg *recordRefRegistry) janitor() {

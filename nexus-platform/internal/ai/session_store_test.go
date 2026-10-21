@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -73,5 +75,29 @@ func TestClampRunes(t *testing.T) {
 	}
 	if clampRunes("short", maxTitleRunes) != "short" {
 		t.Fatal("clampRunes must pass a short string through unchanged")
+	}
+}
+
+// Issue #42: an MCP thread replays only the proposals the builder has not settled, in thread order;
+// a turn without a draft, or whose draft does not decode, adds nothing.
+func TestPendingProposals_SkipsSettledCards(t *testing.T) {
+	msgs := []Message{
+		{Seq: 0, Role: "user", Content: "[MCP] Kết nối agent bên ngoài"},
+		{Seq: 1, Role: "assistant", DraftJSON: json.RawMessage(`[{"kind":"field","field":{"entity":"a","name":"x"}},{"kind":"field","field":{"entity":"a","name":"y"}}]`), Settled: []int{0}},
+		{Seq: 3, Role: "assistant", DraftJSON: json.RawMessage(`not json`)},
+		{Seq: 5, Role: "assistant", DraftJSON: json.RawMessage(`[{"kind":"entity","entity":{"name":"b"}}]`), Settled: []int{0}},
+		{Seq: 7, Role: "assistant", DraftJSON: json.RawMessage(`[{"kind":"entity","entity":{"name":"c"}}]`)},
+	}
+	var got []string
+	for _, it := range PendingProposals(msgs) {
+		switch {
+		case it.Field != nil:
+			got = append(got, it.Field.Name)
+		case it.Entity != nil:
+			got = append(got, it.Entity.Name)
+		}
+	}
+	if want := []string{"y", "c"}; !slices.Equal(got, want) {
+		t.Fatalf("pending = %v; want %v (settled cards left out, thread order kept)", got, want)
 	}
 }

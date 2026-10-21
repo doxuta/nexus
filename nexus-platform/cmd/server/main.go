@@ -1296,6 +1296,10 @@ func main() {
 		FieldLocks: fieldACLRepo,
 		// issue #2: propose_access grants only on a table the customer does not have yet.
 		Published: draftGate,
+		// issue #42: propose_field refuses a relation/user field whose <name>_id column is taken, as AddField does.
+		Columns: dynRepo,
+		// issue #42: propose_records resolves a "@ref" of an applied parent card the way Apply does.
+		Refs: recordSvc,
 	}), &ai.DocReaders{Layouts: layoutSvc, Workflows: workflowSvc, Reports: reportSvc, Apps: appSvc}, aiRunRepo, logger).
 		WithDelivery(draftGate) // specs/067 L10-5: one grounding line once the project is delivered
 	aiContextResolver := ai.NewContextResolver(aiMeta, appSvc, userRepo)

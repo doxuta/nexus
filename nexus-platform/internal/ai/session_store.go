@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -20,6 +22,11 @@ import (
 // this to a 404 with an identical body so a guessed id never discloses that a session exists under
 // another owner (spec §7 — no existence leak, never a 403).
 var ErrSessionNotFound = errors.New("ai: session not found")
+
+// ErrProposalNotFound is returned by SettleProposal when (seq, index) names no proposal card in a
+// builder session the caller owns — the same answer for another owner's session as for a missing
+// card, so a guessed id discloses nothing.
+var ErrProposalNotFound = errors.New("ai: proposal not found")
 
 // maxTitleRunes clamps a session title to the VARCHAR(200) column (counted in runes, matching
 // utf8mb4 character semantics). AutoTitle already truncates to ~60; this is a defensive backstop
@@ -82,6 +89,9 @@ type Message struct {
 	Role      string
 	Content   string
 	DraftJSON json.RawMessage
+	// Settled lists the indexes of DraftJSON's items the builder applied, discarded or undid in the
+	// Studio (issue #42, SettleProposal); nil = none settled.
+	Settled   []int
 	CreatedAt time.Time
 }
 
@@ -90,14 +100,15 @@ type Message struct {
 // same pointer pattern for its nullable JSON column); the mapper converts a nil pointer to a nil
 // Message.DraftJSON.
 type messageRow struct {
-	ID        string           `db:"id"`
-	SessionID string           `db:"session_id"`
-	TenantID  string           `db:"tenant_id"`
-	Seq       int              `db:"seq"`
-	Role      string           `db:"role"`
-	Content   string           `db:"content"`
-	DraftJSON *json.RawMessage `db:"draft_json"`
-	CreatedAt time.Time        `db:"created_at"`
+	ID          string           `db:"id"`
+	SessionID   string           `db:"session_id"`
+	TenantID    string           `db:"tenant_id"`
+	Seq         int              `db:"seq"`
+	Role        string           `db:"role"`
+	Content     string           `db:"content"`
+	DraftJSON   *json.RawMessage `db:"draft_json"`
+	SettledJSON *json.RawMessage `db:"settled_json"`
+	CreatedAt   time.Time        `db:"created_at"`
 }
 
 // SessionStore persists AI-Builder sessions + messages over sqlx with parameterized queries. It
@@ -175,7 +186,7 @@ func (s *SessionStore) getSession(ctx context.Context, tenantID, userID, id, fea
 		return Session{}, nil, fmt.Errorf("ai.SessionStore.GetSession: %w", err)
 	}
 
-	const mq = `SELECT id, session_id, tenant_id, seq, role, COALESCE(content, '') AS content, draft_json, created_at
+	const mq = `SELECT id, session_id, tenant_id, seq, role, COALESCE(content, '') AS content, draft_json, settled_json, created_at
 		FROM sys_ai_messages
 		WHERE session_id = ? AND tenant_id = ?
 		ORDER BY seq ASC, created_at ASC, id ASC`
@@ -191,6 +202,11 @@ func (s *SessionStore) getSession(ctx context.Context, tenantID, userID, id, fea
 		}
 		if r.DraftJSON != nil {
 			m.DraftJSON = *r.DraftJSON
+		}
+		if r.SettledJSON != nil {
+			if err := json.Unmarshal(*r.SettledJSON, &m.Settled); err != nil {
+				return Session{}, nil, fmt.Errorf("ai.SessionStore.GetSession settled_json: %w", err)
+			}
 		}
 		msgs = append(msgs, m)
 	}
@@ -296,6 +312,55 @@ func (s *SessionStore) appendTurn(ctx context.Context, tenantID, userID, session
 		return "", fmt.Errorf("ai.SessionStore.AppendTurn: commit: %w", err)
 	}
 	return sessionID, nil
+}
+
+// SettleProposal records that the builder applied, discarded or undid the proposal card at index of
+// the assistant turn seq of their own BUILDER session (issue #42): an MCP thread stops replaying it
+// (PendingProposals). Settling twice is a no-op. A card that is not in a live builder session of
+// (tenantID, userID) resolves to ErrProposalNotFound with nothing written.
+func (s *SessionStore) SettleProposal(ctx context.Context, tenantID, userID, sessionID string, seq, index int) error {
+	var n int
+	const q = `SELECT COALESCE(JSON_LENGTH(m.draft_json), 0)
+		FROM sys_ai_messages m JOIN sys_ai_sessions s ON s.id = m.session_id AND s.tenant_id = m.tenant_id
+		WHERE m.session_id = ? AND m.tenant_id = ? AND m.seq = ? AND m.role = 'assistant'
+		  AND s.user_id = ? AND s.feature = ? AND s.deleted_at IS NULL`
+	err := s.db.GetContext(ctx, &n, q, sessionID, tenantID, seq, userID, SessionFeatureBuilder)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (index < 0 || index >= n)) {
+		return ErrProposalNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("ai.SessionStore.SettleProposal: %w", err)
+	}
+	// One statement under the row lock, so two cards of the same turn settled at once both land.
+	const u = `UPDATE sys_ai_messages SET settled_json = JSON_ARRAY_APPEND(COALESCE(settled_json, JSON_ARRAY()), '$', ?)
+		WHERE session_id = ? AND tenant_id = ? AND seq = ? AND role = 'assistant'
+		  AND NOT JSON_CONTAINS(COALESCE(settled_json, JSON_ARRAY()), ?)`
+	if _, err := s.db.ExecContext(ctx, u, index, sessionID, tenantID, seq, strconv.Itoa(index)); err != nil {
+		return fmt.Errorf("ai.SessionStore.SettleProposal: %w", err)
+	}
+	return nil
+}
+
+// PendingProposals is every proposal of a thread the builder has not settled, in thread order: what
+// an MCP tool call replays into its draft so it may build on the earlier ones, as within one chat
+// turn (issue #42). A card applied in the Studio is left out — the validators read it where Apply
+// does (the live schema, the builder's drafts, and for a records card's "$ref" the record engine's
+// ref registry) and read nothing once it is rolled back — and so is a card discarded or undone. A
+// turn whose draft does not decode contributes nothing.
+func PendingProposals(msgs []Message) []DraftItem {
+	var out []DraftItem
+	for _, m := range msgs {
+		var items []DraftItem
+		if len(m.DraftJSON) == 0 || json.Unmarshal(m.DraftJSON, &items) != nil {
+			continue
+		}
+		for i, it := range items {
+			if !slices.Contains(m.Settled, i) {
+				out = append(out, it)
+			}
+		}
+	}
+	return out
 }
 
 // SoftDeleteSession soft-deletes a BUILDER session, ownership-guarded to (tenantID, userID). A row

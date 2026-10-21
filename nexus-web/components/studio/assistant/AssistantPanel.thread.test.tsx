@@ -14,13 +14,18 @@ vi.mock("@/lib/studioContext", () => ({
   sessionReadable: () => true,
 }));
 vi.mock("@/lib/previewSession", () => ({ getPreviewToken: () => null }));
-vi.mock("../usePublishState", () => ({ usePublishState: () => ({ data: { delivered: false, draftableTypes: [] } }) }));
+const pub = { q: {} as Record<string, unknown> };
+vi.mock("../usePublishState", () => ({ usePublishState: () => pub.q }));
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, aiHealth: vi.fn(async () => false), getAiSession: vi.fn() };
+  return {
+    ...actual, aiHealth: vi.fn(async () => false), getAiSession: vi.fn(),
+    addField: vi.fn(async () => ({})), settleAiProposal: vi.fn(async () => undefined),
+    createWorkflow: vi.fn(async () => ({})), listDraftChanges: vi.fn(), discardDraft: vi.fn(async () => undefined),
+  };
 });
 
-import { getAiSession } from "@/lib/api";
+import { addField, createWorkflow, discardDraft, getAiSession, listDraftChanges, settleAiProposal } from "@/lib/api";
 import { resetAssistantOpenForTests, useAssistantOpen } from "@/lib/assistantOpen";
 import { parseStudioPath } from "@/lib/studioRoutes";
 import { AssistantMount } from "./AssistantMount";
@@ -65,6 +70,9 @@ function mount(path = "/studio/du-an/northwind/van-hanh/tu-dong/khoa-truy-cap") 
 }
 
 beforeEach(() => {
+  pub.q = { data: { delivered: false, draftableTypes: [] } };
+  vi.mocked(addField).mockClear();
+  vi.mocked(settleAiProposal).mockClear();
   vi.mocked(getAiSession).mockReset();
   vi.mocked(getAiSession).mockResolvedValue(THREAD as never);
   window.localStorage.clear();
@@ -84,6 +92,48 @@ describe("opening a saved conversation", () => {
     // the proposal is a card a human applies, as in a live turn
     await waitFor(() => expect(screen.getByRole("button", { name: "Áp dụng" })).toBeInTheDocument());
     expect(screen.getByTestId("open-state").textContent).toBe("true");
+  });
+
+  // Issue #42: a card of a saved thread that is applied or discarded is told to the server (turn seq 3, card 0), so the
+  // thread's MCP agent stops replaying it into its next proposal.
+  it("tells the thread when a card is applied", async () => {
+    mount();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "mo" })); });
+    fireEvent.click(await screen.findByRole("button", { name: "Áp dụng" }));
+    await waitFor(() => expect(addField).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(settleAiProposal).toHaveBeenCalledWith("sess-1", 3, 0));
+    expect(settleAiProposal).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the thread when a card is discarded, and writes nothing else", async () => {
+    mount();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "mo" })); });
+    fireEvent.click(await screen.findByRole("button", { name: "Bỏ" }));
+    await waitFor(() => expect(settleAiProposal).toHaveBeenCalledWith("sess-1", 3, 0));
+    expect(addField).not.toHaveBeenCalled();
+  });
+
+  it("tells the thread again when an applied card is undone (Hoàn tác)", async () => {
+    // A delivered project: the rule card lands in the draft and offers Hoàn tác, which discards the draft row it wrote.
+    pub.q = { data: { delivered: true, headVersion: { versionNo: 3 }, pendingCount: 0, changesetHash: "h", draftableTypes: ["workflow", "field"], directTypes: ["role"], propagationSeconds: 5 } };
+    const rule = { kind: "workflow", workflow: { name: "Nhắc hẹn", entityName: "lich_hen", trigger: "after_update", actions: [] },
+      change: { docType: "workflow", op: "update", label: "Nhắc hẹn", target: { entity: "lich_hen" } } };
+    vi.mocked(getAiSession).mockResolvedValue({ ...THREAD, messages: [...THREAD.messages.slice(0, 3), { ...THREAD.messages[3], draft: [rule] }] } as never);
+    const row = { id: "d1", docType: "workflow", docKey: "wf-1", label: "Nhắc hẹn", op: "update", entityName: "lich_hen",
+      updatedAt: "2026-10-21T00:00:00Z", updatedBy: "u1", conflict: false, changedPaths: [], moreChanged: 0 };
+    vi.mocked(listDraftChanges).mockReset();
+    vi.mocked(listDraftChanges).mockResolvedValueOnce({ changes: [], changesetHash: "a" }).mockResolvedValue({ changes: [row], changesetHash: "b" } as never);
+    vi.mocked(discardDraft).mockClear();
+    mount();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "mo" })); });
+    fireEvent.click(await screen.findByRole("button", { name: "Áp dụng vào bản nháp" }));
+    await waitFor(() => expect(createWorkflow).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(settleAiProposal).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByRole("button", { name: "Hoàn tác" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Bỏ khỏi bản nháp" }));
+    await waitFor(() => expect(discardDraft).toHaveBeenCalledWith("d1"));
+    await waitFor(() => expect(settleAiProposal).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(settleAiProposal).mock.calls).toEqual([["sess-1", 3, 0], ["sess-1", 3, 0]]);
   });
 
   it("is not offered where the panel cannot mount", () => {
