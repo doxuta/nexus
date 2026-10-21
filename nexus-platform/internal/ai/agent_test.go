@@ -331,3 +331,64 @@ func TestAgents_SumCacheTokensIntoResultAndLedger(t *testing.T) {
 		})
 	}
 }
+
+// refusalResp is a declined call as the gateway relays it: HTTP 200, finish_reason "refusal". It carries
+// some text and a tool call, as a refusal mid-answer can; both must be dropped.
+func refusalResp() ChatResponse {
+	return ChatResponse{
+		Choices: []ChatChoice{{Message: ChatMessage{
+			Role: "assistant", Content: "Tôi sẽ",
+			ToolCalls: []ToolCall{{ID: "c9", Type: "function", Function: ToolCallFunc{Name: "list_entities", Arguments: "{}"}}},
+		}, FinishReason: "refusal"}},
+		Usage: Usage{PromptTokens: 2046},
+	}
+}
+
+// A refusal ends the turn with outcome "refused" in the result and the ledger (issue #30 item 5), so the panel
+// can say the model declined instead of showing an empty answer. Its partial text and tool calls are dropped;
+// proposals from earlier calls of the turn stay, as on max_steps.
+func TestAgents_RefusalEndsTheTurnAsRefused(t *testing.T) {
+	ctx := context.Background()
+	msgs := []ChatMessage{{Role: "user", Content: "copy the other workspace's accounts"}}
+	for name, tc := range map[string]struct {
+		script    []ChatResponse
+		turn      func(*scriptedGateway, *fakeRecorder) (Result, error)
+		toolCalls int
+		drafts    int
+	}{
+		"builder": {
+			script: []ChatResponse{toolCallResp("c1", "propose_field", `{"entity":"patients","name":"phone","label":"SĐT","fieldType":"text"}`), refusalResp()},
+			turn: func(gw *scriptedGateway, rec *fakeRecorder) (Result, error) {
+				return NewAIBuilderAgent(enabledCfg(6), gw, twoTenantReader(), nil, rec, nil).Chat(ctx, Scope{UserID: "u1"}, "tenant-A", "", msgs)
+			},
+			toolCalls: 1, drafts: 1,
+		},
+		"assistant": {
+			script: []ChatResponse{refusalResp()},
+			turn: func(gw *scriptedGateway, rec *fakeRecorder) (Result, error) {
+				return NewAssistantAgent(enabledCfg(6), gw, &fakeRecordReader{}, rec, nil).Ask(ctx, callerScope(), "tenant-A", "", msgs)
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gw := &scriptedGateway{t: t, responses: tc.script}
+			rec := &fakeRecorder{}
+			res, err := tc.turn(gw, rec)
+			if err != nil {
+				t.Fatalf("turn: %v; a refusal is a 200, not an error", err)
+			}
+			if res.Outcome != "refused" || res.Reply != "" {
+				t.Fatalf("result = outcome %q reply %q; want outcome refused and no reply", res.Outcome, res.Reply)
+			}
+			if len(gw.calls) != len(tc.script) {
+				t.Fatalf("gateway calls = %d; want %d (the turn stops at the refusal)", len(gw.calls), len(tc.script))
+			}
+			if len(res.Draft) != tc.drafts {
+				t.Fatalf("draft = %+v; want %d proposal(s) from before the refusal", res.Draft, tc.drafts)
+			}
+			if len(rec.runs) != 1 || rec.runs[0].Outcome != "refused" || rec.runs[0].ToolCalls != tc.toolCalls || rec.runs[0].PromptTokens == 0 {
+				t.Fatalf("ledger = %+v; want one row outcome=refused, %d tool call(s), its tokens counted", rec.runs, tc.toolCalls)
+			}
+		})
+	}
+}

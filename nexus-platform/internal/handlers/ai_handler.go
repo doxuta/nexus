@@ -161,7 +161,8 @@ type builderChatRequest struct {
 //	AI_TIMEOUT       → 504   AI_INVALID_DRAFT → 422
 //
 // A max_steps turn is a 200 (partial draft + outcome="max_steps"); its assistant message is still
-// persisted (empty content + the partial draft) so a resume re-renders the draft. Apply is NOT
+// persisted (empty content + the partial draft) so a resume re-renders the draft. A turn the model declined
+// (finish_reason "refusal") is a 200 with outcome="refused" and no reply, persisted the same way. Apply is NOT
 // handled here — the FE applies a draft through the existing /admin/entities + /admin/fields +
 // /admin/relationships + /admin/layouts + /admin/workflows + /admin/reports + /admin/apps APIs
 // (the last five for draft items of kind "relationship" — M5's N-N proposal — "layout" — M6's

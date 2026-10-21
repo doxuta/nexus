@@ -270,3 +270,31 @@ func TestGateway_Complete_BadUsageNeverFailsTheAnswer(t *testing.T) {
 		})
 	}
 }
+
+// A model that declines answers HTTP 200 with no text (issue #30 item 5): the gateway relays Claude's
+// stop_reason "refusal" as finish_reason "refusal", and a proxy may copy stop_reason onto the choice as it
+// is. Both read as a refusal; a stop_reason that is a token id (vLLM) neither fails the call nor reads as one.
+func TestGateway_Complete_Refusal(t *testing.T) {
+	for _, tc := range []struct {
+		name, choice string
+		refused      bool
+	}{
+		{"finish_reason refusal, no text", `{"message":{"role":"assistant","content":null},"finish_reason":"refusal"}`, true},
+		{"stop_reason refusal on the choice", `{"message":{"role":"assistant","content":""},"finish_reason":"stop","stop_reason":"refusal"}`, true},
+		{"stop_reason is a token id", `{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop","stop_reason":128001}`, false},
+		{"a plain answer", `{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g, _ := newMockGateway(t, 5*time.Second, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"choices":[` + tc.choice + `],"usage":{"prompt_tokens":2046,"completion_tokens":0}}`))
+			})
+			resp, err := g.Complete(context.Background(), ChatRequest{Model: "m"})
+			if err != nil {
+				t.Fatalf("Complete: %v; a refusal is an answer, not a gateway error", err)
+			}
+			if got := resp.Choices[0].Refused(); got != tc.refused {
+				t.Fatalf("Refused() = %v; want %v", got, tc.refused)
+			}
+		})
+	}
+}
