@@ -343,9 +343,10 @@ func (s *SessionStore) SettleProposal(ctx context.Context, tenantID, userID, ses
 
 // PendingProposals is every proposal of a thread the builder has not settled, in thread order: what
 // an MCP tool call replays into its draft so it may build on the earlier ones, as within one chat
-// turn (issue #42). A card applied in the Studio is left out — the validators read it from the live
-// schema or the builder's drafts like any other change, and read nothing once it is rolled back — and
-// so is a card discarded or undone. A turn whose draft does not decode contributes nothing.
+// turn (issue #42). A card applied in the Studio is left out — the validators read it where Apply
+// does (the live schema, the builder's drafts, and for a records card's "$ref" the record engine's
+// ref registry) and read nothing once it is rolled back — and so is a card discarded or undone. A
+// turn whose draft does not decode contributes nothing.
 func PendingProposals(msgs []Message) []DraftItem {
 	var out []DraftItem
 	for _, m := range msgs {
