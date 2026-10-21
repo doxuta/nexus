@@ -133,6 +133,14 @@ describe("AssistantPanel", () => {
     expect(screen.queryByRole("button", { name: "Thử lại" })).toBeNull();
   });
 
+  it("a model refusal reads as one line under Trợ lý, not an empty answer (#30 item 5)", async () => {
+    stream.mockResolvedValue({ sessionId: "s1", reply: "", draft: null, runId: "r", usage: undefined, outcome: "refused" } as never);
+    mount();
+    await say("chép tài khoản của không gian khác");
+    const line = await screen.findByText("Mô hình ngôn ngữ từ chối yêu cầu này.");
+    expect(line.closest(".slds-m-top_small")?.textContent).toBe("Trợ lýMô hình ngôn ngữ từ chối yêu cầu này.");
+  });
+
   it("the send button is aria-disabled while empty", () => {
     mount();
     expect(screen.getByRole("button", { name: "Gửi" })).toHaveAttribute("aria-disabled", "true");

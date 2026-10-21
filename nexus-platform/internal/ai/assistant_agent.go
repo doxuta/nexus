@@ -130,6 +130,12 @@ func (a *AssistantAgent) Ask(ctx context.Context, recordScope services.RecordSco
 		}
 		msg := resp.Choices[0].Message
 
+		// A refusal ends the turn unused, as in the builder's loop.
+		if resp.Choices[0].Refused() {
+			outcome = outcomeRefused
+			return Result{Draft: exec.draft, Usage: usage, RunID: runID, Outcome: outcome}, nil
+		}
+
 		if len(msg.ToolCalls) == 0 {
 			outcome = outcomeOK
 			return Result{

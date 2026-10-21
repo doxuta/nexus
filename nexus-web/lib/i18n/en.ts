@@ -245,6 +245,7 @@ const en = {
   "studio.assistant.done.accessLink": "Open Users & access",
   "studio.assistant.done.app": "App created. Staff see its data only once their role has access: tell the assistant who will use this app, or tick it on Users & access.",
   "studio.assistant.done.appLink": "Open the new app",
+  "studio.assistant.refused": "The language model declined this request.",
 } as const;
 
 export type I18nKeyEn = keyof typeof en;

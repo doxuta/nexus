@@ -2492,7 +2492,8 @@ export interface AssistantAskResult {
   reply: string;
   usage: AiUsage;
   // "ok" = a final answer; "max_steps" = the tool loop hit its bound with an empty/partial reply
-  // (the FE must tell the user to narrow the question rather than show a blank bubble).
+  // (the FE must tell the user to narrow the question rather than show a blank bubble); "refused" = the
+  // model declined, reply empty (the FE says so).
   outcome?: string;
   // ⌘K-can-act HITL record proposals (kinds record_create/record_update ONLY — never metadata).
   // NOTHING was written server-side: the palette renders confirm cards and applies via the NORMAL

@@ -25,6 +25,7 @@ const (
 	outcomeGatewayError = "gateway_error"
 	outcomeTimeout      = "timeout"
 	outcomeMaxSteps     = "max_steps"
+	outcomeRefused      = "refused" // the model declined (finish_reason "refusal"); the reply is empty
 )
 
 // Completer is the gateway surface the agent needs (satisfied by *Gateway). Declared consumer-side
@@ -228,6 +229,14 @@ func (a *AIBuilderAgent) ChatWithProgress(ctx context.Context, scope Scope, tena
 				fmt.Errorf("ai.Chat: %w: gateway returned no choices", ErrGateway)
 		}
 		msg := resp.Choices[0].Message
+
+		// A refusal ends the turn before its partial text or tool calls are used; proposals from earlier calls
+		// stay, as on max_steps. The outcome is what tells the panel the model declined (issue #30 item 5).
+		if resp.Choices[0].Refused() {
+			a.emitStep(onStep, StepEvent{Step: step + 1, MaxSteps: a.cfg.MaxSteps, Phase: StepPhaseFinal})
+			outcome = outcomeRefused
+			return Result{Draft: finalizeDraft(exec.draft, turn), Usage: usage, RunID: runID, Outcome: outcome}, nil
+		}
 
 		// Final text (no tool calls) → the turn is done.
 		if len(msg.ToolCalls) == 0 {

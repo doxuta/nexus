@@ -174,6 +174,8 @@ function Turn({ turn, summary }: { turn: ChatTurn; summary?: StepSummary }) {
       <p className="slds-text-title_caps">{t(user ? "studio.assistant.speaker.user" : "studio.assistant.speaker.assistant")}</p>
       {user ? (
         <p className="slds-text-body_regular whitespace-pre-wrap">{turn.content}</p>
+      ) : turn.outcome === "refused" ? (
+        <p className="slds-text-body_regular slds-text-color_weak">{t("studio.assistant.refused")}</p>
       ) : (
         <MarkdownLite variant="slds" text={turn.content} resolveHref={(h) => resolveAssistantLink(h, a.slug)} />
       )}

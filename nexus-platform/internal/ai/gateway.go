@@ -102,6 +102,15 @@ type ChatResponse struct {
 type ChatChoice struct {
 	Message      ChatMessage `json:"message"`
 	FinishReason string      `json:"finish_reason"`
+	// StopReason is Claude's name for the finish reason, which a proxy may copy onto the choice as it is. It is
+	// decoded as any because vLLM sends a token id (a number) under the same name.
+	StopReason any `json:"stop_reason,omitempty"`
+}
+
+// Refused reports a model that declined the request (HTTP 200, stop_reason "refusal" in Claude's API, relayed
+// as finish_reason "refusal"). Its text and tool calls may be cut short and are not an answer.
+func (c ChatChoice) Refused() bool {
+	return c.FinishReason == "refusal" || c.StopReason == "refusal"
 }
 
 // Usage carries the token counts the ledger records (spec §5). PromptTokens is ALL the input the model
