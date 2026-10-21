@@ -20,6 +20,12 @@ import (
 // tells them nothing they could not already read.
 var ErrRecordSharedReadOnly = invalid("RECORD_SHARED_READ_ONLY", "Hồ sơ này được chia sẻ để xem, không sửa được")
 
+// ErrRecordEditForbidden: the caller's write scope missed a record their VIEW scope reaches (issue #18:
+// view=all, edit=own — a rep saving a colleague's ticket). They can already read it, so 403 tells them
+// nothing new, where the bare 404 told them it did not exist. Code and sentence are the ACL stage's 403
+// (middleware.abortForbidden); the record handler answers it with that exact body.
+var ErrRecordEditForbidden = invalid("FORBIDDEN", "Bạn không có quyền thực hiện thao tác này")
+
 // ResolveShareTarget authorizes managing the shares of (entityName, recordID) — Q4(a): whoever may
 // EDIT the record may share it. Like ResolveNoteTarget it does not trust the route's own ACL mount:
 //
@@ -46,24 +52,47 @@ func (s *RecordService) ResolveShareTarget(ctx context.Context, scope RecordScop
 	return e.Name, nil
 }
 
-// sharedReadOnlyOr maps a write that missed the record under the caller's write scope: when the
-// SAME level plus the manual-share clause does reach it, the record is visible to them only because
-// it was shared → ErrRecordSharedReadOnly; otherwise writeErr is returned unchanged (the 404 stays a
-// 404). The share clause only ever widens the owner/team levels, so for admins, "all" (the miss
-// means the record is gone) and "none" (1=0 whatever is shared) there is nothing to probe. A probe
-// failure is returned wrapped rather than guessed at.
+// sharedReadOnlyOr maps a write that missed the record under the caller's write scope, by asking what
+// the caller may READ — never more than a GET of the same record would have told them:
+//   - the SAME level plus the manual-share clause reaches it → they see it only because it was shared
+//     → ErrRecordSharedReadOnly (the share clause only widens owner/team levels, so only those probe);
+//   - their VIEW scope reaches it → ErrRecordEditForbidden (issue #18);
+//   - otherwise writeErr unchanged: the 404 stays a 404, also for a record deleted since the write.
+//
+// Admins skip both probes (a miss means the record is gone), and so does a write level of "all" (no
+// view level is wider). A probe or ACL failure is returned wrapped rather than guessed at.
 func (s *RecordService) sharedReadOnlyOr(ctx context.Context, writeScope RecordScope, tenantID, entity, id string, writeErr error) error {
 	lvl := dynrepo.AccessLevel(writeScope.AccessLevel)
-	if !errors.Is(writeErr, ErrRecordNotFound) || writeScope.IsAdmin || !lvl.IsOwnerScoped() {
+	if !errors.Is(writeErr, ErrRecordNotFound) || writeScope.IsAdmin || lvl == dynrepo.AccessAll {
 		return writeErr
 	}
-	probe := writeScope.toRowScope()
-	probe.IncludeShares = true
-	if _, err := s.store.GetRecord(ctx, entity, tenantID, id, probe); err != nil {
+	if lvl.IsOwnerScoped() {
+		probe := writeScope.toRowScope()
+		probe.IncludeShares = true
+		if _, err := s.store.GetRecord(ctx, entity, tenantID, id, probe); err == nil {
+			return ErrRecordSharedReadOnly
+		} else if !errors.Is(err, ErrRecordNotFound) {
+			return fmt.Errorf("services.RecordService.sharedReadOnlyOr: %w", err)
+		}
+	}
+	if s.authz == nil {
+		return writeErr
+	}
+	allowed, viewLevel, err := s.authz.Authorize(ctx, tenantID, writeScope.RoleID, entity, "view")
+	if err != nil {
+		return fmt.Errorf("services.RecordService.sharedReadOnlyOr: %w", err)
+	}
+	// A level equal to the write level was just probed (or is "none": 1=0) — nothing new to ask.
+	if !allowed || viewLevel == writeScope.AccessLevel || dynrepo.AccessLevel(viewLevel) == dynrepo.AccessNone {
+		return writeErr
+	}
+	view := writeScope // identity verbatim; only the level changes, with the share clause a view read carries
+	view.AccessLevel, view.IncludeShares = viewLevel, true
+	if _, err := s.store.GetRecord(ctx, entity, tenantID, id, view.toRowScope()); err != nil {
 		if errors.Is(err, ErrRecordNotFound) {
 			return writeErr
 		}
 		return fmt.Errorf("services.RecordService.sharedReadOnlyOr: %w", err)
 	}
-	return ErrRecordSharedReadOnly
+	return ErrRecordEditForbidden
 }

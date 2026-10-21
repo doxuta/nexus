@@ -1985,10 +1985,10 @@ func (s *RecordService) Update(ctx context.Context, scope RecordScope, tenantID,
 		currentVals = rec0.Data
 	} else if errors.Is(gerr, ErrRecordNotFound) {
 		// specs/051 (#226): the caller's edit scope does not reach the record. If it is visible to
-		// them only through a manual share, say so NOW — the field/relation checks below run with
-		// currentVals == nil (strict) and would otherwise answer 403 FIELD_* / 422 before the
-		// read-only verdict FR-005 promises. Any other outcome falls through to the old flow.
-		if serr := s.sharedReadOnlyOr(ctx, scope, tenantID, e.Name, id, gerr); errors.Is(serr, ErrRecordSharedReadOnly) {
+		// them only through a manual share — or through their view scope (#18) — say so NOW: the
+		// field/relation checks below run with currentVals == nil (strict) and would otherwise answer
+		// 403 FIELD_* / 422 before the read-only verdict. Any other outcome falls through to the old flow.
+		if serr := s.sharedReadOnlyOr(ctx, scope, tenantID, e.Name, id, gerr); errors.Is(serr, ErrRecordSharedReadOnly) || errors.Is(serr, ErrRecordEditForbidden) {
 			return serr
 		}
 	}

@@ -909,6 +909,9 @@ func (h *DynamicRecordHandler) respondError(c *gin.Context, err error, op string
 		c.JSON(http.StatusNotFound, gin.H{"error": "Entity không tồn tại", "code": "ENTITY_NOT_FOUND"})
 	case errors.Is(err, services.ErrRecordNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "Bản ghi không tồn tại", "code": "RECORD_NOT_FOUND"})
+	case errors.Is(err, services.ErrRecordEditForbidden):
+		// #18: viewable but outside the write scope — byte-identical with middleware.RequireACL's 403.
+		c.JSON(http.StatusForbidden, gin.H{"error": services.ErrRecordEditForbidden.(*services.ValidationError).Msg, "code": "FORBIDDEN"})
 	case errors.Is(err, services.ErrRecordHooksUnavailable):
 		// specs/048 FR-021: the entity's before rules (or the record they judge) could not be read,
 		// so the write was refused rather than let through unjudged. Checked before DB_TIMEOUT so a
