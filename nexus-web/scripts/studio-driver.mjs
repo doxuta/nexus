@@ -75,11 +75,12 @@ export function connect({ base, tenant, browser }) {
   const go = (page, p) => page.goto(`${base}${p}`, { waitUntil: "networkidle2", timeout: 60_000 });
   const studio = (p) => `/studio/du-an/${tenant}/${p}`;
 
-  /** Header → Xuất bản → the review lists the drafts → Xuất bản; returns the new version number. */
+  /** Header → Xuất bản → the review lists the drafts → Xuất bản; returns the new version number. Without `route`, from the
+   *  page already open: the header must have learned of the drafts by itself (#17), not from a reload. */
   async function publishFromHeader(page, route) {
     const before = await headVersion();
     if ((await drafts()).length === 0) throw new Error("nothing to publish: no drafts");
-    await go(page, route); // the header reads the publish state on load
+    if (route) await go(page, route);
     await (await button(page, t("studio.publish.open"), '[data-testid="project-header"]')).click();
     await page.waitForSelector('[data-testid="publish-submit"]:not([disabled])');
     await waitText(page, t("studio.publish.count", { n: (await drafts()).length }), '[role="dialog"]');
