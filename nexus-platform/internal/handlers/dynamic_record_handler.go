@@ -910,8 +910,7 @@ func (h *DynamicRecordHandler) respondError(c *gin.Context, err error, op string
 	case errors.Is(err, services.ErrRecordNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "Bản ghi không tồn tại", "code": "RECORD_NOT_FOUND"})
 	case errors.Is(err, services.ErrRecordEditForbidden):
-		// #18: viewable but outside the write scope — byte-identical with middleware.RequireACL's 403.
-		c.JSON(http.StatusForbidden, gin.H{"error": services.ErrRecordEditForbidden.(*services.ValidationError).Msg, "code": "FORBIDDEN"})
+		respondRecordEditForbidden(c)
 	case errors.Is(err, services.ErrRecordHooksUnavailable):
 		// specs/048 FR-021: the entity's before rules (or the record they judge) could not be read,
 		// so the write was refused rather than let through unjudged. Checked before DB_TIMEOUT so a
@@ -947,6 +946,13 @@ func (h *DynamicRecordHandler) respondError(c *gin.Context, err error, op string
 		h.logger.Error("handlers.DynamicRecord."+op, append(logFields(c), zap.Error(err))...)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Lỗi xử lý bản ghi", "code": "RECORD_OP_FAILED"})
 	}
+}
+
+// respondRecordEditForbidden answers services.ErrRecordEditForbidden (#18: the record is viewable but
+// outside the write scope) byte-identical with middleware.RequireACL's 403, on every route that can
+// raise it (record writes, share management).
+func respondRecordEditForbidden(c *gin.Context) {
+	c.JSON(http.StatusForbidden, gin.H{"error": services.ErrRecordEditForbidden.(*services.ValidationError).Msg, "code": "FORBIDDEN"})
 }
 
 // parseExpand splits a comma-separated ?expand=f1,f2 query value into a trimmed slice.

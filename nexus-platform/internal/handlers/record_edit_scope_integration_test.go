@@ -45,7 +45,7 @@ func TestRecordWrite_EditScope403_OverHTTP(t *testing.T) {
 
 	a4SeedUser(t, gdb, editScopeTenantAID, "a@"+editScopeTenantASlug, false, &rep)
 	a4SeedUser(t, gdb, editScopeTenantAID, "b@"+editScopeTenantASlug, false, &rep)
-	a4SeedUser(t, gdb, editScopeTenantAID, "n@"+editScopeTenantASlug, false, &narrow)
+	uN := a4SeedUser(t, gdb, editScopeTenantAID, "n@"+editScopeTenantASlug, false, &narrow)
 	a4SeedUser(t, gdb, editScopeTenantAID, "r@"+editScopeTenantASlug, false, &reader)
 	a4SeedUser(t, gdb, editScopeTenantAID, "admin@"+editScopeTenantASlug, true, nil)
 
@@ -91,8 +91,13 @@ func TestRecordWrite_EditScope403_OverHTTP(t *testing.T) {
 	put403 := expect("B PUT", http.MethodPut, rec, bTok, edit, http.StatusForbidden, "FORBIDDEN")
 	del403 := expect("B DELETE", http.MethodDelete, rec, bTok, nil, http.StatusForbidden, "FORBIDDEN")
 	acl403 := expect("reader DELETE (no delete grant: the ACL stage)", http.MethodDelete, rec, rTok, nil, http.StatusForbidden, "FORBIDDEN")
-	if string(put403) != string(acl403) || string(del403) != string(acl403) {
-		t.Fatalf("403 bodies differ from the ACL stage's:\n PUT    %s\n DELETE %s\n ACL    %s", put403, del403, acl403)
+	// Share management (edit-gated) refuses B the same way, with the same bytes.
+	shareList := expect("B lists A's shares", http.MethodGet, rec+"/shares", bTok, nil, http.StatusForbidden, "FORBIDDEN")
+	shareAdd := expect("B shares A's ticket", http.MethodPost, rec+"/shares", bTok, map[string]any{"userId": uN}, http.StatusForbidden, "FORBIDDEN")
+	for name, got := range map[string][]byte{"PUT": put403, "DELETE": del403, "GET shares": shareList, "POST shares": shareAdd} {
+		if string(got) != string(acl403) {
+			t.Fatalf("%s 403 body differs from the ACL stage's:\n got %s\n ACL %s", name, got, acl403)
+		}
 	}
 	// The bulk doors share the single-record path: the row says FORBIDDEN, not RECORD_NOT_FOUND.
 	for _, door := range []struct{ path, name string }{{"/bulk-update", "bulk-update"}, {"/bulk-delete", "bulk-delete"}} {
