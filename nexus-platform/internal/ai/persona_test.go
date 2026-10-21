@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -48,6 +49,33 @@ func TestPersona_NamesEveryEngineFieldType(t *testing.T) {
 	for _, ft := range services.AllowedFieldTypes() {
 		if !strings.Contains(p, "`"+ft+"`") {
 			t.Errorf("Persona() does not name field type `%s`", ft)
+		}
+	}
+}
+
+// TestPersonas_FollowTheUsersLanguage (issue #6): the builder and the end-user assistant answer, and the builder
+// labels what it proposes, in the language the person writes in; neither prompt pins Vietnamese any more. Both
+// prompts stay in Vietnamese; only the rule changed. The cassette fingerprint leaves system messages out, so this
+// edit does not make a recorded demo stale (TestFingerprint_ToolsPromptsAndShapeNotFreshIDs).
+func TestPersonas_FollowTheUsersLanguage(t *testing.T) {
+	for name, p := range map[string]string{"builder": Persona(), "assistant": AssistantPersona()} {
+		if !strings.Contains(p, "ngôn ngữ người dùng") {
+			t.Errorf("%s persona has no rule to answer in the user's language", name)
+		}
+		for _, pinned := range []string{"nói tiếng Việt", "Trả lời tiếng Việt", "Trả lời **tiếng Việt**", "nhãn tiếng Việt", "`title` tiếng Việt", "record tiếng Việt"} {
+			if strings.Contains(p, pinned) {
+				t.Errorf("%s persona still pins Vietnamese: %q", name, pinned)
+			}
+		}
+	}
+	// The tool schemas steer labels too: none may ask for a Vietnamese label or Vietnamese sample data.
+	raw, err := json.Marshal(ToolDefinitions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pinned := range []string{"hiển thị tiếng Việt", "nhãn tiếng Việt", "Dữ liệu tiếng Việt", "(tiếng Việt có dấu)"} {
+		if strings.Contains(string(raw), pinned) {
+			t.Errorf("a tool description still pins Vietnamese: %q", pinned)
 		}
 	}
 }
