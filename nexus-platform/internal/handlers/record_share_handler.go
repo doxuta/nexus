@@ -210,6 +210,8 @@ func (h *RecordShareHandler) respondError(c *gin.Context, err error, op string) 
 		c.JSON(http.StatusNotFound, gin.H{"error": "Bản ghi không tồn tại", "code": "RECORD_NOT_FOUND"})
 	case errors.Is(err, shares.ErrShareNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "Hồ sơ không được chia sẻ cho người này", "code": "RECORD_SHARE_NOT_FOUND"})
+	case errors.Is(err, services.ErrRecordEditForbidden):
+		respondRecordEditForbidden(c)
 	default:
 		var ve *services.ValidationError
 		if errors.As(err, &ve) {

@@ -323,15 +323,19 @@ const steps = [
   }],
 
   ["rep-refused-on-the-builders-ticket", async () => {
-    // Row level: the rep opens the builder's ticket; its page has no "Sửa" and says it belongs to someone else (the
-    // misleading /edit form is #18), and the server refuses the very PUT it accepts on the rep's own ticket. Outside the
-    // edit scope the server answers 404, as for a ticket that is not there (by design: LayoutDetail's outOfEditScope), so
-    // the GET beside it shows that the ticket is there and readable. And no delete at all, not even of their own ticket.
+    // Row level: the rep opens the builder's ticket; its page has no "Sửa" and says it belongs to someone else, its /edit
+    // form (a pasted link) says the same with Lưu off, and the server refuses the very PUT it accepts on the rep's own
+    // ticket. The rep can read the ticket (the GET beside it), so the refusal is 403 FORBIDDEN, not the 404 of a ticket
+    // that is not there (#18). And no delete at all, not even of their own ticket.
     await go(rep, `/${entity.name}/${builderRecordId}`);
     await waitText(rep, t("page.record.editScope.readOnly"), "main");
     await waitText(rep, BUILDER_TICKET, "main");
     const edit = await rep.$$eval("main button, main a", (els, label) => els.filter((e) => e.textContent.trim() === label).length, t("page.record.action.edit"));
     if (edit > 0) throw new Error(`the builder's ticket offers the rep "${t("page.record.action.edit")}"`);
+    await go(rep, `/${entity.name}/${builderRecordId}/edit`);
+    await waitText(rep, t("page.record.editScope.readOnly"), "main");
+    const save = await rep.waitForSelector('main button[type="submit"]');
+    if (!(await save.evaluate((b) => b.disabled))) throw new Error(`the builder's ticket's edit form lets the rep press "${t("page.recordForm.saveEdit")}"`);
     const body = { [titleField]: TICKET_EDITED };
     const got = {
       "PUT own": await requestAs(rep, "PUT", recordId, body),
@@ -339,12 +343,12 @@ const steps = [
       "PUT the builder's": await requestAs(rep, "PUT", builderRecordId, body),
       "DELETE own": await requestAs(rep, "DELETE", recordId),
     };
-    const want = { "PUT own": "200", "GET the builder's": "200", "PUT the builder's": "404 RECORD_NOT_FOUND", "DELETE own": "403 FORBIDDEN" };
+    const want = { "PUT own": "200", "GET the builder's": "200", "PUT the builder's": "403 FORBIDDEN", "DELETE own": "403 FORBIDDEN" };
     const said = Object.entries(got).map(([k, v]) => `${k} → ${v}`).join(", ");
     if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`as the rep: ${said}; want ${JSON.stringify(want)}`);
     const kept = (await api(`/${entity.name}/${builderRecordId}`)).data;
     if (JSON.stringify(kept).includes(TICKET_EDITED)) throw new Error("the builder's ticket was changed by the rep");
-    return `"${t("page.record.editScope.readOnly")}"; ${said}`;
+    return `"${t("page.record.editScope.readOnly")}" on the page and on its /edit form, whose "${t("page.recordForm.saveEdit")}" is off; ${said}`;
   }],
 
   ["builder-changes-the-list-layout", async () => {

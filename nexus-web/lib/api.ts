@@ -1463,7 +1463,8 @@ export interface ApiRecord {
   // false when the caller's EDIT scope does not reach this record although their VIEW scope does
   // (view=all, edit=own: a colleague's lead), or they hold no edit grant — GET /:entity/:id only
   // (DAILY-QUEUE #334). Absent means "no restriction known" (own record, edit=all, admin), never
-  // "forbidden": the page hides Sửa on `=== false` instead of letting the save die as 404.
+  // "forbidden": the page hides Sửa and the form turns Lưu off on `=== false`; the save itself would be
+  // refused 403 FORBIDDEN (#18).
   canEdit?: boolean;
 }
 // Pagination block returned by the list endpoint in OFFSET mode (?page=&limit=).

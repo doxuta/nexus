@@ -591,7 +591,8 @@ export function LayoutForm({ entity, recordId, onSaved, onCancel, modal = false,
     // refused with 403 RECORD_SHARED_READ_ONLY, so say it before the user types.
     notification = { tone: "info", body: t("page.record.share.readOnly") };
   } else if (isEdit && record?.canEdit === false) {
-    // #334: a pasted /edit link to a record outside the caller's edit scope — the save would 404.
+    // #334: a pasted /edit link to a record outside the caller's edit scope — the save would be
+    // refused 403 FORBIDDEN (#18), so Lưu is off (submitDisabled below) and this says why.
     notification = { tone: "info", body: t("page.record.editScope.readOnly") };
   } else if (savedNote) {
     notification = { tone: "success", body: savedNote };
@@ -642,6 +643,8 @@ export function LayoutForm({ entity, recordId, onSaved, onCancel, modal = false,
       sections={formSections}
       notification={notification}
       saving={saving || previewReadOnly}
+      // #18: the server answers this save 403 (canEdit is false for a share-only record too).
+      submitDisabled={isEdit && record?.canEdit === false}
       submitLabel={isEdit ? t("page.recordForm.saveEdit") : tf("page.recordForm.titleCreate", { entity: entityLabel })}
       onSubmit={(e) => {
         // Enter in a field and the footer's Lưu both land here — always the PRIMARY save.

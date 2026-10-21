@@ -918,7 +918,7 @@ func (s *RecordService) Get(ctx context.Context, scope RecordScope, tenantID, en
 
 // markEditability sets rec.CanEdit=&false when the caller's EDIT scope does not reach a record their
 // VIEW scope does (DAILY-QUEUE #334: view=all / edit=own, a rep opening a colleague's lead), so the
-// page can hide Sửa instead of letting the save die as 404 RECORD_NOT_FOUND. It leaves CanEdit nil —
+// page can hide Sửa instead of letting the save die (403 FORBIDDEN since #18). It leaves CanEdit nil —
 // "no restriction known" — for admins, an unwired authorizer, an edit scope that is "all", and a
 // record the edit scope reaches. The edit probe is the same GetRecord the PUT would run (edit level,
 // shares OFF), so the flag cannot disagree with what the write does. A probe fault is returned
@@ -938,12 +938,16 @@ func (s *RecordService) markEditability(ctx context.Context, scope RecordScope, 
 		return nil
 	case dynrepo.AccessLevel(level) == dynrepo.AccessAll:
 		return nil
-	case rec.SharedWithMe: // reached only through a share, and shares are read-only (specs/051)
-		rec.CanEdit = &no
-		return nil
-	case level == scope.AccessLevel: // the row passed this very predicate on the view read
+	case level == scope.AccessLevel:
+		// The view read ran this very predicate: it matched the row, unless the row came only through
+		// a share (specs/051: shares are read-only, and a write never carries the share clause).
+		if rec.SharedWithMe {
+			rec.CanEdit = &no
+		}
 		return nil
 	}
+	// A share grants a read only; it never takes away an edit right the role holds through another
+	// level (view=owner, edit=team on a shared team record) — so a share-only row is probed like any other.
 	editScope := scope
 	editScope.AccessLevel, editScope.IncludeShares = level, false
 	if _, err := s.store.GetRecord(ctx, entity, tenantID, rec.ID, editScope.toRowScope()); err != nil {
@@ -1985,10 +1989,10 @@ func (s *RecordService) Update(ctx context.Context, scope RecordScope, tenantID,
 		currentVals = rec0.Data
 	} else if errors.Is(gerr, ErrRecordNotFound) {
 		// specs/051 (#226): the caller's edit scope does not reach the record. If it is visible to
-		// them only through a manual share, say so NOW — the field/relation checks below run with
-		// currentVals == nil (strict) and would otherwise answer 403 FIELD_* / 422 before the
-		// read-only verdict FR-005 promises. Any other outcome falls through to the old flow.
-		if serr := s.sharedReadOnlyOr(ctx, scope, tenantID, e.Name, id, gerr); errors.Is(serr, ErrRecordSharedReadOnly) {
+		// them only through a manual share — or through their view scope (#18) — say so NOW: the
+		// field/relation checks below run with currentVals == nil (strict) and would otherwise answer
+		// 403 FIELD_* / 422 before the read-only verdict. Any other outcome falls through to the old flow.
+		if serr := s.sharedReadOnlyOr(ctx, scope, tenantID, e.Name, id, gerr); errors.Is(serr, ErrRecordSharedReadOnly) || errors.Is(serr, ErrRecordEditForbidden) {
 			return serr
 		}
 	}

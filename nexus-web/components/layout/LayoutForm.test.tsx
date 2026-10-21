@@ -166,6 +166,23 @@ describe("LayoutForm — RecordFormPage (SLDS)", () => {
     const note = (await screen.findByText("Hồ sơ này thuộc người khác — bạn xem được nhưng không sửa được."))
       .closest(".slds-scoped-notification");
     expect(note).toHaveClass("slds-scoped-notification_light");
+    // #18: the server refuses that save (403), so Save is off from the start — the notice above says why.
+    const save = within(footer()).getByRole("button", { name: "Lưu thay đổi" });
+    expect(save).toBeDisabled();
+    expect(within(footer()).getByRole("button", { name: "Huỷ" })).toBeEnabled();
+    fireEvent.click(save);
+    expect(seam.updateRecord).not.toHaveBeenCalled();
+  });
+
+  it("403 FORBIDDEN on save (edit scope moved since the form opened): the server's sentence in the form-level error", async () => {
+    seam.updateRecord.mockRejectedValue(new ApiError(403, "FORBIDDEN", "Bạn không có quyền thực hiện thao tác này"));
+    render(<LayoutForm entity="crm_opportunities" recordId="opp-1" />);
+    await screen.findByRole("textbox", { name: /Tên cơ hội/ });
+    const save = within(footer()).getByRole("button", { name: "Lưu thay đổi" });
+    expect(save).toBeEnabled(); // no canEdit flag: nothing known yet
+    fireEvent.click(save);
+    const note = (await screen.findByText("Bạn không có quyền thực hiện thao tác này")).closest(".slds-scoped-notification");
+    expect(note).toHaveClass("slds-theme_error");
   });
 
   it("403 RECORD_SHARED_READ_ONLY on save: the server's sentence in the form-level error", async () => {

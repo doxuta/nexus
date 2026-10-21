@@ -81,8 +81,8 @@ func TestRecordGet_CanEditFlag_OverHTTP(t *testing.T) {
 	if got, present := canEdit("B", bTok); !present || got {
 		t.Fatalf("B on A's lead: canEdit = (%v, present=%v); want (false, true)", got, present)
 	}
-	if code := put(bTok); code != http.StatusNotFound {
-		t.Fatalf("B PUT on A's lead = %d; want 404 (the flag must match what the write does)", code)
+	if code := put(bTok); code != http.StatusForbidden {
+		t.Fatalf("B PUT on A's lead = %d; want 403 (the flag must match what the write does; B can read it, so not 404 — #18)", code)
 	}
 	// A (owner), the manager (edit=all) and the admin: no restriction known → flag absent; and they can edit.
 	for who, token := range map[string]string{"A": aTok, "manager": mTok, "admin": adminTok} {
