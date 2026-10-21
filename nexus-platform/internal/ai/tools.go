@@ -1120,7 +1120,7 @@ func (e *toolExecutor) proposeField(ctx context.Context, argsJSON string) string
 	if code, msg, ok := validationOf(services.ValidateAddField(in)); !ok {
 		return toolErr("%s: %s", code, msg)
 	}
-	_, _, fields, err := e.pendingFields(ctx, withEntity.Entity)
+	entity, live, fields, err := e.pendingFields(ctx, withEntity.Entity)
 	if err != nil && !errors.Is(err, metadata.ErrEntityNotFound) {
 		return toolErr("PROPOSE_FIELD_FAILED: %v", err)
 	}
@@ -1137,6 +1137,15 @@ func (e *toolExecutor) proposeField(ctx context.Context, argsJSON string) string
 	// picklist (live, or drafted this turn), keys among its values, no cycle - judged now, not at Apply.
 	if code, msg, ok := validationOf(e.checkAddFieldRefs(ctx, withEntity.Entity, a.toFieldInput())); !ok {
 		return toolErr("%s: %s", code, msg)
+	}
+	// Issue #42: a relation or user field derives `<name>_id`; Apply's own check says whether a live
+	// table already has that column (owner ⇒ owner_id). A table only drafted has no columns to read.
+	if c, ok := e.reader.(AccessProbeCarrier); ok && live {
+		if p := c.AccessProbes(); p != nil && p.Columns != nil {
+			if code, msg, ok := validationOf(services.CheckRelationColumn(ctx, p.Columns, entity, a.Name, a.FieldType)); !ok {
+				return toolErr("%s: %s", code, msg)
+			}
+		}
 	}
 
 	e.draft = append(e.draft, DraftItem{Kind: "field", Field: ptrDraftField(a.toDraftField(withEntity.Entity))})
@@ -3096,6 +3105,10 @@ type AccessProbes struct {
 	// Published is OPTIONAL and not part of complete(): propose_access asks it whether a live table
 	// is already the customer's. Unwired, every live table counts as published (fail closed).
 	Published publishCutoff // *services.DraftGate
+	// Columns is OPTIONAL and not part of complete(): propose_field asks it whether a relation or user
+	// field's `<name>_id` column is taken (issue #42, services.CheckRelationColumn — Apply's own check).
+	// Unwired, the proposal skips the check and Apply still refuses.
+	Columns services.ColumnChecker // *dynrepo.Repository
 }
 
 // complete reports whether every probe is wired — explain_access degrades honestly when not.

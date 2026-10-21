@@ -644,13 +644,8 @@ func (s *FieldService) AddField(ctx context.Context, tenantID string, in AddFiel
 		// A re-add of this relation's own soft-deleted column is already rejected earlier by
 		// the dup-check (ListFieldsIncludingDeleted), so reaching here with the column
 		// present is always a name collision -> reject (422), never skip-and-persist (§7.2).
-		exists, err := s.schema.ColumnExists(ctx, entityName, fieldName+"_id")
-		if err != nil {
-			return nil, fmt.Errorf("services.AddField: check relation column exists: %w", err)
-		}
-		if exists {
-			return nil, invalid("FIELD_RELATION_COLUMN_CONFLICT",
-				"không thể thêm field relation %q: cột %q đã tồn tại trên entity %q", fieldName, fieldName+"_id", entityName)
+		if err := CheckRelationColumn(ctx, s.schema, entityName, fieldName, in.Field.FieldType); err != nil {
+			return nil, err
 		}
 		// ENG-REL2 #5: cardinality selects which DDL pair materializes the FK column — the
 		// ordinary 1-N shape (plain FK column + non-unique index, unchanged) or the 1-1
@@ -692,13 +687,8 @@ func (s *FieldService) AddField(ctx context.Context, tenantID string, in AddFiel
 		// target is the FIXED `users` system table, so there is no cardinality option, no
 		// target-existence check, and no sys_relationships registry row (pendingRel stays
 		// nil below). The column-collision guard mirrors relation's exactly.
-		exists, err := s.schema.ColumnExists(ctx, entityName, fieldName+"_id")
-		if err != nil {
-			return nil, fmt.Errorf("services.AddField: check user column exists: %w", err)
-		}
-		if exists {
-			return nil, invalid("FIELD_RELATION_COLUMN_CONFLICT",
-				"không thể thêm field user %q: cột %q đã tồn tại trên entity %q", fieldName, fieldName+"_id", entityName)
+		if err := CheckRelationColumn(ctx, s.schema, entityName, fieldName, in.Field.FieldType); err != nil {
+			return nil, err
 		}
 		if err := s.schema.AddRelationColumn(ctx, entityName, fieldName); err != nil {
 			// RM-25 DDL race for a concurrent user-field AddField: 1061 -> 409.
@@ -1217,6 +1207,33 @@ func (s *FieldService) guardRequiredWhileLocked(ctx context.Context, tenantID st
 	return CheckRequiredWhileLocked(ctx, s.restrictions, tenantID, func() (string, error) {
 		return s.meta.GetEntityNameByID(ctx, tenantID, stored.EntityID)
 	}, stored, effective)
+}
+
+// ColumnChecker reads whether a physical column exists on an entity's obj_* table (*dynrepo.Repository).
+type ColumnChecker interface {
+	ColumnExists(ctx context.Context, entity, field string) (bool, error)
+}
+
+// CheckRelationColumn is AddField's column-collision guard for a relation or user field, which
+// materializes a `<field>_id` FK column: a column of that name already on the table (a system column
+// such as owner_id, or one an indexed field literally named so created) is a 422
+// FIELD_RELATION_COLUMN_CONFLICT, never skipped-and-persisted (the relation would hijack it). Exported
+// so the AI Builder's propose_field refuses at propose time what Apply refuses (issue #42). Any other
+// field type derives no such column: nil. A read failure is returned as a non-validation error.
+func CheckRelationColumn(ctx context.Context, cols ColumnChecker, entityName, fieldName, fieldType string) error {
+	if fieldType != "relation" && fieldType != "user" {
+		return nil
+	}
+	col := fieldName + "_id"
+	exists, err := cols.ColumnExists(ctx, entityName, col)
+	if err != nil {
+		return fmt.Errorf("services.CheckRelationColumn: %w", err)
+	}
+	if exists {
+		return invalid("FIELD_RELATION_COLUMN_CONFLICT",
+			"không thể thêm field %s %q: cột %q đã tồn tại trên entity %q", fieldType, fieldName, col, entityName)
+	}
+	return nil
 }
 
 // CheckRequiredWhileLocked is the body of guardRequiredWhileLocked, exported so the AI Builder's
