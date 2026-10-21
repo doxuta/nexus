@@ -308,6 +308,25 @@ func TestCall_ProposalLandsInTheTokensThread(t *testing.T) {
 	}
 }
 
+// Issue #42: a card the builder applied, discarded or undid in the Studio is not replayed into the
+// next proposal's draft; the rest of the thread is, in order.
+func TestCall_SettledProposalsAreNotReplayed(t *testing.T) {
+	raw := func(items ...ai.DraftItem) json.RawMessage { b, _ := json.Marshal(items); return b }
+	field := func(n string) ai.DraftItem {
+		return ai.DraftItem{Kind: "field", Field: &ai.DraftField{Entity: "patients", Name: n}}
+	}
+	th := &fakeThreads{msgs: []ai.Message{
+		{Seq: 1, Role: "assistant", DraftJSON: raw(field("discarded"), field("pending")), Settled: []int{0}},
+		{Seq: 3, Role: "assistant", DraftJSON: raw(field("applied")), Settled: []int{0}},
+		{Seq: 5, Role: "assistant", DraftJSON: raw(field("also_pending"))},
+	}}
+	run := &fakeRunner{res: `{"ok":false,"error":"FIELD_ALREADY_EXISTS: x"}`}
+	callTool(t, serve(t, &fakeVerifier{}, run, th), "nexus_propose_field", map[string]any{"entity": "patients"})
+	if want := []ai.DraftItem{field("pending"), field("also_pending")}; len(run.calls) != 1 || !reflect.DeepEqual(run.calls[0].prior, want) {
+		t.Fatalf("replayed %+v; want only the pending cards %+v", run.calls, want)
+	}
+}
+
 func TestCall_ProposalRefusedByAValidatorIsAToolErrorAndWritesNothing(t *testing.T) {
 	th := &fakeThreads{}
 	run := &fakeRunner{res: `{"ok":false,"error":"ENTITY_NOT_FOUND: entity \"nope\" không tồn tại"}`}

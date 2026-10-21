@@ -133,8 +133,9 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 const proposedNote = "Saved as a card in the builder's Studio thread. Nothing has changed: a human reviews the card, applies it to drafts and publishes it."
 
 // call runs one tool as the token's builder. A propose_* call first reads the thread's earlier
-// proposals (so it may build on them, as within one chat turn), and a proposal that passed the
-// validators is appended to the thread; the agent is told it proposed only once that write landed.
+// proposals still pending (so it may build on them, as within one chat turn), and a proposal that
+// passed the validators is appended to the thread; the agent is told it proposed only once that
+// write landed.
 func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (res *mcp.CallToolResult, err error) {
 	p, ok := ctx.Value(principalKey{}).(services.MCPPrincipal)
 	if !ok {
@@ -198,20 +199,15 @@ func (s *server) frozen(ctx context.Context, p services.MCPPrincipal) (time.Time
 	return until, frozen
 }
 
-// priorProposals reads every proposal already in the token's thread.
+// priorProposals reads the proposals of the token's thread that are still pending: a card the builder
+// applied, discarded or undid in the Studio is not replayed (issue #42), so the validators judge it
+// by the live schema and the builder's drafts only.
 func (s *server) priorProposals(ctx context.Context, p services.MCPPrincipal) ([]ai.DraftItem, error) {
 	_, msgs, err := s.threads.GetSession(ctx, p.TenantID, p.UserID, p.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("mcpserver.priorProposals: %w", err)
 	}
-	var out []ai.DraftItem
-	for _, m := range msgs {
-		var items []ai.DraftItem
-		if len(m.DraftJSON) > 0 && json.Unmarshal(m.DraftJSON, &items) == nil {
-			out = append(out, items...)
-		}
-	}
-	return out, nil
+	return ai.PendingProposals(msgs), nil
 }
 
 // threadError is the tool error of a proposal that cannot reach its thread.
