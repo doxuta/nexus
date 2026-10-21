@@ -49,6 +49,7 @@ type SessionStore interface {
 	GetSession(ctx context.Context, tenantID, userID, id string) (ai.Session, []ai.Message, error)
 	AppendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage) (string, error)
 	SoftDeleteSession(ctx context.Context, tenantID, userID, id string) error
+	SettleProposal(ctx context.Context, tenantID, userID, sessionID string, seq, index int) error
 }
 
 // TurnGuard is the consumer-side view of the M4 ai.BudgetGuard (spec §12, MED-1): the per-tenant
@@ -128,6 +129,7 @@ func (h *AIBuilderHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/admin/ai/builder/sessions", h.ListSessions)
 	rg.GET("/admin/ai/builder/sessions/:id", h.GetSession)
 	rg.DELETE("/admin/ai/builder/sessions/:id", h.DeleteSession)
+	rg.POST("/admin/ai/builder/sessions/:id/settled", h.SettleProposal)
 }
 
 // chatRequest is the M3 POST body: a SINGLE new user message plus an optional session id. This
@@ -523,6 +525,36 @@ func (h *AIBuilderHandler) DeleteSession(c *gin.Context) {
 		}
 		h.logger.Error("handlers.AIBuilder.DeleteSession", zap.String("tenant_id", tenantID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Lỗi khi xoá phiên", "code": "AI_SESSION_FAILED"})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// SettleProposal handles POST /admin/ai/builder/sessions/:id/settled {seq, index}: the builder applied,
+// discarded or undid that card in the Studio, so the thread's MCP agent stops replaying it into its next
+// proposal (issue #42). 204, also for a card already settled; 404 PROPOSAL_NOT_FOUND for a card that is
+// not in the caller's own thread, whoever's thread the id names (no existence leak).
+func (h *AIBuilderHandler) SettleProposal(c *gin.Context) {
+	tenantID, ok := tenantOf(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Seq   *int `json:"seq"`
+		Index *int `json:"index"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Seq == nil || body.Index == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cần seq và index của thẻ đề xuất", "code": "INVALID_BODY"})
+		return
+	}
+	sub, _ := middleware.SubjectFromContext(c)
+	if err := h.store.SettleProposal(c.Request.Context(), tenantID, sub.UserID, c.Param("id"), *body.Seq, *body.Index); err != nil {
+		if errors.Is(err, ai.ErrProposalNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy thẻ đề xuất", "code": "PROPOSAL_NOT_FOUND"})
+			return
+		}
+		h.logger.Error("handlers.AIBuilder.SettleProposal", zap.String("tenant_id", tenantID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Lỗi khi lưu trạng thái thẻ", "code": "AI_SESSION_FAILED"})
 		return
 	}
 	c.Status(http.StatusNoContent)

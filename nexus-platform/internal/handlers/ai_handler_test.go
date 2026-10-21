@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -136,6 +138,27 @@ func (s *fakeSessionStore) SoftDeleteSession(_ context.Context, tenantID, userID
 	}
 	se.deleted = true
 	return nil
+}
+
+// SettleProposal mirrors ai.SessionStore.SettleProposal: an assistant turn of an owned, live
+// session with a card at index records it once; anything else is ErrProposalNotFound.
+func (s *fakeSessionStore) SettleProposal(_ context.Context, tenantID, userID, id string, seq, index int) error {
+	se, ok := s.owned(tenantID, userID, id)
+	if !ok {
+		return ai.ErrProposalNotFound
+	}
+	for i := range se.msgs {
+		m := &se.msgs[i]
+		var items []json.RawMessage
+		if m.Seq != seq || m.Role != "assistant" || json.Unmarshal(m.DraftJSON, &items) != nil || index < 0 || index >= len(items) {
+			continue
+		}
+		if !slices.Contains(m.Settled, index) {
+			m.Settled = append(m.Settled, index)
+		}
+		return nil
+	}
+	return ai.ErrProposalNotFound
 }
 
 // aiTestRouter mounts the AI handler behind the REAL RequireAdmin gate, with a shim that injects the
@@ -491,6 +514,55 @@ func TestAIHandler_DeleteSession_204_and_404(t *testing.T) {
 	}
 	if store.sessions["foreign"].deleted {
 		t.Fatal("a foreign session must NOT be deleted by another user")
+	}
+}
+
+// Issue #42: the Studio tells the thread a card is settled. 204 for a card of the caller's own thread
+// (twice is fine); 404 PROPOSAL_NOT_FOUND for another builder's thread or a card that is not there,
+// with nothing written; 400 for a body without seq or index; 403 for a non-admin before any lookup.
+func TestAIHandler_SettleProposal(t *testing.T) {
+	store := newFakeStore()
+	card := []ai.Message{{Seq: 0, Role: "user"}, {Seq: 1, Role: "assistant", DraftJSON: json.RawMessage(`[{"kind":"field"},{"kind":"field"}]`)}}
+	store.sessions["mine"] = &fakeSess{id: "mine", tenantID: "t1", userID: "u1", msgs: slices.Clone(card)}
+	store.sessions["foreign"] = &fakeSess{id: "foreign", tenantID: "t1", userID: "u2", msgs: slices.Clone(card)}
+	r := aiTestRouter(&fakeBuilderAgent{}, store, true)
+	settle := func(id string, body any) *httptest.ResponseRecorder {
+		return doJSON(r, http.MethodPost, "/api/v1/admin/ai/builder/sessions/"+id+"/settled", body)
+	}
+
+	for i := 0; i < 2; i++ {
+		if rec := settle("mine", map[string]any{"seq": 1, "index": 1}); rec.Code != http.StatusNoContent {
+			t.Fatalf("settle #%d: %d, want 204 (body=%s)", i+1, rec.Code, rec.Body.String())
+		}
+	}
+	if got := store.sessions["mine"].msgs[1].Settled; !slices.Equal(got, []int{1}) {
+		t.Fatalf("settled = %v; want [1]", got)
+	}
+	for _, tc := range []struct {
+		name, id string
+		body     any
+		want     int
+		code     string
+	}{
+		{"another builder's thread", "foreign", map[string]any{"seq": 1, "index": 0}, http.StatusNotFound, "PROPOSAL_NOT_FOUND"},
+		{"a card that is not there", "mine", map[string]any{"seq": 1, "index": 2}, http.StatusNotFound, "PROPOSAL_NOT_FOUND"},
+		{"the user turn", "mine", map[string]any{"seq": 0, "index": 0}, http.StatusNotFound, "PROPOSAL_NOT_FOUND"},
+		{"no index", "mine", map[string]any{"seq": 1}, http.StatusBadRequest, "INVALID_BODY"},
+		{"not an object", "mine", "1:0", http.StatusBadRequest, "INVALID_BODY"},
+	} {
+		rec := settle(tc.id, tc.body)
+		if rec.Code != tc.want {
+			t.Errorf("%s: %d, want %d (body=%s)", tc.name, rec.Code, tc.want, rec.Body.String())
+			continue
+		}
+		assertErrorCode(t, rec.Body.Bytes(), tc.code)
+	}
+	if got := store.sessions["foreign"].msgs[1].Settled; got != nil {
+		t.Fatalf("another builder's card was settled: %v", got)
+	}
+	if rec := doJSON(aiTestRouter(&fakeBuilderAgent{}, store, false), http.MethodPost, "/api/v1/admin/ai/builder/sessions/mine/settled",
+		map[string]any{"seq": 1, "index": 0}); rec.Code != http.StatusForbidden {
+		t.Fatalf("non-admin: %d, want 403", rec.Code)
 	}
 }
 
