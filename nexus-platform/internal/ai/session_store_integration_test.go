@@ -18,7 +18,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
+
+	"github.com/jmoiron/sqlx"
 )
 
 // Fixed CHAR(36) UUID-shaped ids scoped to this test (cleaned up per run).
@@ -306,5 +312,148 @@ func TestSessionStore_AssistantListCap(t *testing.T) {
 	}
 	if len(list) != assistantSessionListCap {
 		t.Fatalf("assistant list length = %d; want the %d cap", len(list), assistantSessionListCap)
+	}
+}
+
+// Issue #42: SettleProposal marks one card of the caller's own builder thread, idempotently and
+// without losing a concurrent mark on the same turn; any other target is ErrProposalNotFound with
+// nothing written, and GetSession hands the marks back so PendingProposals can skip them.
+func TestSessionStore_SettleProposal(t *testing.T) {
+	store := newSessionStoreForTest(t)
+	ctx := context.Background()
+	draft := json.RawMessage(`[{"kind":"field","field":{"entity":"a","name":"f0"}},{"kind":"field","field":{"entity":"a","name":"f1"}},` +
+		`{"kind":"field","field":{"entity":"a","name":"f2"}},{"kind":"field","field":{"entity":"a","name":"f3"}},{"kind":"field","field":{"entity":"a","name":"f4"}}]`)
+	id, err := store.AppendTurn(ctx, itTenantA, itUser1, "", "t", "hỏi", "đề xuất", draft)
+	if err != nil {
+		t.Fatalf("AppendTurn: %v", err)
+	}
+	settled := func() []int {
+		t.Helper()
+		_, msgs, err := store.GetSession(ctx, itTenantA, itUser1, id)
+		if err != nil || len(msgs) != 2 {
+			t.Fatalf("GetSession: %v (%d messages)", err, len(msgs))
+		}
+		if msgs[0].Settled != nil {
+			t.Fatalf("the user turn carries settled marks %v", msgs[0].Settled)
+		}
+		return msgs[1].Settled
+	}
+	if got := settled(); got != nil {
+		t.Fatalf("a fresh turn: settled = %v; want nil", got)
+	}
+
+	for _, tc := range []struct {
+		name, tenant, user, session string
+		seq, index                  int
+	}{
+		{"another builder's thread", itTenantA, itUser2, id, 1, 0},
+		{"another tenant", itTenantB, itUser1, id, 1, 0},
+		{"the user turn", itTenantA, itUser1, id, 0, 0},
+		{"past the last card", itTenantA, itUser1, id, 1, 5},
+		{"a negative index", itTenantA, itUser1, id, 1, -1},
+		{"no such session", itTenantA, itUser1, "00000000-0000-0000-0000-000000000000", 1, 0},
+	} {
+		if err := store.SettleProposal(ctx, tc.tenant, tc.user, tc.session, tc.seq, tc.index); !errors.Is(err, ErrProposalNotFound) {
+			t.Errorf("%s: %v; want ErrProposalNotFound", tc.name, err)
+		}
+	}
+	if got := settled(); got != nil {
+		t.Fatalf("refused settles wrote %v", got)
+	}
+
+	if err := store.SettleProposal(ctx, itTenantA, itUser1, id, 1, 3); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	if err := store.SettleProposal(ctx, itTenantA, itUser1, id, 1, 3); err != nil {
+		t.Fatalf("settle again: %v", err)
+	}
+	if got := settled(); !slices.Equal(got, []int{3}) {
+		t.Fatalf("settled = %v; want [3] once", got)
+	}
+
+	// Apply-all settles the cards of one turn back to back; two tabs may race. Every mark lands once.
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for _, i := range []int{0, 1, 2, 4, 0, 1, 2, 4} {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs <- store.SettleProposal(ctx, itTenantA, itUser1, id, 1, i)
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent settle: %v", err)
+		}
+	}
+	got := settled()
+	slices.Sort(got)
+	if !slices.Equal(got, []int{0, 1, 2, 3, 4}) {
+		t.Fatalf("settled after concurrent marks = %v; want each card once", got)
+	}
+	_, msgs, _ := store.GetSession(ctx, itTenantA, itUser1, id)
+	if p := PendingProposals(msgs); len(p) != 0 {
+		t.Fatalf("pending after settling every card = %+v; want none", p)
+	}
+
+	if err := store.SoftDeleteSession(ctx, itTenantA, itUser1, id); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := store.SettleProposal(ctx, itTenantA, itUser1, id, 1, 0); !errors.Is(err, ErrProposalNotFound) {
+		t.Fatalf("settle on a deleted thread: %v; want ErrProposalNotFound", err)
+	}
+}
+
+// Issue #42's migration: the down file drops settled_json and the up file brings it back, a second
+// up being a no-op. Found by name, not number (the number is assigned at merge). Runs on its own
+// multiStatements connection and leaves the shared throwaway DB migrated.
+func TestMigration_SettledJSON_DownThenUpAgain(t *testing.T) {
+	db := connectAI(t)
+	read := func(suffix string) string {
+		t.Helper()
+		m, err := filepath.Glob("../../migrations/*_sys_ai_messages_settled." + suffix + ".sql")
+		if err != nil || len(m) != 1 {
+			t.Fatalf("migration %s: glob = %v, %v", suffix, m, err)
+		}
+		b, err := os.ReadFile(m[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	exec := func(script string) {
+		t.Helper()
+		conn, err := sqlx.Connect("mysql", aiTestDSN()+"&multiStatements=true")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if _, err := conn.Exec(script); err != nil {
+			t.Fatalf("exec migration: %v", err)
+		}
+	}
+	has := func() bool {
+		t.Helper()
+		var n int
+		if err := db.Get(&n, `SELECT COUNT(*) FROM information_schema.columns
+			WHERE table_schema = DATABASE() AND table_name = 'sys_ai_messages' AND column_name = 'settled_json'`); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+	if !has() {
+		t.Fatal("after up: sys_ai_messages lacks settled_json")
+	}
+	exec(read("down"))
+	if has() {
+		t.Fatal("after down: settled_json is still there")
+	}
+	exec(read("down")) // a second down is a no-op
+	exec(read("up"))
+	exec(read("up")) // a second up is a no-op
+	if !has() {
+		t.Fatal("after up again: settled_json is missing")
 	}
 }
