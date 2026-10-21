@@ -2483,9 +2483,12 @@ func rowNumbersCSV(rows []int) string {
 // recordSpecsFor resolves the validation specs for propose_records: the LIVE registry first
 // (canonical name + full stored field definitions via services.FieldSpecsOf), falling back to an
 // entity drafted THIS turn (shape-only specs from its DraftField list — draft-buffer awareness,
-// same scan as propose_relationship/propose_app). Returns ("", nil, toolErr-json) on failure.
+// same scan as propose_relationship/propose_app). Both are probed by canonicalEntityName, so a live
+// table always wins over a draft of its name (an MCP thread replays older proposals, applied ones
+// included). Returns ("", nil, toolErr-json) on failure.
 func (e *toolExecutor) recordSpecsFor(ctx context.Context, entity string) (string, []services.FieldSpec, string) {
-	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, entity)
+	canonical := canonicalEntityName(entity)
+	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, canonical)
 	if err == nil {
 		fields, ferr := e.reader.ListFields(ctx, e.tenantID, ent.ID)
 		if ferr != nil {
@@ -2502,10 +2505,7 @@ func (e *toolExecutor) recordSpecsFor(ctx context.Context, entity string) (strin
 	}
 
 	// Not live — accept an entity buffered as a draft THIS turn (apply order: entity first, then
-	// the dependent draft; the FE applies in dependency order). Draft names are canonical
-	// lowercase already (ValidateCreateEntity → SanitizeIdentifier), so probe case-insensitively
-	// like proposeApp (shared draftedEntities scan).
-	canonical := strings.ToLower(strings.TrimSpace(entity))
+	// the dependent draft; the FE applies in dependency order) — the shared draftedEntities scan.
 	if d, ok := e.draftedEntities()[canonical]; ok {
 		specs := make([]services.FieldSpec, 0, len(d.Fields))
 		for _, f := range d.Fields {

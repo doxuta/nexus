@@ -261,7 +261,7 @@ func privilegedHolder(users []auth.User, roleID string) string {
 // only a name the registry does not know may be a table proposed in this same turn. Returns its
 // canonical name and label, or the tool error.
 func (e *toolExecutor) resolveAccessEntity(ctx context.Context, probes *AccessProbes, drafted map[string]*DraftEntity, raw string, n int) (string, string, string) {
-	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, strings.TrimSpace(raw))
+	ent, err := e.reader.GetEntityByName(ctx, e.tenantID, canonicalEntityName(raw))
 	switch {
 	case err == nil:
 		if msg := e.liveTableRefusal(ctx, probes, ent, n); msg != "" {
@@ -275,7 +275,7 @@ func (e *toolExecutor) resolveAccessEntity(ctx context.Context, probes *AccessPr
 	case !errors.Is(err, metadata.ErrEntityNotFound):
 		return "", "", toolErr("ACCESS_PROPOSE_FAILED: grant %d: %v", n, err)
 	}
-	if d, ok := drafted[strings.ToLower(strings.TrimSpace(raw))]; ok {
+	if d, ok := drafted[canonicalEntityName(raw)]; ok {
 		return d.Name, d.Label, ""
 	}
 	return "", "", toolErr("ENTITY_NOT_FOUND: grant %d: bảng %q không có và cũng chưa được propose_entity trong CÙNG lượt này", n, raw)

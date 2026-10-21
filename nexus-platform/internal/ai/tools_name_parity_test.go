@@ -7,7 +7,9 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -99,6 +101,26 @@ func TestFieldTools_DescribeEveryReservedName(t *testing.T) {
 	}
 }
 
+// PR #39 verifier LOW: recordSpecsFor (propose_records, propose_workqueue) probed the registry with
+// the raw name and the draft with the canonical one, so " patients" missed the live table and was
+// judged against an older thread's draft of the same name — ok where the exact name is refused.
+func TestTools_RecordSpecs_LiveTableWinsOverADraftOfTheSameName(t *testing.T) {
+	for _, ref := range []string{"patients", " patients", "patients ", "Patients", " patients", " PATIENTS "} {
+		t.Run(ref, func(t *testing.T) {
+			e := &toolExecutor{reader: editFixtureReader(), tenantID: "tenant-A"}
+			e.draft = append(e.draft, DraftItem{Kind: "entity", Entity: &DraftEntity{Name: "patients", Label: "Cũ",
+				Fields: []DraftField{{Name: "age", Label: "Tuổi", FieldType: "number"}}}})
+			name, specs, res := e.recordSpecsFor(context.Background(), ref)
+			required := slices.ContainsFunc(specs, func(s services.FieldSpec) bool { return s.Name == "full_name" && s.IsRequired })
+			if res != "" || name != "patients" || !required {
+				t.Fatalf("recordSpecsFor(%q) = %q, %+v, %s; want the live patients (full_name required)", ref, name, specs, res)
+			}
+			args, _ := json.Marshal(map[string]any{"entity": ref, "rows": []any{map[string]any{"age": 30}}})
+			mustReject(t, e, "propose_records", string(args), "RECORD_REQUIRED_MISSING")
+		})
+	}
+}
+
 // The same LOW in checkAddFieldRefs (propose_field's dependent-picklist check): it read the live
 // table with the raw name, and took siblings from every draft of the name even when the table is
 // live, so an older draft's picklist could vouch for a parent the live table does not have.
@@ -120,4 +142,15 @@ func TestTools_CheckAddFieldRefs_LiveTableWinsOverADraftOfTheSameName(t *testing
 	}
 	mustReject(t, e, "propose_field", `{"entity":"tickets","name":"sub","label":"Nhóm con","fieldType":"picklist",
 		"options":{"values":["a"],"controllingField":"tier","dependentValues":{"gold":["a"]}}}`, "FIELD_DEPENDENT_PICKLIST_INVALID")
+}
+
+// resolveAccessEntity probed the registry with the trimmed name and the draft with the trimmed,
+// lowercased one. MySQL's case-insensitive collation hid it; the registry contract does not promise
+// one. A published table stays published under any spelling, whatever draft shares its name.
+func TestProposeAccess_PublishedTableUnderAnySpelling(t *testing.T) {
+	for _, ref := range []string{"Crm_Accounts", " CRM_ACCOUNTS ", " crm_accounts"} {
+		e := accessExecutor(fakeCutoff{at: &accCutoff})
+		e.draft = append(e.draft, DraftItem{Kind: "entity", Entity: &DraftEntity{Name: "crm_accounts", Label: "Phiếu hỗ trợ"}})
+		mustReject(t, e, "propose_access", grantArgs(grant("crm_sales_rep", ref, "all", "view", "create", "edit")), "ACCESS_ENTITY_PUBLISHED")
+	}
 }
