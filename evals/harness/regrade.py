@@ -12,8 +12,9 @@ It runs code the agent wrote (its Go code and tests, its Python) as you, outside
 produced, or run it in a container.
 
 --archive DIR writes what each run left, small and redacted, for committing: summary.json (score, graders, turns,
-cost, tool calls, which plugin agents and skills were invoked, the regrade checks), <case>/<arm>-<n>.diff (the
-workspace against its scaffold) and regrade.log. --clean removes each kept run directory once it is graded.
+cost, tool calls, which plugin agents and skills were invoked, how often it ran each gate, the regrade checks),
+<case>/<arm>-<n>.diff (the workspace against its scaffold) and regrade.log. --clean removes each kept run directory
+once it is graded.
 Standard library only.
 """
 import argparse
@@ -130,6 +131,7 @@ def diff(base, ws):
 def trace_stats(path):
     """Tool calls of a run, the plugin agents and skills it invoked, and whether it read AGENTS.md."""
     tools, agents, skills, read_agents = collections.Counter(), [], [], False
+    gates = collections.Counter()
     with open(path) as f:
         for line in f:
             e = json.loads(line)
@@ -146,7 +148,11 @@ def trace_stats(path):
                     skills.append(inp.get("skill", "?"))
                 if c["name"] == "Read" and str(inp.get("file_path", "")).endswith("AGENTS.md"):
                     read_agents = True
-    return {"toolCalls": dict(tools), "agentsInvoked": agents, "skillsInvoked": skills, "readAgentsMd": read_agents}
+                if c["name"] == "Bash":
+                    for gate in ("gofmt", "go vet", "go test", "check-orphan-endpoints"):
+                        gates[gate] += gate in str(inp.get("command", ""))
+    return {"toolCalls": dict(tools), "agentsInvoked": agents, "skillsInvoked": skills, "readAgentsMd": read_agents,
+            "gateCommands": dict(gates)}
 
 
 def rate(runs):

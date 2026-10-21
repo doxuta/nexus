@@ -37,7 +37,7 @@ hidden() { # hidden <package>: add the case's hidden tests for internal/<package
 
 go_gates() { # the AGENTS.md Go gates that run without a database
 	cd "$ws/nexus-platform"
-	check "gofmt -l . is empty" bash -c 'test -z "$(gofmt -l .)"'
+	check "gofmt -l . is empty" bash -c 'out=$(gofmt -l .); [ -z "$out" ] || { echo "$out"; exit 1; }'
 	check "go vet ./..." go vet ./...
 	check "go build ./..." go build ./...
 }
