@@ -30,6 +30,8 @@ export function IndexFixNotice({ entity, field }: { entity: string; field?: Fiel
     setBusy(true); setErr(null);
     try {
       await updateField(id, { options: withIndexed(options, true, true) });
+      // No emitDraftsChanged: options.indexed applies live even on a delivered project and the field draft never
+      // carries it (DraftFieldRepo.SaveEdit), so the pending count has not moved (#46).
       await qc.invalidateQueries({ queryKey: qk.fields(entity) });
     } catch (e) {
       setErr(e instanceof Error ? e.message : t("page.reports.config.indexError"));
