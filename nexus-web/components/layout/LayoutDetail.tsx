@@ -14,9 +14,11 @@
 //     Chia sẻ (specs/051) for an editor; QR thanh toán only when the tenant is configured and the
 //     entity has a money field. Whether THIS record takes a write is the server's per-record canEdit
 //     (#43), not how the record reached me: canEdit === false hides Sửa / Đổi chủ / Chia sẻ and says
-//     why — "shared for viewing" when it came only through a share (then Xoá goes too), "belongs to
-//     someone else" otherwise (e.g. edit=own on a colleague's lead; the server answers 403, #18). A
-//     shared record my edit scope reaches anyway (view=own, edit=team) stays editable.
+//     why — "shared for viewing" when it came only through a share, "belongs to someone else"
+//     otherwise (e.g. edit=own on a colleague's lead; the server answers 403, #18). A shared record my
+//     edit scope reaches anyway (view=own, edit=team) stays editable. Xoá is never offered on a record
+//     seen only through a share: canEdit says nothing about the DELETE scope, and the server refuses
+//     that delete with 403 RECORD_SHARED_READ_ONLY unless the delete scope reaches the record anyway.
 //     Chia sẻ opens ./detail/ShareDialog.
 //   • Tabs (one mounted at a time, so a tab's requests fire only when it is opened):
 //     Tổng quan · Trao đổi · Quan hệ · Tệp · Lịch sử · Duyệt — each lives in ./detail/*.
@@ -448,7 +450,10 @@ export function LayoutDetail({ entity, recordId, onEdit, onClone, onDeleted, tra
     ...(paymentReady
       ? [{ label: t("page.record.action.qr"), title: t("page.record.action.qrTitle"), onSelect: () => setQrOpen(true) }]
       : []),
-    ...(mayDelete && !sharedReadOnly ? [{ label: t("page.record.action.delete"), onSelect: () => { setDelErr(""); setDeleteOpen(true); } }] : []),
+    // Not canEdit: that flag answers for the EDIT scope only. A share-only record (sharedWithMe) is refused
+    // 403 RECORD_SHARED_READ_ONLY by a DELETE whose own scope misses it (view=own, edit=team, delete=own on
+    // a shared team record), so Xoá stays off for it, as before #43.
+    ...(mayDelete && !record.sharedWithMe ? [{ label: t("page.record.action.delete"), onSelect: () => { setDelErr(""); setDeleteOpen(true); } }] : []),
   ];
 
   const panels: Record<TabId, () => ReactNode> = {

@@ -296,6 +296,20 @@ describe("LayoutDetail — SLDS record home", () => {
     await screen.findByText("Chưa có trao đổi nào");
     expect(screen.queryByRole("textbox")).toBeNull();
   });
+
+  // #43 verifier: view=own, edit=team, delete=own, a team record shared with me. canEdit is absent (the
+  // edit scope reaches it) but the DELETE runs under delete=own and answers 403 RECORD_SHARED_READ_ONLY —
+  // so Xoá stays off for a sharedWithMe record whatever canEdit says, while Sửa and Chia sẻ stay.
+  it("a shared record my edit scope reaches still offers no Xoá (the delete scope is not canEdit)", async () => {
+    vi.mocked(getRecord).mockResolvedValue({ ...RECORD, sharedWithMe: true });
+    renderDetail();
+    expect(await screen.findByRole("button", { name: "Sửa" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Xoá" })).toBeNull();
+    screen.getByRole("button", { name: "Thêm thao tác" }).focus();
+    await userEvent.keyboard("{Enter}");
+    expect(await screen.findByRole("menuitem", { name: "Chia sẻ" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Xoá" })).toBeNull();
+  });
 });
 
 // specs/054 · DAILY-QUEUE #24: the record page honours the detail view's visibleWhen with the SAME
