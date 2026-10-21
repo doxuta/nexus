@@ -89,7 +89,7 @@ Open <http://localhost:8080> (set `NEXUS_PORT` to use another port). Workspace c
 | Who | Email | Password | Sees |
 |---|---|---|---|
 | Builder (Studio) | `admin@example.com` | `Demo-Admin-2026!` | everything, edits as drafts |
-| Sales rep | `test@example.com` | `Demo-Rep-2026!` | only what the published version and their role allow |
+| Sales rep | `test@example.com` | `Demo-Rep-2026!` | only what the published version and their role allow: every account, plus their own book: Globex's contact, deal, activity, quote and its lines, contract, and two leads |
 
 These credentials are for your laptop only; [`docker-compose.yml`](docker-compose.yml) documents every override. The
 builder agent needs an OpenAI-compatible gateway: set `AI_ENABLED=true` and `AI_GATEWAY_BASE_URL`, or replay a
