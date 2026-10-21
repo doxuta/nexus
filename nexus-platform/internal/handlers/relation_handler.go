@@ -191,6 +191,12 @@ func (h *RelationHandler) respondError(c *gin.Context, err error, op string) {
 		return
 	}
 
+	// #43: a source record the caller can read but not edit — the record routes' 403, byte for byte.
+	if errors.Is(err, services.ErrRecordEditForbidden) {
+		respondRecordEditForbidden(c)
+		return
+	}
+
 	// ValidationError (422 or 409 based on code).
 	var ve *services.ValidationError
 	if errors.As(err, &ve) {
