@@ -35,9 +35,11 @@ const layout = {
   },
 };
 
-// The server: every layout write leaves one more draft behind.
+// The server: every layout write leaves one more draft behind, counted only once the write has answered (a later tick),
+// so an announcement sent before the awaited write resolves would recount too early and leave the header stale.
 let drafts = 0;
-const wrote = async () => { drafts++; return { id: "L1" }; };
+const answered = <T,>(v: T) => new Promise<T>((r) => setTimeout(() => { drafts++; r(v); }, 20));
+const wrote = () => answered({ id: "L1" });
 
 function Header() {
   const s = usePublishState("northwind").data;
@@ -68,7 +70,7 @@ beforeEach(() => {
   }));
   api.createLayout.mockImplementation(wrote);
   api.updateLayout.mockImplementation(wrote);
-  api.deleteLayout.mockImplementation(async () => { drafts++; });
+  api.deleteLayout.mockImplementation(() => answered(undefined));
 });
 
 describe("a screen-editor write raises the header's pending count without a reload (#17)", () => {
