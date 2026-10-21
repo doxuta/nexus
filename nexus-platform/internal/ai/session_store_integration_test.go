@@ -404,6 +404,19 @@ func TestSessionStore_SettleProposal(t *testing.T) {
 	if err := store.SettleProposal(ctx, itTenantA, itUser1, id, 1, 0); !errors.Is(err, ErrProposalNotFound) {
 		t.Fatalf("settle on a deleted thread: %v; want ErrProposalNotFound", err)
 	}
+
+	// A ⌘K assistant thread (feature 'assistant') is never a builder thread: the settle route cannot
+	// reach its cards, whoever owns it.
+	aid, err := store.AppendAssistantTurn(ctx, itTenantA, itUser1, "", "t", "hỏi", "xác nhận", json.RawMessage(`[{"kind":"record_create"}]`))
+	if err != nil {
+		t.Fatalf("AppendAssistantTurn: %v", err)
+	}
+	if err := store.SettleProposal(ctx, itTenantA, itUser1, aid, 1, 0); !errors.Is(err, ErrProposalNotFound) {
+		t.Fatalf("settle on an assistant thread: %v; want ErrProposalNotFound", err)
+	}
+	if _, amsgs, err := store.GetAssistantSession(ctx, itTenantA, itUser1, aid); err != nil || len(amsgs) != 2 || amsgs[1].Settled != nil {
+		t.Fatalf("assistant thread after a refused settle: %v %+v; want it untouched", err, amsgs)
+	}
 }
 
 // Issue #42's migration: the down file drops settled_json and the up file brings it back, a second
