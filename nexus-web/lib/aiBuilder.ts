@@ -1038,9 +1038,9 @@ export function resolveApprovalApprovers(
   };
   let bad: string | undefined;
   const one = (type: string | undefined, ref: string | undefined): string => {
-    const t = type === "role" ? "role" : "user";
-    const id = idOf(t, ref ?? "");
-    if (!id && bad === undefined) bad = `${t === "role" ? "vai" : "người dùng"} "${ref ?? ""}"`;
+    const kind = type === "role" ? "role" : "user";
+    const id = idOf(kind, ref ?? "");
+    if (!id && bad === undefined) bad = `${t(kind === "role" ? "aiCard.approver.role" : "aiCard.approver.user")} "${ref ?? ""}"`;
     return id ?? "";
   };
   const steps = (Array.isArray(a.steps) ? a.steps : []).map((s) => {
@@ -1049,7 +1049,7 @@ export function resolveApprovalApprovers(
     }
     return { ...s, approverRef: undefined, approverId: one(s.approverType, s.approverRef ?? s.approverId) };
   });
-  if (bad !== undefined) return { error: `Không tìm thấy ${bad} — tạo trước, hoặc đề xuất lại với đúng tên vai / email người duyệt.` };
+  if (bad !== undefined) return { error: tf("aiCard.approver.missing", { who: bad }) };
   return { draft: { ...a, steps } };
 }
 
@@ -1417,14 +1417,12 @@ export function aiLimitMessage(code: string, retryAfterSec?: number): string | n
       : undefined;
   switch (code) {
     case "AI_RATE_LIMITED":
-      return secs !== undefined
-        ? `Đang gửi quá nhanh — thử lại sau ~${secs}s.`
-        : "Đang gửi quá nhanh — chờ một chút rồi gửi lại.";
+      return secs !== undefined ? tf("aiCard.limit.rateRetryIn", { s: secs }) : t("aiCard.limit.rate");
     case "AI_CONCURRENCY_LIMIT":
-      return "Đang có lượt AI Builder khác của tổ chức chạy — chờ xíu rồi gửi lại.";
+      return t("aiCard.limit.concurrency");
     case "AI_BUDGET_EXCEEDED":
       // Daily budget is per tenant per UTC day (spec §12) → reset 00:00 UTC = 07:00 giờ Việt Nam.
-      return "Đã chạm ngân sách token AI hôm nay của tenant — reset lúc 00:00 UTC (07:00 giờ Việt Nam).";
+      return t("aiCard.limit.budget");
     default:
       return null;
   }

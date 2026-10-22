@@ -544,6 +544,17 @@ const en = {
   "aiCard.editField.options": "Options",
   "aiCard.yes": "yes",
   "aiCard.no": "no",
+  "aiCard.approver.role": "role",
+  "aiCard.approver.user": "user",
+  "aiCard.approver.missing": "{who} was not found: create it first, or ask again with the right role name or approver email.",
+  "aiCard.limit.rateRetryIn": "Sending too fast: try again in about {s}s.",
+  "aiCard.limit.rate": "Sending too fast: wait a moment, then send again.",
+  "aiCard.limit.concurrency": "Another assistant turn is running for this workspace: wait a moment, then send again.",
+  "aiCard.limit.budget": "This workspace has used today's token budget: it resets at 00:00 UTC.",
+  "studio.build.ai.intoMenu": "goes into the {app} menu",
+  "studio.build.ai.willDelete": "Will be deleted",
+  "page.dataModel.aclWarn": "Default access could not be granted: only administrators can see this table now. Open Roles & access to grant it.",
+  "page.studio.ai.apply.appMissing": "App created; {n} table(s) are not applied yet: {list}. Apply them, then add them to the menu in Screens › Apps and menus.",
   // Record form
   "page.recordForm.saveNew": "Save & new",
   // Home (rep)
