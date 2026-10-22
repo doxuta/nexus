@@ -170,7 +170,7 @@ const (
 )
 
 // Event is the payload a service emits after a mutation commits. RecordID is empty for
-// admin-meta mutations (entity/field/role) that have no obj_* record. Diff is the
+// admin-meta mutations (entity/field) that have no obj_* record; a role's rows carry the role id. Diff is the
 // {before,after} of only the fields that changed; create populates only after, delete only
 // before. At is the originating event time (the dispatcher stamps the row clock instead, but
 // At is carried for context/debug). All maps must be JSON-serializable.
