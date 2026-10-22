@@ -27,6 +27,16 @@ describe("ChangeList", () => {
     expect(rows[0].textContent).toContain("Luật gửi thư");
   });
 
+  // issue #23: a long line (a rule's condition, a grant, a path) wraps instead of being cut to one line.
+  it("a long line wraps, the mark stays on its first line", () => {
+    render(<ChangeList items={[{ op: "add", text: "Nếu Trạng thái bằng Đã đóng và Mức độ ưu tiên bằng Cao thì gửi email cho người phụ trách" }]} />);
+    const row = screen.getByRole("listitem");
+    const text = within(row).getByText(/người phụ trách/);
+    expect(text.className).not.toContain("slds-truncate");
+    expect(text.className).toContain("slds-hyphenate");
+    expect(row.className).toContain("slds-grid_vertical-align-start");
+  });
+
   it("tone=proposed marks the list as an assistant proposal", () => {
     const { container } = render(<ChangeList items={[items[0]]} tone="proposed" />);
     expect(container.querySelector("ul")?.className).toContain("nx-proposed");
