@@ -136,6 +136,31 @@ class Callers(unittest.TestCase):
         self.assertOrphan(("GET", "/:entity/:id/members"), web)
         self.assertCalled(("GET", "/reports"), {"lib/api.ts": "export const r = () => fetch(`${BASE}/reports`);\n"})
 
+    def test_a_route_does_not_start_after_a_placeholder_inside_a_path(self):
+        # Verifier round 2 on #61: after any `${…}`, `/${entity}/${id}/notes` read as a caller of /:entity/notes.
+        routes = [("GET", "/:entity/notes"), ("GET", "/:entity/approvals"), ("GET", "/:entity/shares"),
+                  ("POST", "/:entity/restore"), ("PUT", "/:entity/owner"), ("GET", "/members"),
+                  ("GET", "/versions"), ("POST", "/publish"), ("POST", "/:entity/files")]
+        code, out = run_gate(routes, {"lib/api.ts": "".join(
+            f'export const f{i} = (e: string, id: string) => req("GET", `/${{e}}/${{id}}/{w}`);\n'
+            for i, w in enumerate(("notes", "approvals", "shares", "restore", "owner")))
+            + "export const m = (t: string) => req(\"GET\", `/admin/teams/${t}/members`);\n"
+            + "export const v = (p: string) => req(\"GET\", `/admin/approval-processes/${p}/versions`);\n"
+            + "export const p = (p: string) => req(\"POST\", `/admin/approval-processes/${p}/publish`, {});\n"
+            + "export const u = (e: string, r: string) => fetch(`${BASE}/${e}/${r}/files`, { method: \"POST\" });\n"})
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"MỒ CÔI: {len(routes)}", out)
+        for m, p in routes:
+            self.assertIn(f"{m:6} {p}", out)
+
+    def test_a_base_placeholder_or_an_api_prefix_may_open_the_path(self):
+        for src in ("export const a = (o: { base?: string }) => fetch(`${o.base ?? \"\"}/admin/jobs`);\n",
+                    "export const a = () => fetch(`${getBase()}/admin/jobs`);\n",
+                    "export const a = (origin: string) => fetch(`${origin}/api/v1/admin/jobs`);\n",
+                    'export const a = (origin: string) => fetch(new URL("/api/v1/admin/jobs", origin));\n',
+                    'const API = "/api/v1";\nexport const a = () => fetch(`${API}/admin/jobs`);\n'):
+            self.assertCalled(("GET", "/admin/jobs"), {"lib/api.ts": src})
+
     def test_mocks_in_web_test_helpers_are_not_callers(self):
         # nexus-web/test/*.tsx holds fake fetch routes for vitest; they are not named *.test.*.
         self.assertOrphan(("GET", "/admin/jobs"), {

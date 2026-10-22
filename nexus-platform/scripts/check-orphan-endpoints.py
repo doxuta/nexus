@@ -23,9 +23,13 @@ Script này bắt lớp con dễ đo nhất: **route đã đăng ký mà không 
   • MÙ VỚI KEY TRONG RESPONSE. `POST /admin/entities` trả `aclSeed.warning` — endpoint có caller nên
     sạch, nhưng KEY đó không FE nào đọc. Loại này phải soi tay.
   • A caller is non-comment code that spells the whole route (#54): comments are stripped first, and the path
-    must start a string or follow a `${…}`, then every segment in order — a leading `:param` as a `${…}`
-    placeholder, a later one as a placeholder or one literal segment. Any string counts, not only an argument
-    of req()/fetch() — a page href equal to an API path still passes. nexus-web/test/ (fetch mocks) is skipped.
+    must open a string or follow the one `${base}` a template opens with (a literal /api/v1 prefix is skipped),
+    then every segment in order — a leading `:param` as a `${…}` placeholder, a later one as a placeholder or
+    one literal segment. Any string counts, not only an argument of req()/fetch() — a page href equal to an API
+    path still passes. nexus-web/test/ (fetch mocks) is skipped.
+  • A literal entity name is no caller of a route that starts with a param: "/contacts/aggregate" does not call
+    `/:entity/aggregate` (a leading param needs `${…}`; as a literal, "/approvals/${a}/approve" would call
+    `/:entity/:id/approve`).
   • A route built in pieces is followed only through a path helper of the same file whose value is one literal
     (`const p = (id) => `/admin/x/${id}`` then `${p(id)}/y`); other compositions read as orphans.
 
@@ -170,13 +174,17 @@ def web_code():
 
 _PLACEHOLDER = r"\$\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}"  # ${id}, ${encodeURIComponent(id)}, ${q ? `?${q}` : ""}
 _SEGMENT = r"[^/\s\"'`?#{}$]+"                        # one literal segment: /admin/apps/crm/nav
+# Where a path starts: it opens a string, or follows the one `${base}` a template opens with (`${BASE}/x`,
+# `${opts.base ?? ""}/x`) — never a `${…}` in the middle of another path. A literal /api/v1 prefix is skipped.
+_START = r"(?:[\"'`]|`" + _PLACEHOLDER + r")(?:/api/v1)?"
 
 
 def route_pattern(path):
     """Regex for code that builds a request to `path`: the whole path, from its start to its end.
 
     `/:entity/:id/notes/latest` needs `/${…}/${…}/notes/latest` — not `/latest` alone (#54). The path starts where
-    a string or template opens or right after a `${…}` (`${BASE}/…`), never inside a longer path. A `:param` before
+    a string or template opens, or after the `${base}` a template opens with (`_START`), never inside a longer path:
+    `/${e}/${id}/notes` calls neither `/:entity/notes` nor `/notes` (#61 verifier, round 2). A `:param` before
     the first static segment is a `${…}` placeholder only — as a literal segment `/:entity/:id/members` would read
     `/admin/teams/${id}/members` as its caller (#61 verifier); a later `:param` may also be one literal segment
     (`/admin/apps/crm/nav`). After the last segment comes no further path: `?query`, a closing quote or `${qs}`
@@ -188,7 +196,7 @@ def route_pattern(path):
         static_seen = static_seen or not is_param
         param = f"(?:{_PLACEHOLDER}|{_SEGMENT})" if static_seen else _PLACEHOLDER
         body += "/" + (param if is_param else re.escape(seg))
-    return re.compile(r"(?<=[\"'`}])" + body + r"(?![\w./-])")
+    return re.compile(_START + body + r"(?![\w./-])")
 
 
 def main():
