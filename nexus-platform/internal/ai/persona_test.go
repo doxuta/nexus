@@ -1,7 +1,12 @@
 package ai
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -56,12 +61,36 @@ func TestPersona_NamesEveryEngineFieldType(t *testing.T) {
 // TestPersonas_FollowTheUsersLanguage (issue #6): the builder and the end-user assistant answer, and the builder
 // labels what it proposes, in the language the person writes in; neither prompt pins Vietnamese any more. Both
 // prompts stay in Vietnamese; only the rule changed. The cassette fingerprint leaves system messages out, so this
-// edit does not make a recorded demo stale (TestFingerprint_ToolsPromptsAndShapeNotFreshIDs).
+// edit does not make a recorded demo stale (TestFingerprint_ToolsPromptsAndShapeNotFreshIDs). What a model did with
+// the rule is checked on a recording: TestEnglishDemoCassette_ProposesInEnglish.
 func TestPersonas_FollowTheUsersLanguage(t *testing.T) {
-	for name, p := range map[string]string{"builder": Persona(), "assistant": AssistantPersona()} {
-		if !strings.Contains(p, "ngôn ngữ người dùng") {
-			t.Errorf("%s persona has no rule to answer in the user's language", name)
+	// The rule itself, as the builder reads it: which words follow the user's language, both languages, the
+	// default, and what is never translated.
+	builder := Persona()
+	rule := ""
+	for _, line := range strings.Split(builder, "\n") {
+		if strings.HasPrefix(line, "- **Theo ngôn ngữ người dùng.**") {
+			rule = line
 		}
+	}
+	if rule == "" {
+		t.Fatal("builder persona has no \"Theo ngôn ngữ người dùng\" rule")
+	}
+	for _, want := range []string{"Trả lời", "`label`", "`valueLabels`", "tên app", "`title` section", "dữ liệu mẫu",
+		"tiếng Việt có dấu nếu họ viết tiếng Việt", "tiếng Anh nếu họ viết tiếng Anh", "không rõ thì tiếng Việt",
+		"`name` là snake_case không dấu", "`options.values`"} {
+		if !strings.Contains(rule, want) {
+			t.Errorf("the builder's language rule does not say %q:\n%s", want, rule)
+		}
+	}
+	// Its own picklist example follows it: codes in values, the words in valueLabels.
+	if !strings.Contains(builder, `options:{values:["new","in_progress","done","cancelled"], valueLabels:{`) {
+		t.Error("the builder's picklist example does not keep codes in values and words in valueLabels")
+	}
+	if !strings.Contains(AssistantPersona(), "Trả lời bằng **ngôn ngữ người dùng** (tiếng Việt nếu họ hỏi tiếng Việt, tiếng Anh nếu họ hỏi tiếng Anh)") {
+		t.Error("assistant persona has no rule to answer in the user's language")
+	}
+	for name, p := range map[string]string{"builder": builder, "assistant": AssistantPersona()} {
 		for _, pinned := range []string{"nói tiếng Việt", "Trả lời tiếng Việt", "Trả lời **tiếng Việt**", "nhãn tiếng Việt", "`title` tiếng Việt", "record tiếng Việt"} {
 			if strings.Contains(p, pinned) {
 				t.Errorf("%s persona still pins Vietnamese: %q", name, pinned)
@@ -76,6 +105,67 @@ func TestPersonas_FollowTheUsersLanguage(t *testing.T) {
 	for _, pinned := range []string{"hiển thị tiếng Việt", "nhãn tiếng Việt", "Dữ liệu tiếng Việt", "(tiếng Việt có dấu)"} {
 		if strings.Contains(string(raw), pinned) {
 			t.Errorf("a tool description still pins Vietnamese: %q", pinned)
+		}
+	}
+}
+
+// TestEnglishDemoCassette_ProposesInEnglish (issue #6): what a model did with the language rule. The English demo
+// cassette (cassettes/demo-loop-en.jsonl, recorded once against a live model with this persona and replayed by CI's
+// demo-loop-en job) holds an English prompt; every proposal it recorded names things in English (picklist codes in
+// values, English words in valueLabels) and the reply is English. A Vietnamese letter in any of them fails.
+func TestEnglishDemoCassette_ProposesInEnglish(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "cassettes", "demo-loop-en.jsonl"))
+	if err != nil {
+		t.Fatalf("read the English demo cassette: %v", err)
+	}
+	vietnamese := regexp.MustCompile(`(?i)[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]`)
+	var proposals, replies int
+	var labels []string
+	for i, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+		var e cassetteEntry
+		if err := json.Unmarshal(line, &e); err != nil {
+			t.Fatalf("cassette line %d: %v", i+1, err)
+		}
+		for _, m := range e.Request.Messages {
+			if m.Role == "user" && vietnamese.MatchString(m.Content) {
+				t.Errorf("line %d: the prompt is not English: %q", i+1, m.Content)
+			}
+		}
+		for _, c := range e.Response.Choices {
+			for _, tc := range c.Message.ToolCalls {
+				if !strings.HasPrefix(tc.Function.Name, "propose_") {
+					continue
+				}
+				proposals++
+				if vietnamese.MatchString(tc.Function.Arguments) {
+					t.Errorf("line %d: %s proposes Vietnamese text: %s", i+1, tc.Function.Name, tc.Function.Arguments)
+				}
+				var args struct {
+					Label  string `json:"label"`
+					Fields []struct {
+						Label string `json:"label"`
+					} `json:"fields"`
+				}
+				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+				labels = append(labels, args.Label)
+				for _, f := range args.Fields {
+					labels = append(labels, f.Label)
+				}
+			}
+			if strings.TrimSpace(c.Message.Content) != "" {
+				replies++
+				if vietnamese.MatchString(c.Message.Content) {
+					t.Errorf("line %d: the reply is not English: %s", i+1, c.Message.Content)
+				}
+			}
+		}
+	}
+	if proposals < 3 || replies == 0 {
+		t.Fatalf("the cassette holds %d proposals and %d replies; want the table, the access and the app, and a reply", proposals, replies)
+	}
+	for _, want := range []string{"Tickets", "Title", "Priority", "Status", "Helpdesk"} {
+		if !slices.Contains(labels, want) {
+			t.Errorf("no proposal is labelled %q in English: %q", want, labels)
 		}
 	}
 }
