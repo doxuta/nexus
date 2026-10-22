@@ -22,9 +22,10 @@ Script này bắt lớp con dễ đo nhất: **route đã đăng ký mà không 
     qua, nên giữ bản chính xác-mà-hẹp và ghi giới hạn ở đây.
   • MÙ VỚI KEY TRONG RESPONSE. `POST /admin/entities` trả `aclSeed.warning` — endpoint có caller nên
     sạch, nhưng KEY đó không FE nào đọc. Loại này phải soi tay.
-  • A caller is non-comment code that spells the whole route (#54): comments are stripped first, and every
-    static segment must appear in order, each `:param` as a `${…}` placeholder or one literal segment. Any
-    string counts, not only an argument of req()/fetch() — a page href equal to an API path still passes.
+  • A caller is non-comment code that spells the whole route (#54): comments are stripped first, and the path
+    must start a string or follow a `${…}`, then every segment in order — a leading `:param` as a `${…}`
+    placeholder, a later one as a placeholder or one literal segment. Any string counts, not only an argument
+    of req()/fetch() — a page href equal to an API path still passes. nexus-web/test/ (fetch mocks) is skipped.
   • A route built in pieces is followed only through a path helper of the same file whose value is one literal
     (`const p = (id) => `/admin/x/${id}`` then `${p(id)}/y`); other compositions read as orphans.
 
@@ -50,13 +51,14 @@ WEB = os.path.join(os.path.dirname(ROOT), "nexus-web")
 ROUTE_RE = re.compile(r'\b\w+\.(GET|POST|PUT|PATCH|DELETE)\(\s*"([^"]+)"')
 
 # Endpoint được phép không có FE caller — mỗi dòng PHẢI có lý do.
+# Keyed by (method, path): an excuse covers that verb only, so a later PUT on an excused GET path is still caught.
 ALLOWED_ORPHANS = {
-    "/health": "liveness probe hạ tầng, không phải bề mặt sản phẩm",
-    "/ready": "readiness probe hạ tầng",
-    "/metrics": "Prometheus scrape, không phải FE",
-    "/auth/sso/callback": "IdP gọi trực tiếp qua trình duyệt, không phải fetch từ FE",
-    "/auth/sso/start": "điều hướng trình duyệt (href), không phải fetch",
-    "/admin/team-sets/:id": "no single-set screen: TeamSetsPanel lists every set with its teams (#54)",
+    ("GET", "/health"): "liveness probe hạ tầng, không phải bề mặt sản phẩm",
+    ("GET", "/ready"): "readiness probe hạ tầng",
+    ("GET", "/metrics"): "Prometheus scrape, không phải FE",
+    ("GET", "/auth/sso/callback"): "IdP gọi trực tiếp qua trình duyệt, không phải fetch từ FE",
+    ("GET", "/auth/sso/start"): "điều hướng trình duyệt (href), không phải fetch",
+    ("GET", "/admin/team-sets/:id"): "no single-set screen: TeamSetsPanel lists every set with its teams (#54)",
 }
 
 
@@ -156,7 +158,8 @@ def web_code():
     """Non-comment source of every non-test .ts/.tsx file in nexus-web, path helpers inlined."""
     chunks = []
     for dirpath, dirs, files in os.walk(WEB):
-        dirs[:] = [d for d in dirs if d not in {"node_modules", ".next", "_archive"}]
+        # test/: vitest helpers whose fake fetch routes name API paths without calling them.
+        dirs[:] = [d for d in dirs if d not in {"node_modules", ".next", "_archive", "test"}]
         for f in files:
             if not f.endswith((".ts", ".tsx")) or ".test." in f:
                 continue
@@ -170,17 +173,22 @@ _SEGMENT = r"[^/\s\"'`?#{}$]+"                        # one literal segment: /ad
 
 
 def route_pattern(path):
-    """Regex for code that builds a request to `path`: every segment in order, then the end of the path.
+    """Regex for code that builds a request to `path`: the whole path, from its start to its end.
 
-    `/:entity/:id/notes/latest` needs `/…/…/notes/latest` — not `/latest` alone (#54). A `:param` is a `${…}`
-    placeholder or one literal segment; a route made of params only (`/:entity/:id`) takes placeholders only,
-    since any two literal segments would do. After the last segment comes no further path: `?query`, a closing
-    quote or `${qs}` may follow, `/more` may not.
+    `/:entity/:id/notes/latest` needs `/${…}/${…}/notes/latest` — not `/latest` alone (#54). The path starts where
+    a string or template opens or right after a `${…}` (`${BASE}/…`), never inside a longer path. A `:param` before
+    the first static segment is a `${…}` placeholder only — as a literal segment `/:entity/:id/members` would read
+    `/admin/teams/${id}/members` as its caller (#61 verifier); a later `:param` may also be one literal segment
+    (`/admin/apps/crm/nav`). After the last segment comes no further path: `?query`, a closing quote or `${qs}`
+    may follow, `/more` may not.
     """
-    segs = [s for s in path.split("/") if s]
-    param = _PLACEHOLDER if all(s.startswith(":") for s in segs) else f"(?:{_PLACEHOLDER}|{_SEGMENT})"
-    body = "".join("/" + (param if s.startswith(":") else re.escape(s)) for s in segs)
-    return re.compile(body + r"(?![\w./-])")
+    body, static_seen = "", False
+    for seg in (s for s in path.split("/") if s):
+        is_param = seg.startswith(":")
+        static_seen = static_seen or not is_param
+        param = f"(?:{_PLACEHOLDER}|{_SEGMENT})" if static_seen else _PLACEHOLDER
+        body += "/" + (param if is_param else re.escape(seg))
+    return re.compile(r"(?<=[\"'`}])" + body + r"(?![\w./-])")
 
 
 def main():
@@ -199,7 +207,7 @@ def main():
     for method, path in routes:
         # Lý do ghi tay thắng dò chuỗi: một route đã khai là nợ FE luôn hiện ở "Miễn trừ", kể cả khi
         # tiền tố tĩnh của nó trùng một route anh em có caller (cổng mù ⇒ nợ sẽ xanh im lặng).
-        if path in ALLOWED_ORPHANS:
+        if (method, path) in ALLOWED_ORPHANS:
             excused.append((method, path))
             continue
         # Path only, not method: see the method-blind limit in the docstring.
@@ -211,7 +219,7 @@ def main():
     if excused:
         print("\nMiễn trừ (có lý do):")
         for m, p in excused:
-            print(f"  {m:6} {p:44} — {ALLOWED_ORPHANS[p]}")
+            print(f"  {m:6} {p:44} — {ALLOWED_ORPHANS[(m, p)]}")
     if orphans:
         print("\n❌ MỒ CÔI — backend có, không FE nào gọi:")
         for m, p in orphans:

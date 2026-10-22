@@ -112,10 +112,47 @@ class Callers(unittest.TestCase):
             "lib/api.ts": "const backups = (tenantId: string) => `/admin/tenants/${encodeURIComponent(tenantId)}/backups`;\n"
                           "export const file = (t: string, b: string) => reqBlob(`${backups(t)}/${b}/file`);\n"})
 
+    def test_a_route_after_two_params_is_not_found_in_a_longer_path(self):
+        # Verifier probe on PR #61: `/:entity/:id/<word>` matched any other path ending in /<word>.
+        routes = [("GET", "/:entity/:id/members"), ("POST", "/:entity/:id/approve"),
+                  ("GET", "/:entity/:id/permissions"), ("GET", "/:entity/:id/export"),
+                  ("GET", "/:entity/:id/notes/latest")]
+        code, out = run_gate(routes, {
+            "lib/admin.ts": 'import { can } from "@/lib/metadata/permissions";\n'
+                            "export const members = (teamId: string) => req(\"GET\", `/admin/teams/${teamId}/members`);\n"
+                            "export const approve = (a: string) => req(\"POST\", `/approvals/${a}/approve`, {});\n"
+                            'export const pack = () => req("GET", "/admin/verticals/export");\n',
+            "components/CalendarView.tsx": "// hold the earliest/latest event of the span\nexport const x = 1;\n",
+        })
+        self.assertEqual(code, 1, out)
+        for m, p in routes:
+            self.assertIn(f"{m:6} {p}", out)
+
+    def test_a_route_starts_where_the_path_starts(self):
+        # `/reports` inside "/admin/reports", or `/${a}/${b}/members` inside a longer path, is another route.
+        web = {"lib/admin.ts": 'export const r = () => req("GET", "/admin/reports");\n'
+                               "export const m = (t: string, u: string) => req(\"GET\", `/admin/teams/${t}/${u}/members`);\n"}
+        self.assertOrphan(("GET", "/reports"), web)
+        self.assertOrphan(("GET", "/:entity/:id/members"), web)
+        self.assertCalled(("GET", "/reports"), {"lib/api.ts": "export const r = () => fetch(`${BASE}/reports`);\n"})
+
+    def test_mocks_in_web_test_helpers_are_not_callers(self):
+        # nexus-web/test/*.tsx holds fake fetch routes for vitest; they are not named *.test.*.
+        self.assertOrphan(("GET", "/admin/jobs"), {
+            "test/studio-embedded-registry.tsx": 'export const routes = { "/admin/jobs": { data: [] } };\n',
+        })
+
     def test_an_allowed_orphan_is_excused_with_its_reason(self):
         code, out = run_gate([("GET", "/health")], {"lib/api.ts": "export const a = 1;\n"})
         self.assertEqual(code, 0, out)
-        self.assertIn(gate.ALLOWED_ORPHANS["/health"], out)
+        self.assertIn(gate.ALLOWED_ORPHANS[("GET", "/health")], out)
+
+    def test_an_excuse_covers_its_method_only(self):
+        code, out = run_gate([("GET", "/admin/team-sets/:id"), ("PUT", "/admin/team-sets/:id")],
+                             {"lib/api.ts": "export const a = 1;\n"})
+        self.assertEqual(code, 1, out)
+        self.assertIn("MỒ CÔI: 1", out)
+        self.assertIn("PUT    /admin/team-sets/:id", out)
 
 
 class StripComments(unittest.TestCase):
