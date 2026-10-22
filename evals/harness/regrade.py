@@ -13,9 +13,9 @@ It runs code the agent wrote (its Go code and tests, its Python) as you, outside
 produced, or run it in a container.
 
 --archive DIR writes what each run left, small and redacted, for committing: summary.json (score, graders, turns,
-cost, tool calls, which plugin agents and skills were invoked, how often it ran each gate, the regrade checks),
-<case>/<arm>-<n>.diff (the workspace against its scaffold) and regrade.txt. --clean removes each kept run directory
-once it is graded.
+cost, tool calls, which plugin agents and skills were invoked, the regrade checks, and how often it ran each gate as
+gateCommands, which runs/2026-10-21 predates and lacks), <case>/<arm>-<n>.diff (the workspace against its scaffold)
+and regrade.txt. --clean removes each kept run directory once it is graded.
 
 --from-archive DIR re-grades an archive instead, with no model and no kept directory: each run's workspace is rebuilt
 from its case's scaffold and its diff (patch -p1), graded again, and DIR's summary.json and regrade.txt are rewritten.

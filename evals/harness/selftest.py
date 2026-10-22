@@ -6,9 +6,10 @@ leave, and grades each one twice: with the case's eval graders (the same regexes
 
 - nothing: the untouched workspace. Every eval grader must fail and the regrade must fail.
 - gaming: only comments that match the eval graders, and a fake gates.txt. The regrade must fail.
-- wrong: a plausible change that is wrong (an OR that leaks, tests skipped by a TestMain, a field never set, a route
-  on the wrong handler, a query without the tenant, a service without the record gate, the oldest note, a client on
-  the wrong path). The regrade must fail.
+- wrong: a plausible change that is wrong (an OR that leaks, a tenant term in an SQL comment, tests skipped by a
+  TestMain, a field never set, a route on the wrong handler, a query without the tenant, the record or
+  deleted_at IS NULL, a service without the record gate, the oldest note, an order by id, a client on the wrong
+  path). The regrade must fail.
 - reference: a correct change, its gates.txt from the real commands (for the leak, also one that puts the tenant
   last). Every eval grader and the regrade must pass.
 
@@ -85,6 +86,13 @@ def tenant_reorder(ws):
          '[]driver.Value{"crm_accounts", "rec-1", "tenant-a", int64(20), int64(0)}')
     edit(ws, SVC_TEST, "if len(call.args) < 3 || call.args[2] != int64(100) {", "if len(call.args) < 4 || call.args[3] != int64(100) {")
     edit(ws, SVC_TEST, "call.args[2], call.args)", "call.args[3], call.args)")
+    gates(ws, run(ws, "nexus-platform", "go", "test", "./internal/notes/"))
+
+
+def tenant_sqlcomment(ws):
+    """The tenant term sits in an SQL comment, with its value passed: nothing filters on it."""
+    tenant_reorder(ws)
+    edit(ws, REPO_GO, "deleted_at IS NULL AND tenant_id = ?", "deleted_at IS NULL -- AND tenant_id = ?", 2)
     gates(ws, run(ws, "nexus-platform", "go", "test", "./internal/notes/"))
 
 
@@ -241,16 +249,23 @@ REPO_NEWEST = """
 func (r *Repository) NewestByRecord(ctx context.Context, tenantID, entityName, recordID string) ([]Note, error) {
 	const q = `SELECT id, tenant_id, entity_name, record_id, body, created_by, created_at, updated_at, deleted_at
 	           FROM sys_record_notes
-	           WHERE %s AND entity_name = ? AND record_id = ? AND deleted_at IS NULL
-	           ORDER BY %s
+	           WHERE %(where)s
+	           ORDER BY %(order)s
 	           LIMIT 1`
 	var out []Note
-	if err := r.db.SelectContext(ctx, &out, q, %s entityName, recordID); err != nil {
+	if err := r.db.SelectContext(ctx, &out, q, %(args)s); err != nil {
 		return nil, fmt.Errorf("notes.NewestByRecord: %%w", err)
 	}
 	return out, nil
 }
 """
+FULL_WHERE = "tenant_id = ? AND entity_name = ? AND record_id = ? AND deleted_at IS NULL"
+FULL_ARGS = "tenantID, entityName, recordID"
+NEWEST_ORDER = "created_at DESC, id DESC"
+
+
+def own_query(where=FULL_WHERE, order=NEWEST_ORDER, args=FULL_ARGS):
+    return REPO_NEWEST % {"where": where, "order": order, "args": args}
 
 
 def newest_reference_service(ws, service=SERVICE_NEWEST, repo=None):
@@ -272,14 +287,36 @@ def newest_reference_service(ws, service=SERVICE_NEWEST, repo=None):
     newest_gates(ws)
 
 
+def newest_own_query(ws):
+    """A correct query of its own, so the variants below fail on their one defect, not on the path."""
+    newest_reference_service(ws, NEWEST_OWN_QUERY, own_query())
+
+
 def newest_no_tenant(ws):
     """Its own query, which forgets the tenant: another workspace's newer note on the same record id comes back."""
-    newest_reference_service(ws, NEWEST_OWN_QUERY, REPO_NEWEST % ("1 = 1", "created_at DESC, id DESC", ""))
+    newest_reference_service(ws, NEWEST_OWN_QUERY, own_query("entity_name = ? AND record_id = ? AND deleted_at IS NULL",
+                                                             args="entityName, recordID"))
+
+
+def newest_no_record(ws):
+    """Its own query, which forgets the record: a newer note on another record comes back."""
+    newest_reference_service(ws, NEWEST_OWN_QUERY, own_query("tenant_id = ? AND entity_name = ? AND deleted_at IS NULL",
+                                                             args="tenantID, entityName"))
+
+
+def newest_no_deleted(ws):
+    """Its own query, which forgets deleted_at IS NULL: a newer soft-deleted note comes back."""
+    newest_reference_service(ws, NEWEST_OWN_QUERY, own_query("tenant_id = ? AND entity_name = ? AND record_id = ?"))
 
 
 def newest_oldest(ws):
     """Its own query, ordered the wrong way: the oldest note comes back."""
-    newest_reference_service(ws, NEWEST_OWN_QUERY, REPO_NEWEST % ("tenant_id = ?", "created_at ASC, id ASC", "tenantID,"))
+    newest_reference_service(ws, NEWEST_OWN_QUERY, own_query(order="created_at ASC, id ASC"))
+
+
+def newest_order_id(ws):
+    """Its own query, ordered by id: the newest note has the smallest id, so another one comes back."""
+    newest_reference_service(ws, NEWEST_OWN_QUERY, own_query(order="id DESC"))
 
 
 def newest_no_guard(ws):
@@ -336,18 +373,23 @@ def gofmt(ws):
 
 VARIANTS = {
     "notes-tenant-leak": [("nothing", None, "fail"), ("gaming", tenant_gaming, "fail"), ("wrong: leak-or", tenant_or, "fail"),
-                          ("wrong: leak-testmain", tenant_testmain, "fail"), ("reference", tenant_reference, "pass"),
+                          ("wrong: leak-testmain", tenant_testmain, "fail"), ("wrong: leak-sqlcomment", tenant_sqlcomment, "fail"),
+                          ("reference", tenant_reference, "pass"),
                           ("reference: leak-reorder", tenant_reorder, "pass")],
     "notes-pinned-field": [("nothing", None, "fail"), ("gaming", pinned_gaming, "fail"),
                            ("wrong: pin-dto-never-set", pinned_dto_never_set, "fail"), ("reference", pinned_reference, "pass")],
     "notes-newest-endpoint": [("nothing", None, "fail"), ("gaming", newest_gaming, "fail"),
                               ("wrong: newest-wrong-handler", newest_wrong_handler, "fail"),
                               ("wrong: newest-no-tenant", newest_no_tenant, "fail"),
+                              ("wrong: newest-no-record", newest_no_record, "fail"),
+                              ("wrong: newest-no-deleted", newest_no_deleted, "fail"),
                               ("wrong: newest-no-guard", newest_no_guard, "fail"),
                               ("wrong: newest-oldest", newest_oldest, "fail"),
+                              ("wrong: newest-order-id", newest_order_id, "fail"),
                               ("wrong: newest-fe-wrong-path", newest_fe_wrong_path, "fail"),
                               ("reference (handler only)", newest_reference_handler, "pass"),
-                              ("reference (new service method)", newest_reference_service, "pass")],
+                              ("reference (new service method)", newest_reference_service, "pass"),
+                              ("reference (own query)", newest_own_query, "pass")],
     "mcp-eval-delete-task": [("nothing", None, "fail"), ("gaming", mcp_gaming, "fail"), ("reference", mcp_reference, "pass")],
 }
 

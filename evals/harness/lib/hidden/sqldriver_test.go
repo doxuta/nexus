@@ -2,10 +2,14 @@ package PKG
 
 // Held out of the eval run: regrade.sh copies this file, with its package name set, next to a case's hidden test.
 // A database/sql driver that records every statement and answers from an in-memory table of notes, so the hidden
-// tests depend on nothing in the agent's workspace but the code under test. It honours what the query says: the
-// top-level AND conjuncts of its WHERE clause (`col = ?`, `col IS NULL`; a top-level OR filters nothing, since it
-// would let rows through anyway), its ORDER BY, its LIMIT/OFFSET. A query that forgets the tenant, the record or the
-// order gets the rows it asked for, and the tests see it.
+// tests depend on nothing in the agent's workspace but the code under test.
+//
+// It answers as the statement asks, after removing its SQL comments: the top-level AND terms of the WHERE clause
+// that are `col = ?`, `? = col`, `col IN (?)` or `col IS NULL` filter the rows (a top-level OR filters nothing, since
+// it would let rows through anyway; any other term is ignored), ORDER BY sorts them by plain columns, LIMIT/OFFSET
+// cut them. Without an ORDER BY the rows keep the order the test stored them in. The tests store rows that only a
+// correct query leaves out (another tenant, another record, a soft-deleted row, a newer row stored first, an id that
+// sorts the wrong way), so a query that forgets one of them returns the wrong row.
 
 import (
 	"database/sql"
@@ -116,11 +120,30 @@ var (
 	hiddenWhere   = regexp.MustCompile(`(?is)\bWHERE\b(.*?)(?:\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)`)
 	hiddenOrderBy = regexp.MustCompile(`(?is)\bORDER\s+BY\b(.*?)(?:\bLIMIT\b|$)`)
 	hiddenLimit   = regexp.MustCompile(`(?is)\bLIMIT\s+(\?|\d+)(?:\s+OFFSET\s+(\?|\d+))?\s*$`)
-	hiddenEq      = regexp.MustCompile(`(?is)^\(?\s*(?:\w+\.)?` + "`?" + `(\w+)` + "`?" + `\s*=\s*\?\s*\)?$`)
-	hiddenIsNull  = regexp.MustCompile(`(?is)^\(?\s*(?:\w+\.)?` + "`?" + `(\w+)` + "`?" + `\s+IS\s+NULL\s*\)?$`)
+	hiddenCol     = `(?:\w+\.)?` + "`?" + `(\w+)` + "`?"
+	hiddenEq      = regexp.MustCompile(`(?is)^\(?\s*(?:` + hiddenCol + `\s*=\s*\?|\?\s*=\s*` + hiddenCol + `|` + hiddenCol + `\s+IN\s*\(\s*\?\s*\))\s*\)?$`)
+	hiddenIsNull  = regexp.MustCompile(`(?is)^\(?\s*` + hiddenCol + `\s+IS\s+NULL\s*\)?$`)
+	hiddenComment = regexp.MustCompile(`(?s)/\*.*?\*/|--[^\n]*|#[^\n]*`)
 	hiddenOrWord  = regexp.MustCompile(`(?i)^OR\b`)
 	hiddenAndWord = regexp.MustCompile(`(?i)^AND\b`)
 )
+
+// hiddenEqColumn returns the column a `col = ?`, `? = col` or `col IN (?)` term compares, or "".
+func hiddenEqColumn(term string) string {
+	m := hiddenEq.FindStringSubmatch(term)
+	if m == nil {
+		return ""
+	}
+	for _, c := range m[1:] {
+		if c != "" {
+			return c
+		}
+	}
+	return ""
+}
+
+// hiddenStrip removes SQL comments, so a term written in a comment neither filters rows nor counts as a filter.
+func hiddenStrip(q string) string { return hiddenComment.ReplaceAllString(q, " ") }
 
 // hiddenConjunct is one top-level AND term of a WHERE clause, with the index of its first placeholder among the
 // statement's arguments (-1 when it has none).
@@ -129,8 +152,10 @@ type hiddenConjunct struct {
 	arg  int
 }
 
-// hiddenConjuncts splits a statement's WHERE clause into its top-level AND terms; topOr reports a top-level OR.
+// hiddenConjuncts splits a statement's WHERE clause, comments removed, into its top-level AND terms; topOr reports a
+// top-level OR.
 func hiddenConjuncts(q string) (terms []hiddenConjunct, topOr bool) {
+	q = hiddenStrip(q)
 	loc := hiddenWhere.FindStringSubmatchIndex(q)
 	if loc == nil {
 		return nil, false
@@ -175,6 +200,7 @@ func isWordByte(b byte) bool {
 // answer serves a COUNT with the number of matching rows, and any other SELECT with the columns it names, filtered,
 // ordered and limited as the statement says.
 func (s *hiddenDB) answer(q string, args []driver.Value) driver.Rows {
+	q = hiddenStrip(q)
 	m := hiddenSelect.FindStringSubmatch(q)
 	if m == nil {
 		return &hiddenRows{}
@@ -229,7 +255,8 @@ func (s *hiddenDB) answer(q string, args []driver.Value) driver.Rows {
 	return out
 }
 
-// filter keeps the rows every `col = ?` and `col IS NULL` conjunct accepts; a top-level OR keeps them all.
+// filter keeps the rows every `col = ?` (or `? = col`, `col IN (?)`) and `col IS NULL` term accepts; a top-level OR
+// keeps them all. q has its comments removed.
 func (s *hiddenDB) filter(q string, args []driver.Value) []map[string]driver.Value {
 	terms, topOr := hiddenConjuncts(q)
 	var out []map[string]driver.Value
@@ -239,8 +266,8 @@ func (s *hiddenDB) filter(q string, args []driver.Value) []map[string]driver.Val
 			if topOr {
 				break
 			}
-			if m := hiddenEq.FindStringSubmatch(t.text); m != nil && t.arg >= 0 && t.arg < len(args) {
-				keep = keep && hiddenEqual(r[m[1]], args[t.arg])
+			if col := hiddenEqColumn(t.text); col != "" && t.arg >= 0 && t.arg < len(args) {
+				keep = keep && hiddenEqual(r[col], args[t.arg])
 			} else if m := hiddenIsNull.FindStringSubmatch(t.text); m != nil {
 				keep = keep && r[m[1]] == nil
 			}
