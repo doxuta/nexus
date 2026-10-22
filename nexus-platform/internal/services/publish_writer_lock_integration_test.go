@@ -316,3 +316,89 @@ func TestPublishNeverSleepsUnderTheTenantLock_Integration(t *testing.T) {
 		}
 	})
 }
+
+// wlStraddle runs write stopped after its first INSERT (stamped in second S) until the next second has begun, then
+// runs version while the write still holds its lock, lets the write go, and waits for both. A writer that stamps each
+// row as it inserts it puts the later rows in S+1; the version, waiting for the write and taking its cutoff in S+1,
+// then releases the rows of S and hides those of S+1 (#59, from the verifier's probe).
+func (s *s78Env) wlStraddle(t *testing.T, stamp *time.Time, write func(context.Context, *metadata.Repository) error, version func() error) {
+	t.Helper()
+	repo, inflight, resume := wlPausedRepo(t, s)
+	wrote := make(chan struct{})
+	var werr error
+	go func() { defer close(wrote); werr = write(context.Background(), repo) }()
+	<-inflight
+	time.Sleep(time.Until(stamp.Add(time.Second + 20*time.Millisecond))) // S+1 has begun
+	ran := make(chan struct{})
+	var verr error
+	go func() { defer close(ran); verr = version() }()
+	s.wlWaitLockOrDone(t, ran, "the version")
+	resume()
+	<-wrote
+	<-ran
+	if werr != nil || verr != nil {
+		t.Fatalf("write: %v, version: %v", werr, verr)
+	}
+}
+
+func TestPublishSchemaWriteStraddlingASecond_Integration(t *testing.T) {
+	// A relation field added to a table the builder was shown as new folds into that table's row: the change list
+	// and its hash do not move, so the publish goes ahead with the write it waited for.
+	t.Run("publish: a relation field on a new table", func(t *testing.T) {
+		s := s78Setup(t).wlTenant(t)
+		xid, sfx := uuid.NewString(), strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+		born := time.Now().UTC().Add(-10 * time.Second).Truncate(time.Second)
+		if _, err := s.sdb.Exec(`INSERT INTO sys_entities (id, tenant_id, name, label, table_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			xid, s.tenant, "vx_"+sfx, "vx", "obj_vx_"+sfx, born, born); err != nil {
+			t.Fatal(err)
+		}
+		_, hash, err := s.pub.Changes(s.bctx, s.tenant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rf := &metadata.FieldDefinition{ID: uuid.NewString(), EntityID: xid, TenantID: s.tenant, Name: "vx_owner", Label: "owner", FieldType: "relation"}
+		r1 := &metadata.RelationshipDefinition{ID: uuid.NewString(), TenantID: s.tenant, Name: "vx_" + sfx + "_owner", ParentEntityName: "hk_owners",
+			ChildEntityName: "vx_" + sfx, RelationshipType: "1-N", ChildFKColumn: "vx_owner_id"}
+		s.wlStraddle(t, &rf.CreatedAt, func(ctx context.Context, r *metadata.Repository) error {
+			return r.CreateFieldWithRelationship(ctx, rf, r1)
+		},
+			func() error {
+				_, err := s.pub.Publish(s.bctx, s.tenant, PublishRequest{ChangesetHash: hash})
+				return err
+			})
+		w := wlWrite{name: "relation field folded into the new table", docType: DocTypeEntity, key: xid,
+			rows: []wlRow{{"sys_entities", xid}, {"sys_fields", rf.ID}, {"sys_relationships", r1.ID}}}
+		if !s.wlJudge(t, w, "after the publish") {
+			t.Errorf("the publish of the table it was shown did not release it")
+		}
+	})
+	// The baseline has no change list to refuse with: it releases every definition it read.
+	t.Run("baseline: a table with its required field", func(t *testing.T) {
+		cs := csSetup(t)
+		sfx := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+		tbl := &metadata.EntityDefinition{ID: uuid.NewString(), TenantID: cs.tenant, Name: "vb_t" + sfx, Label: "vb", DataTable: "obj_vb_t" + sfx}
+		f := metadata.FieldDefinition{ID: uuid.NewString(), EntityID: tbl.ID, TenantID: cs.tenant, Name: "code", Label: "Code", FieldType: "text", IsRequired: true}
+		(&s78Env{dpEnv: cs.dpEnv, tenant: cs.tenant}).wlStraddle(t, &tbl.CreatedAt,
+			func(ctx context.Context, r *metadata.Repository) error {
+				return r.CreateEntityWithFields(ctx, tbl, []metadata.FieldDefinition{f}, nil)
+			},
+			func() error { _, err := cs.pub.Baseline(cs.bctx, cs.tenant, ""); return err })
+		head, err := cs.vers.HeadVersion(context.Background(), cs.sdb, cs.tenant)
+		if err != nil || head == nil || head.SchemaCutoffAt == nil {
+			t.Fatalf("head: %+v %v", head, err)
+		}
+		var tAt, fAt time.Time
+		if err := cs.sdb.Get(&tAt, `SELECT created_at FROM sys_entities WHERE tenant_id = ? AND id = ?`, cs.tenant, tbl.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := cs.sdb.Get(&fAt, `SELECT created_at FROM sys_fields WHERE tenant_id = ? AND id = ?`, cs.tenant, f.ID); err != nil {
+			t.Fatal(err)
+		}
+		if tAt.After(*head.SchemaCutoffAt) != fAt.After(*head.SchemaCutoffAt) {
+			t.Errorf("the baseline split one CreateEntityWithFields: table %v, its required field %v, cutoff %v", tAt, fAt, *head.SchemaCutoffAt)
+		}
+		if tAt.After(*head.SchemaCutoffAt) && !cs.pending(t, tbl.ID) {
+			t.Error("the table the baseline did not release is not pending")
+		}
+	})
+}
