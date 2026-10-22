@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, listDashboards, listRoles, listWorkQueuesAdmin, saveAppHome, type AdminApp } from "@/lib/api";
+import { emitDraftsChanged } from "@/lib/draftEvents";
 import { qk } from "@/lib/query/keys";
 import { t } from "@/lib/i18n";
 import { toast } from "@/components/ui/Toaster";
@@ -40,6 +41,7 @@ export function AppHomePanel({ app }: { app: AdminApp }) {
     setErr(null);
     try {
       await saveAppHome(app, { homeDashboardId: dash, homeQueueIds: queueIds, defaultRoleIds: roleIds });
+      emitDraftsChanged("app"); // an app draft on a delivered project: the header recounts
       await qc.invalidateQueries({ queryKey: qk.apps() });
       await qc.invalidateQueries({ queryKey: qk.adminApps() });
       toast.success(fill(t("studio.build.apps.home.saved"), { label: app.label }));

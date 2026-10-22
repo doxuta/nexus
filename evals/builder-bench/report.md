@@ -5,6 +5,10 @@ who is **not** an admin, and how many tokens does that take? Twenty cases, one s
 
 ## Results (2026-10-17)
 
+> These runs predate [#6](https://github.com/doxuta/nexus/issues/6), which changed the builder's persona and seven tool
+> descriptions to answer and label in the user's language instead of always in Vietnamese. The bench was not re-run
+> after that change.
+
 | model | cases | attempts | pass@1 | pass@3 | kinds | apply | publish | rep | smoke |
 |---|---|---|---|---|---|---|---|---|---|
 | claude-haiku-5-5 | 20 | 60 | 0.85 | 0.90 (20 cases) | 52/60 | 49/50 | 49/50 | 50/50 | 50/50 |

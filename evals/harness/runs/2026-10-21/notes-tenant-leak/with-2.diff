@@ -1,0 +1,333 @@
+--- /dev/null
++++ b/gates.txt
+@@ -0,0 +1,121 @@
++## gofmt -l .
++exit=0
++
++## go vet ./...
++exit=0
++
++## go vet -tags=integration ./internal/notes/ (compile check of new integration test)
++exit=0
++
++## go test -count=1 -v -run 'ListByRecord|CountByRecord|Service_List' ./internal/notes/
++=== RUN   TestNotesRepository_ListByRecord
++=== RUN   TestNotesRepository_ListByRecord/filter_đủ_3_chiều_+_mới_nhất_trước_+_limit/offset
++=== RUN   TestNotesRepository_ListByRecord/không_có_ghi_chú_→_slice_rỗng,_không_lỗi
++=== RUN   TestNotesRepository_ListByRecord/lỗi_driver_được_wrap_kèm_method
++--- PASS: TestNotesRepository_ListByRecord (0.00s)
++=== RUN   TestNotesRepository_CountByRecord
++=== RUN   TestNotesRepository_CountByRecord/đếm_tenant-pinned
++=== RUN   TestNotesRepository_CountByRecord/lỗi_driver_được_wrap_kèm_method
++--- PASS: TestNotesRepository_CountByRecord (0.00s)
++=== RUN   TestService_List
++=== RUN   TestService_List/guard_từ_chối_→_lỗi_truyền_nguyên_vẹn_(không_lộ_record)
++=== RUN   TestService_List/guard_cho_qua_entity_không_tồn_tại_→_ErrEntityNotFound_truyền_nguyên_vẹn
++=== RUN   TestService_List/happy_path_trả_đúng_trang_+_tổng
++=== RUN   TestService_List/limit_vượt_trần_bị_kẹp_(không_quét_không_giới_hạn)
++--- PASS: TestService_List (0.00s)
++PASS
++ok  	nexus/platform/internal/notes	0.230s
++exit=
++
++## go test -tags=integration -count=1 -v ./internal/notes/ (no MySQL in sandbox -> expected SKIP)
++=== RUN   TestRepository_SameRecordIDAcrossTenants
++    repository_tenant_integration_test.go:30: MySQL not reachable (dial tcp 127.0.0.1:3306: connect: operation not permitted) — skipping integration test
++--- SKIP: TestRepository_SameRecordIDAcrossTenants (0.00s)
++PASS
++ok  	nexus/platform/internal/notes	0.390s
++exit=
++
++## go build ./cmd/server/
++exit=0
++
++## go test -count=1 ./...  (exit 1; package summary)
++FAIL	nexus/platform/cmd/aieval	0.190s
++ok  	nexus/platform/cmd/bootstrap-admin	0.187s
++ok  	nexus/platform/cmd/server	0.257s
++FAIL	nexus/platform/internal/ai	0.342s
++ok  	nexus/platform/internal/appmeta	0.146s
++ok  	nexus/platform/internal/audit	0.151s
++ok  	nexus/platform/internal/auth	0.183s
++ok  	nexus/platform/internal/bpm	1.028s
++ok  	nexus/platform/internal/cache	0.179s
++ok  	nexus/platform/internal/calendar	0.136s
++?   	nexus/platform/internal/calmeta	[no test files]
++ok  	nexus/platform/internal/config	0.192s
++ok  	nexus/platform/internal/credential	0.141s
++ok  	nexus/platform/internal/crypto	0.089s
++ok  	nexus/platform/internal/dashboard	0.106s
++ok  	nexus/platform/internal/db	0.162s
++ok  	nexus/platform/internal/ddl	0.091s
++ok  	nexus/platform/internal/doctor	0.098s
++ok  	nexus/platform/internal/dynrepo	0.102s
++?   	nexus/platform/internal/emaillog	[no test files]
++ok  	nexus/platform/internal/files	0.162s
++ok  	nexus/platform/internal/formula	0.097s
++FAIL	nexus/platform/internal/handlers	0.558s
++ok  	nexus/platform/internal/health	0.261s
++?   	nexus/platform/internal/idempotency	[no test files]
++?   	nexus/platform/internal/inboundhook	[no test files]
++ok  	nexus/platform/internal/ittest	0.087s
++ok  	nexus/platform/internal/janitor	0.105s
++ok  	nexus/platform/internal/jobs	0.139s
++FAIL	nexus/platform/internal/mcpserver	0.203s
++ok  	nexus/platform/internal/metadata	0.104s
++ok  	nexus/platform/internal/metadiff	0.105s
++ok  	nexus/platform/internal/metaversion	0.196s
++ok  	nexus/platform/internal/metrics	0.233s
++ok  	nexus/platform/internal/middleware	0.628s
++ok  	nexus/platform/internal/notes	0.152s
++ok  	nexus/platform/internal/notification	0.090s
++FAIL	nexus/platform/internal/notify	0.117s
++?   	nexus/platform/internal/packinstall	[no test files]
++?   	nexus/platform/internal/project	[no test files]
++ok  	nexus/platform/internal/report	0.178s
++ok  	nexus/platform/internal/sampledata	0.168s
++FAIL	nexus/platform/internal/services	9.222s
++ok  	nexus/platform/internal/services/vertical_pack	0.315s
++ok  	nexus/platform/internal/shares	0.199s
++ok  	nexus/platform/internal/storage	0.118s
++ok  	nexus/platform/internal/tenantbackup	0.685s
++?   	nexus/platform/internal/usage	[no test files]
++?   	nexus/platform/internal/view	[no test files]
++FAIL	nexus/platform/internal/workflow	0.160s
++?   	nexus/platform/internal/workqueue	[no test files]
++
++## cause of every failing package (all sandbox port-binding, none in notes):
++--- FAIL: TestApplyAndProbe_HappyPathAsksAllThreeQuestionsThenCleansUp (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++--- FAIL: TestRecord_AppendsEveryExchangeInOrder_NeverTheKey (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++--- FAIL: TestChatRoutes_ModelRefusal_200Refused (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++--- FAIL: TestAuth_Matrix (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++--- FAIL: TestSMTPSender_RefusesPlaintextWhenNoSTARTTLS (0.00s)
++    email_test.go:64: listen tcp 127.0.0.1:0: bind: operation not permitted
++--- FAIL: TestDoctorC10_MigratesInlineSecretPreservingWireBytes (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++--- FAIL: TestHTTPWebhookSender_PostSuccessWithHMAC (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++
++## prove the test: tenant filter removed from repository.go -> unit tests (expect FAIL)
++--- FAIL: TestNotesRepository_ListByRecord (0.00s)
++        repository_unit_test.go:93: args = [crm_accounts rec-1 20 0]; want [tenant-a crm_accounts rec-1 20 0]
++--- FAIL: TestNotesRepository_CountByRecord (0.00s)
++        repository_unit_test.go:135: args = [crm_accounts rec-1]; want [tenant-a crm_accounts rec-1]
++--- FAIL: TestService_List (0.00s)
++FAIL
++FAIL	nexus/platform/internal/notes	0.249s
++FAIL
++
++## fix restored -> go test -count=1 ./internal/notes/
++ok  	nexus/platform/internal/notes	0.170s
+--- /dev/null
++++ b/nexus-platform/internal/notes/main_test.go
+@@ -0,0 +1,38 @@
++//go:build integration
++
++package notes_test
++
++import (
++	"fmt"
++	"os"
++	"testing"
++
++	"nexus/platform/internal/ittest"
++)
++
++// packageTestDSN points every notes integration test at a self-provisioned, migrated throwaway
++// database set by TestMain below (same shape as internal/files). Its initial value is a valid-shaped
++// default so that, when MySQL is unreachable, the connect helper fails on Connect and Skips.
++var packageTestDSN = "root:@tcp(127.0.0.1:3306)/nexus_platform?parseTime=true&multiStatements=true"
++
++func TestMain(m *testing.M) {
++	input := os.Getenv("TEST_DATABASE_URL")
++	if input == "" {
++		input = packageTestDSN
++	}
++	thr, cleanup, skip, err := ittest.Setup(input, "nexus_notes_it", "../../migrations")
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "notes integration setup failed: %v\n", err)
++		os.Exit(1)
++	}
++	// Never fall back to the shared dev database on a skip.
++	packageTestDSN = input
++	if !skip {
++		packageTestDSN = thr
++	}
++	code := m.Run()
++	if cleanup != nil {
++		cleanup()
++	}
++	os.Exit(code)
++}
+--- a/nexus-platform/internal/notes/repository.go
++++ b/nexus-platform/internal/notes/repository.go
+@@ -68,11 +68,11 @@
+ func (r *Repository) ListByRecord(ctx context.Context, tenantID, entityName, recordID string, limit, offset int) ([]Note, error) {
+ 	const q = `SELECT id, tenant_id, entity_name, record_id, body, created_by, created_at, updated_at, deleted_at
+ 	           FROM sys_record_notes
+-	           WHERE entity_name = ? AND record_id = ? AND deleted_at IS NULL
++	           WHERE tenant_id = ? AND entity_name = ? AND record_id = ? AND deleted_at IS NULL
+ 	           ORDER BY created_at DESC, id DESC
+ 	           LIMIT ? OFFSET ?`
+ 	var out []Note
+-	if err := r.db.SelectContext(ctx, &out, q, entityName, recordID, limit, offset); err != nil {
++	if err := r.db.SelectContext(ctx, &out, q, tenantID, entityName, recordID, limit, offset); err != nil {
+ 		return nil, fmt.Errorf("notes.ListByRecord: %w", err)
+ 	}
+ 	return out, nil
+@@ -82,9 +82,9 @@
+ // the offset-pagination envelope (api-conventions.md §Phân trang chế độ 1).
+ func (r *Repository) CountByRecord(ctx context.Context, tenantID, entityName, recordID string) (int, error) {
+ 	const q = `SELECT COUNT(*) FROM sys_record_notes
+-	           WHERE entity_name = ? AND record_id = ? AND deleted_at IS NULL`
++	           WHERE tenant_id = ? AND entity_name = ? AND record_id = ? AND deleted_at IS NULL`
+ 	var n int
+-	if err := r.db.GetContext(ctx, &n, q, entityName, recordID); err != nil {
++	if err := r.db.GetContext(ctx, &n, q, tenantID, entityName, recordID); err != nil {
+ 		return 0, fmt.Errorf("notes.CountByRecord: %w", err)
+ 	}
+ 	return n, nil
+--- /dev/null
++++ b/nexus-platform/internal/notes/repository_tenant_integration_test.go
+@@ -0,0 +1,83 @@
++//go:build integration
++
++// Real-MySQL regression test: records imported with ids from an old system can share the same
++// (entity, record id) across two tenants, so the Notes tab must list and count only the caller's
++// tenant's notes. Run with:
++//
++//	go test -tags=integration -run TestRepository_SameRecordIDAcrossTenants ./internal/notes/
++package notes_test
++
++import (
++	"context"
++	"testing"
++	"time"
++
++	_ "github.com/go-sql-driver/mysql"
++	"github.com/jmoiron/sqlx"
++
++	"nexus/platform/internal/notes"
++)
++
++const (
++	ntTenantA = "aaaa1111-0000-0000-0000-00000000ee01"
++	ntTenantB = "bbbb2222-0000-0000-0000-00000000ee02"
++	ntRecord  = "cccc3333-0000-0000-0000-00000000ee03" // the SAME imported id in both tenants
++)
++
++func TestRepository_SameRecordIDAcrossTenants(t *testing.T) {
++	db, err := sqlx.Connect("mysql", packageTestDSN)
++	if err != nil {
++		t.Skipf("MySQL not reachable (%v) — skipping integration test", err)
++	}
++	t.Cleanup(func() { _ = db.Close() })
++	ctx := context.Background()
++	clean := func() {
++		if _, err := db.ExecContext(ctx, "DELETE FROM sys_record_notes WHERE tenant_id IN (?, ?)", ntTenantA, ntTenantB); err != nil {
++			t.Fatalf("clean: %v", err)
++		}
++	}
++	clean()
++	t.Cleanup(clean)
++
++	repo := notes.NewRepository(db)
++	now := time.Now().UTC().Truncate(time.Second)
++	insert := func(id, tenant, body string) {
++		if err := repo.Insert(ctx, notes.Note{
++			ID: id, TenantID: tenant, EntityName: "crm_accounts", RecordID: ntRecord,
++			Body: body, CreatedBy: "user-1", CreatedAt: now, UpdatedAt: now,
++		}); err != nil {
++			t.Fatalf("Insert %s: %v", id, err)
++		}
++	}
++	insert("dddd0000-0000-0000-0000-00000000ee0a", ntTenantA, "note of tenant A")
++	insert("dddd0000-0000-0000-0000-00000000ee0b", ntTenantB, "note of tenant B")
++	insert("dddd0000-0000-0000-0000-00000000ee0c", ntTenantB, "another note of tenant B")
++
++	rows, err := repo.ListByRecord(ctx, ntTenantA, "crm_accounts", ntRecord, 20, 0)
++	if err != nil {
++		t.Fatalf("ListByRecord: %v", err)
++	}
++	if len(rows) != 1 || rows[0].TenantID != ntTenantA || rows[0].Body != "note of tenant A" {
++		t.Errorf("tenant A notes = %+v; want only its own note", rows)
++	}
++	total, err := repo.CountByRecord(ctx, ntTenantA, "crm_accounts", ntRecord)
++	if err != nil {
++		t.Fatalf("CountByRecord: %v", err)
++	}
++	if total != 1 {
++		t.Errorf("tenant A count = %d; want 1", total)
++	}
++
++	rows, err = repo.ListByRecord(ctx, ntTenantB, "crm_accounts", ntRecord, 20, 0)
++	if err != nil {
++		t.Fatalf("ListByRecord: %v", err)
++	}
++	for _, n := range rows {
++		if n.TenantID != ntTenantB {
++			t.Errorf("tenant B saw a note of tenant %s: %+v", n.TenantID, n)
++		}
++	}
++	if len(rows) != 2 {
++		t.Errorf("tenant B notes = %d; want 2", len(rows))
++	}
++}
+--- a/nexus-platform/internal/notes/repository_unit_test.go
++++ b/nexus-platform/internal/notes/repository_unit_test.go
+@@ -86,11 +86,16 @@
+ 		}
+ 		call := rec.lastQuery(t)
+ 		mustContainSQL(t, call.query,
+-			"entity_name = ?", "record_id = ?",
++			"tenant_id = ?", "entity_name = ?", "record_id = ?",
+ 			"deleted_at IS NULL", "ORDER BY created_at DESC, id DESC", "LIMIT ? OFFSET ?")
+-		wantArgs := []driver.Value{"crm_accounts", "rec-1", int64(20), int64(0)}
++		wantArgs := []driver.Value{"tenant-a", "crm_accounts", "rec-1", int64(20), int64(0)}
+ 		if len(call.args) != len(wantArgs) {
+ 			t.Fatalf("args = %v; want %v", call.args, wantArgs)
++		}
++		for i := range wantArgs {
++			if call.args[i] != wantArgs[i] {
++				t.Errorf("args[%d] = %v; want %v", i, call.args[i], wantArgs[i])
++			}
+ 		}
+ 	})
+ 
+@@ -124,7 +129,16 @@
+ 			t.Fatalf("CountByRecord = (%d, %v); want (3, nil)", got, err)
+ 		}
+ 		call := rec.lastQuery(t)
+-		mustContainSQL(t, call.query, "COUNT(*)", "entity_name = ?", "record_id = ?", "deleted_at IS NULL")
++		mustContainSQL(t, call.query, "COUNT(*)", "tenant_id = ?", "entity_name = ?", "record_id = ?", "deleted_at IS NULL")
++		wantArgs := []driver.Value{"tenant-a", "crm_accounts", "rec-1"}
++		if len(call.args) != len(wantArgs) {
++			t.Fatalf("args = %v; want %v", call.args, wantArgs)
++		}
++		for i := range wantArgs {
++			if call.args[i] != wantArgs[i] {
++				t.Errorf("args[%d] = %v; want %v", i, call.args[i], wantArgs[i])
++			}
++		}
+ 	})
+ 
+ 	t.Run("lỗi driver được wrap kèm method", func(t *testing.T) {
+--- a/nexus-platform/internal/notes/service_unit_test.go
++++ b/nexus-platform/internal/notes/service_unit_test.go
+@@ -155,9 +155,9 @@
+ 			t.Fatalf("List: %v", err)
+ 		}
+ 		call := rec.queryCalls[0] // the FIRST query is ListByRecord — CountByRecord ran after it
+-		// ClampPageLimit caps at 100 — the 5th bind arg is LIMIT.
+-		if len(call.args) < 3 || call.args[2] != int64(100) {
+-			t.Errorf("LIMIT arg = %v; want clamped to 100 (args=%v)", call.args[2], call.args)
++		// ClampPageLimit caps at 100 — the 4th bind arg (after tenant, entity, record) is LIMIT.
++		if len(call.args) < 4 || call.args[3] != int64(100) {
++			t.Errorf("LIMIT arg = %v; want clamped to 100", call.args)
+ 		}
+ 	})
+ }

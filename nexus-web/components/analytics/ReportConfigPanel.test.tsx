@@ -14,6 +14,7 @@ import {
   updateDashboard, updateField, updateReport, type ReportSummary,
 } from "@/lib/api";
 import { toast } from "@/components/ui/Toaster";
+import { onDraftsChanged } from "@/lib/draftEvents";
 import { WorkshopScopeProvider, type WorkshopScope } from "@/lib/workshopScope";
 import { EmbeddedSurface } from "@/components/slds/EmbeddedSurface";
 
@@ -488,6 +489,35 @@ describe("ReportConfigPanel — delete and pin", () => {
     await userEvent.click(within(prompt).getByRole("button", { name: "Xoá báo cáo" }));
     await waitFor(() => expect(deleteReport).toHaveBeenCalledWith("r2"));
     await waitFor(() => expect(nav.push).toHaveBeenCalledWith("/reports"));
+  });
+
+  // #53 (verifier): on a delivered project DELETE /admin/reports/:id writes a report "delete" draft, or drops a draft-only
+  // report (DraftReportRepo.Delete): the header recounts once the DELETE has answered, never before, never on a refusal.
+  it("delete announces on the drafts bus once it has answered, never before, never on a refusal", async () => {
+    const heard: string[] = [];
+    const off = onDraftsChanged((s) => heard.push(s));
+    try {
+      vi.mocked(deleteReport).mockRejectedValueOnce(new Error("refused"));
+      await renderPanel(SUMMARY);
+      await userEvent.click(screen.getByRole("button", { name: "Xoá báo cáo" }));
+      await userEvent.click(within(await screen.findByRole("alertdialog", { name: "Xoá báo cáo?" })).getByRole("button", { name: "Xoá báo cáo" }));
+      await waitFor(() => expect(deleteReport).toHaveBeenCalledTimes(1));
+      expect(await screen.findByText("refused")).toBeInTheDocument();
+      expect(heard).toEqual([]);
+
+      let answer!: () => void;
+      vi.mocked(deleteReport).mockReturnValueOnce(new Promise((r) => { answer = () => r(); }));
+      await userEvent.click(screen.getByRole("button", { name: "Xoá báo cáo" }));
+      await userEvent.click(within(await screen.findByRole("alertdialog", { name: "Xoá báo cáo?" })).getByRole("button", { name: "Xoá báo cáo" }));
+      await waitFor(() => expect(deleteReport).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(heard).toEqual([]);
+      answer();
+      await waitFor(() => expect(nav.push).toHaveBeenCalled());
+      expect(heard).toEqual(["report"]);
+    } finally {
+      off();
+    }
   });
 
   // Queue #302: inside an app workshop the way back and the index link stay in the workshop.

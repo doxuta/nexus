@@ -109,6 +109,26 @@ describe("createEntityInApp", () => {
     expect(replaceAppNav).toHaveBeenCalledWith("app-crm", [{ itemType: "entity", refId: "e1" }]);
   });
 
+  // #53 (verifier sweep): the menu PUT of the undo is an app draft on a delivered workspace: the header recounts once it has
+  // answered, never before, never on a refusal.
+  it("undo announces once the menu PUT has answered, never before, never on a refusal", async () => {
+    const r = await createEntityInApp({ name: "don_thuoc", label: "Đơn thuốc", app });
+    adminApp.mockResolvedValue({ items: [{ itemType: "entity", refId: "e1" }, { itemType: "entity", refId: "e9" }] });
+    emitDraftsChanged.mockReset();
+    let answer!: () => void;
+    replaceAppNav.mockReturnValueOnce(new Promise<void>((res) => { answer = () => res(); }));
+    const done = r.undo();
+    await new Promise((res) => setTimeout(res, 20));
+    expect(emitDraftsChanged).not.toHaveBeenCalled();
+    answer();
+    await done;
+    expect(emitDraftsChanged).toHaveBeenCalledWith("app");
+    emitDraftsChanged.mockReset();
+    replaceAppNav.mockRejectedValueOnce(new Error("nav down"));
+    await expect(r.undo()).rejects.toThrow("nav down");
+    expect(emitDraftsChanged).not.toHaveBeenCalled();
+  });
+
   it("a failed create throws the API error unchanged", async () => {
     createEntityWithAcl.mockRejectedValue(new ApiError(409, "ENTITY_EXISTS", "đã có"));
     await expect(createEntityInApp({ name: "x", label: "X", app })).rejects.toMatchObject({ status: 409 });

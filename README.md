@@ -84,7 +84,8 @@ flowchart TD
 docker compose up --build
 ```
 
-Open <http://localhost:8080> (set `NEXUS_PORT` to use another port). Workspace code: `northwind`.
+Open <http://localhost:8080> (set `NEXUS_PORT` to use another port). Workspace code: `northwind`. For the English UI,
+open <http://localhost:8080/login?lang=en>: the choice is kept for the next pages.
 
 | Who | Email | Password | Sees |
 |---|---|---|---|
@@ -105,7 +106,14 @@ docker compose down -v          # a replayed stack answers one run
 ```
 
 It prints one `ok` line per step and saves one screenshot per step; the first failing step exits 1. Set `CHROME_PATH`
-if Chrome is not found, and `NEXUS_PORT` for both commands if 8080 is taken.
+if Chrome is not found, and `NEXUS_PORT` for both commands if 8080 is taken. For the English run, replay
+`/cassettes/demo-loop-en.jsonl` instead and run the loop with `NEXUS_LANG=en`: the prompt, the UI and the recorded
+answers are English. CI runs both.
+
+Headless Chrome lists only English, and the UI follows a browser that lists English and no Vietnamese. The browser
+scripts (`demo-loop.mjs`, `ui-shots.mjs`, the others in `nexus-web/scripts/`) save the language for each page they
+open: `NEXUS_LANG=vi` by default, `NEXUS_LANG=en` on request. A new puppeteer script gets the English UI unless it
+does the same (`signIn` in `studio-driver.mjs`).
 
 ### Connect Claude Code over MCP
 
@@ -173,6 +181,15 @@ fails any run where a test skips.
   apply and publish each failed once in 66 attempts, and the rep's checks never failed. Each failure is explained from
   its transcript; two of the three failing requests are engine gaps, not model errors
   ([report](evals/builder-bench/report.md)). About 2,000–2,700 output tokens per working app.
+- **Harness eval: regrade WITH 1.00, W/OUT 0.88, Δ +0.12; eval graders WITH 1.00, W/OUT 0.97, Δ +0.03.**
+  `claude plugin eval` loads `.claude/` (the builder and verifier agents, the slice and verify-ui skills) as a plugin
+  and runs four small changes to a scaffolded copy of the repo with it and without it: fix a planted tenant-filter
+  leak, add a field with its migration, add an endpoint with its web caller, add a task to the MCP eval. Code graders
+  only, then a regrade that calls the code: hidden behavioural tests, gofmt, vet, the gates from the base commit; a
+  self-test shows that doing nothing, gaming with comments and fourteen wrong-but-plausible changes all fail it.
+  `claude-opus-5-5`, two runs per case per arm, $12.80, recorded on 2026-10-21. Each delta is one run, and neither is
+  the harness: no with-arm run dispatched its agents or used its skills. One W/OUT run left a file `gofmt` flags;
+  one correct W/OUT run missed a too-narrow eval pattern ([results](evals/harness/README.md)).
 
 ## How it was built
 
@@ -198,14 +215,25 @@ on this repository's Security tab.
   drafts, publish and rollback; entity ACL and row scope; five installable packs (CRM, which the seed installs,
   Clinic, Ticketing, LMS, Project Management); the Studio's builder agent and the end-user assistant, which need a
   model gateway or a recorded cassette; and `/mcp`. There are no releases: `main` is the product.
-- **Next, in the open:** an eval of the agent harness ([#5](https://github.com/doxuta/nexus/issues/5)), the
-  engine gaps builder-bench found ([#30](https://github.com/doxuta/nexus/issues/30)) and the rest of the
-  [issues](https://github.com/doxuta/nexus/issues).
+- **Next, in the open:** the engine gaps builder-bench found ([#30](https://github.com/doxuta/nexus/issues/30))
+  and the rest of the [issues](https://github.com/doxuta/nexus/issues).
 - **Frozen:** the packs beyond the demo, approvals (`internal/bpm`), work queues, dashboards, calendars, per-tenant
   backup (`internal/tenantbackup`) and the Doctor (`internal/doctor`) are in the tree and tested in CI, but no open
   issue extends them.
-- **Vietnamese first.** The English catalog holds 219 of the 6,710 keys in `nexus-web/lib/i18n`, and older screens
-  still hold Vietnamese literals; [#6](https://github.com/doxuta/nexus/issues/6) measures the demo path first.
+- **Vietnamese first, English on the demo path.** `?lang=en`, or a browser that lists English and no Vietnamese,
+  picks English. The English catalog holds 974 of the 6,830 keys in `nexus-web/lib/i18n`: the 421 the demo loop
+  renders ([#6](https://github.com/doxuta/nexus/issues/6) measured them), the sign-in page, the assistant panel's
+  keys and its cards, the shell's menus and a few neighbours; other screens fall back to Vietnamese.
+  Still Vietnamese in English mode:
+  - in the assistant: the words of a changed path on an update card, and the approval, work-queue and sample-data
+    summary lines (`lib/aiBuilder.ts`);
+  - from the server or the data: the seeded CRM, the default record layout's section titles, and draft names in the
+    publish list.
+
+  The builder answers and labels in the language it is asked in. `cassettes/demo-loop-en.jsonl` is that answer in
+  English. The default demo loop, and the GIF above, replay `cassettes/demo-loop.jsonl`. That cassette was recorded
+  when the builder answered only in Vietnamese, so the names it proposes stay Vietnamese (Phiếu hỗ trợ, Hỗ trợ
+  khách hàng) whatever the UI language.
 - **Rollback re-hides; it does not delete** ([ADR 0002](docs/adr/0002-schema-cutoff-drafts-and-rollback.md)).
   Schema born after the target is hidden again and its rows stay; attribute edits of a field or table are not
   reverted; changes applied at once are undone one entry at a time with Revert.

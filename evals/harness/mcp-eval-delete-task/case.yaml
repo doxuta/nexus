@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: mcp-eval-delete-task
+plugins: ["../../../.claude"]
+runs: 2
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 40
+  timeout_seconds: 900
+  allowed_tools: [Read, Glob, Grep, Bash, Edit, Write, Skill, Agent, TodoWrite]
+  append_system_prompt: "Environment: this checkout runs in a sandbox with no network, no database and no git. Go works offline (its modules are already fetched). Tests that start a local server (httptest) fail here whatever you change, and `make test-integration` cannot run."

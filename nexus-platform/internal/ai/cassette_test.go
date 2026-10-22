@@ -375,8 +375,9 @@ func TestFingerprint_ToolsPromptsAndShapeNotFreshIDs(t *testing.T) {
 		req   ChatRequest
 		match bool
 	}{
-		{name: "fresh ids, other schemas and the model ignored", match: true, req: edit(func(r *ChatRequest) {
+		{name: "fresh ids, another persona, other schemas and the model ignored", match: true, req: edit(func(r *ChatRequest) {
 			r.Model = "other"
+			r.Messages[0].Content = "a reworded persona" // issue #6: a persona edit does not make a recorded demo stale
 			r.Tools = slices.Clone(r.Tools)
 			r.Tools[0].Function.Description = "a reworded description"
 			r.Messages[1].Content = "grounding: entity patients, id 0b2a"

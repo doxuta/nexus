@@ -2,6 +2,7 @@
 // Goes through PATCH /admin/workflows/:id/active (no actions resent), so a rule holding a pre-vault key can still be switched off.
 // 409 / 422 come back as a sentence the row can show (with a link to the rule), never as a thrown error.
 import { ApiError, setWorkflowActive, type DraftState } from "@/lib/api";
+import { emitDraftsChanged } from "@/lib/draftEvents";
 import { errorMessage } from "@/lib/errorMessages";
 import { t } from "@/lib/i18n";
 
@@ -10,6 +11,7 @@ export type ToggleResult = { ok: true; isActive: boolean } | { ok: false; messag
 export async function toggleRuleActive(id: string, next: boolean): Promise<ToggleResult> {
   try {
     const wf = await setWorkflowActive(id, next);
+    emitDraftsChanged("rule-toggle"); // a workflow draft on a delivered project (DraftWorkflowRepo.SetActive): the header recounts
     return { ok: true, isActive: wf.isActive ?? next };
   } catch (e) {
     if (e instanceof ApiError && e.status === 409) return { ok: false, message: t("studio.build.automation.toggle.legacySecret"), needsOpen: true };

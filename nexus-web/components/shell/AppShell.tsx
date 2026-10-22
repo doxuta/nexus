@@ -21,7 +21,8 @@ import { ShellGlobalHeader } from "@/components/slds/shell/GlobalHeader";
 import { MaintenanceBanner } from "@/components/shell/MaintenanceBanner";
 import { PreviewBanner } from "@/components/shell/PreviewBanner";
 import { ShellGlobalNavigation } from "@/components/slds/shell/GlobalNavigation";
-import { t } from "@/lib/i18n";
+import { t, tf } from "@/lib/i18n";
+import type { I18nKey } from "@/lib/i18n/vi";
 import { useEntityLabel } from "@/lib/metadata/hooks";
 import { useActiveApp } from "@/lib/apps";
 import { useGuardedRouter } from "@/lib/navigation-blocker";
@@ -31,16 +32,16 @@ import { recordRouteVisit } from "@/lib/recents";
 // Phase 4 IA cleanup: dead mappings removed — "dashboard"/"audit" were legacy top-level
 // redirect stubs (deleted) and "/studio/*" mounts its own layout, so none of those segments
 // ever reach this shell.
-const STATIC_LABELS: Record<string, string> = {
-  home: "Trang chủ",
-  dashboards: "Bảng điều khiển",
-  reports: "Báo cáo",
-  approvals: "Phê duyệt",
-  notifications: "Thông báo",
-  profile: "Hồ sơ của tôi",
-  settings: "Cài đặt",
-  entities: "Danh mục đối tượng",
-  about: "Giới thiệu Nexus",
+const STATIC_LABELS: Record<string, I18nKey> = {
+  home: "shell.nav.home",
+  dashboards: "shell.nav.dashboards",
+  reports: "shell.nav.reports",
+  approvals: "shell.nav.approvals",
+  notifications: "slds.globalHeader.notifications",
+  profile: "shell.crumb.profile",
+  settings: "shell.crumb.settings",
+  entities: "entities.title",
+  about: "slds.globalHeader.about",
 };
 
 // Phase 4 IA cleanup: /admin/* renders inside this SAME shell (app/admin/layout.tsx wraps
@@ -48,44 +49,44 @@ const STATIC_LABELS: Record<string, string> = {
 // Labels mirror the Setup menu items (GlobalHeader) so nav text and breadcrumb text never disagree.
 // Kept OUT of STATIC_LABELS on purpose: keys like "users"/"roles" would otherwise shadow a
 // tenant entity of the same name in isEntitySegment().
-const ADMIN_LABELS: Record<string, string> = {
-  users: "Người dùng",
-  roles: "Vai trò & Phân quyền",
-  teams: "Nhóm",
-  "field-acl": "Phân quyền Field",
-  sso: "SSO / Đăng nhập một lần",
-  credentials: t("slds.globalHeader.credentials"),
-  "business-calendars": "Lịch làm việc",
-  audit: "Nhật ký",
-  doctor: "Bác sĩ hệ thống",
-  sharing: "Chia sẻ",
-  jobs: t("shell.nav.jobs"),
+const ADMIN_LABELS: Record<string, I18nKey> = {
+  users: "shell.nav.users",
+  roles: "shell.nav.roles",
+  teams: "shell.nav.teams",
+  "field-acl": "shell.nav.fieldAcl",
+  sso: "slds.globalHeader.sso",
+  credentials: "slds.globalHeader.credentials",
+  "business-calendars": "slds.globalHeader.calendars",
+  audit: "shell.nav.audit",
+  doctor: "shell.crumb.doctor",
+  sharing: "shell.nav.sharing",
+  jobs: "shell.nav.jobs",
   // Without this segmentLabel would capitalize the machine name: "Email-log".
-  "email-log": t("shell.nav.emailLog"),
-  usage: t("shell.nav.usage"),
-  health: t("shell.nav.health"),
+  "email-log": "shell.nav.emailLog",
+  usage: "shell.nav.usage",
+  health: "shell.nav.health",
 };
 
 // Children of /settings (the customer owner's area, specs/065). Kept OUT of STATIC_LABELS for the same reason as
 // ADMIN_LABELS: a key like "users" there would shadow a tenant entity of that name in isEntitySegment().
-const SETTINGS_LABELS: Record<string, string> = {
-  users: t("settings.users.crumb"),
+const SETTINGS_LABELS: Record<string, I18nKey> = {
+  users: "settings.users.crumb",
 };
 
 // Per-route search placeholder fidelity — matches the text each screen passed to its own
-// <Topbar> before shell consolidation. Entity routes get a generic "Tìm trong <label>…" below
+// <Topbar> before shell consolidation. Entity routes get a generic "Search <label>…" below
 // (entityCrumbs' caller); routes absent here fall back to GlobalHeader's own default.
-const SEARCH_PLACEHOLDERS: Record<string, string> = {
-  approvals: "Tìm yêu cầu phê duyệt…",
-  notifications: "Tìm trong thông báo…",
-  profile: "Tìm cài đặt hồ sơ…",
+const SEARCH_PLACEHOLDERS: Record<string, I18nKey> = {
+  approvals: "shell.search.approvals",
+  notifications: "shell.search.notifications",
+  profile: "shell.search.profile",
 };
 
 // /[entity]/<segment2> label — mirrors RecycleBinScreen / ImportScreen crumbs.
-const ENTITY_SUBROUTE_LABELS: Record<string, string> = {
-  deleted: "Thùng rác",
-  import: "Nhập từ CSV",
-  batch: "Thêm nhiều",
+const ENTITY_SUBROUTE_LABELS: Record<string, I18nKey> = {
+  deleted: "page.list.recycleBin",
+  import: "shell.crumb.importCsv",
+  batch: "page.list.batch",
 };
 
 function isEntitySegment(segment: string): boolean {
@@ -93,19 +94,19 @@ function isEntitySegment(segment: string): boolean {
 }
 
 // A record-id path segment (dashboards/:id, reports/:id, admin detail routes) is an opaque UUID —
-// capitalizing it leaks the raw "6307638f-…" into the crumb. Label it "Chi tiết" like entityCrumbs
+// capitalizing it leaks the raw "6307638f-…" into the crumb. Label it "Details" like entityCrumbs
 // does for /[entity]/[id]. The 8-4-4-4-12 hex shape never collides with a real route label.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function segmentLabel(segment: string, dict: Record<string, string>): string {
-  if (dict[segment]) return dict[segment];
-  if (UUID_RE.test(segment)) return "Chi tiết";
+function segmentLabel(segment: string, dict: Record<string, I18nKey>): string {
+  if (dict[segment]) return t(dict[segment]);
+  if (UUID_RE.test(segment)) return t("shell.crumb.detail");
   return segment.charAt(0).toUpperCase() + segment.slice(1);
 }
 
 // W0-QW7: crumbs mang href (Crumb[]) — mỗi cấp là link sống. Labels giữ byte-identical
 // với bản string[] cũ; href tích luỹ theo path segment.
 export function staticCrumbs(segments: string[]): Crumb[] {
-  if (segments.length === 0) return [{ label: "Trang chủ", href: "/home" }];
+  if (segments.length === 0) return [{ label: t("shell.nav.home"), href: "/home" }];
   return segments.map((s, i) => ({
     // Children of /settings read their own dictionary (specs/065): "Cài đặt / Người dùng".
     label: segmentLabel(s, i > 0 && segments[0] === "settings" ? SETTINGS_LABELS : STATIC_LABELS),
@@ -117,7 +118,7 @@ export function staticCrumbs(segments: string[]): Crumb[] {
 // root crumb link is always safe; unknown deeper segments fall back to capitalize.
 export function adminCrumbs(segments: string[]): Crumb[] {
   return [
-    { label: "Quản trị", href: "/admin" },
+    { label: t("slds.globalHeader.admin"), href: "/admin" },
     ...segments.slice(1).map((s, i) => ({
       label: segmentLabel(s, ADMIN_LABELS),
       href: "/" + segments.slice(0, i + 2).join("/"),
@@ -138,17 +139,17 @@ export function adminCrumbs(segments: string[]): Crumb[] {
 // ("Quản lý Bán hàng / Khách hàng") — đúng ngữ cảnh người dùng đang đứng, thay vì "Dữ liệu" chung.
 function entityCrumbs(entityName: string, label: string, rest: string[], appRoot?: Crumb): Crumb[] {
   const base: Crumb[] = [
-    appRoot ?? { label: "Dữ liệu", href: "/entities" },
+    appRoot ?? { label: t("shell.nav.data"), href: "/entities" },
     { label, href: `/${entityName}` },
   ];
   if (rest.length === 0) return base;
   const [seg1, seg2] = rest;
-  if (seg1 === "new") return [...base, { label: "Tạo mới" }];
+  if (seg1 === "new") return [...base, { label: t("page.list.new") }];
   // Labels giữ nguyên chuỗi cũ ("Sửa" không chèn thêm cấp "Chi tiết") — nút back đã lo đường
   // lên /[entity]/[id].
-  if (seg2 === "edit") return [...base, { label: "Sửa" }];
-  if (ENTITY_SUBROUTE_LABELS[seg1]) return [...base, { label: ENTITY_SUBROUTE_LABELS[seg1] }];
-  return [...base, { label: "Chi tiết" }]; // /[entity]/[id]
+  if (seg2 === "edit") return [...base, { label: t("page.record.action.edit") }];
+  if (ENTITY_SUBROUTE_LABELS[seg1]) return [...base, { label: t(ENTITY_SUBROUTE_LABELS[seg1]) }];
+  return [...base, { label: t("shell.crumb.detail") }]; // /[entity]/[id]
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -176,10 +177,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       ? entityCrumbs(first, entityLabel, segments.slice(1), appRoot)
       : staticCrumbs(segments);
   const searchPlaceholder = isAdminArea
-    ? "Tìm người dùng, vai trò, nhóm…" // same string the old admin layout passed to Topbar
+    ? t("shell.search.admin") // same string the old admin layout passed to Topbar
     : isEntity
-      ? `Tìm trong ${entityLabel.toLowerCase()}…`
-      : SEARCH_PLACEHOLDERS[first];
+      ? tf("shell.search.entity", { label: entityLabel.toLowerCase() })
+      : SEARCH_PLACEHOLDERS[first] && t(SEARCH_PLACEHOLDERS[first]);
 
   // W3: nạp route vừa ghé vào "Gần đây" của ⌘K (per-user localStorage, cap 5). Bỏ /home
   // (đích mặc định, palette đã có entry tĩnh). Label = chuỗi breadcrumb cho dễ nhận;
