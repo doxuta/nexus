@@ -213,11 +213,19 @@ on this repository's Security tab.
   backup (`internal/tenantbackup`) and the Doctor (`internal/doctor`) are in the tree and tested in CI, but no open
   issue extends them.
 - **Vietnamese first, English on the demo path.** `?lang=en`, or a browser that lists English and no Vietnamese,
-  picks English. The English catalog holds 963 of the 6,823 keys in `nexus-web/lib/i18n`: the 421 the demo loop
-  renders ([#6](https://github.com/doxuta/nexus/issues/6) measured them), the sign-in page, the whole assistant
-  panel and its cards, the shell's menus and a few neighbours; other screens fall back to Vietnamese. Some text still comes from the server or the data in Vietnamese: the
-  seeded CRM, the default record layout's section titles and draft names in the publish list. The builder answers
-  and labels in the language it is asked in; `cassettes/demo-loop-en.jsonl` is that answer in English.
+  picks English. The English catalog holds 974 of the 6,830 keys in `nexus-web/lib/i18n`: the 421 the demo loop
+  renders ([#6](https://github.com/doxuta/nexus/issues/6) measured them), the sign-in page, the assistant panel's
+  keys and its cards, the shell's menus and a few neighbours; other screens fall back to Vietnamese.
+  Still Vietnamese in English mode:
+  - in the assistant: the words of a changed path on an update card, and the approval, work-queue and sample-data
+    summary lines (`lib/aiBuilder.ts`);
+  - from the server or the data: the seeded CRM, the default record layout's section titles, and draft names in the
+    publish list.
+
+  The builder answers and labels in the language it is asked in. `cassettes/demo-loop-en.jsonl` is that answer in
+  English. The default demo loop, and the GIF above, replay `cassettes/demo-loop.jsonl`. That cassette was recorded
+  when the builder answered only in Vietnamese, so the names it proposes stay Vietnamese (Phiếu hỗ trợ, Hỗ trợ
+  khách hàng) whatever the UI language.
 - **Rollback re-hides; it does not delete** ([ADR 0002](docs/adr/0002-schema-cutoff-drafts-and-rollback.md)).
   Schema born after the target is hidden again and its rows stay; attribute edits of a field or table are not
   reverted; changes applied at once are undone one entry at a time with Revert.
