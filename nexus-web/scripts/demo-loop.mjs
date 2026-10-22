@@ -9,7 +9,8 @@
 //
 // One screenshot per step into <out-dir>; the first failing step prints its name and the script exits 1.
 // NEXUS_PORT as for docker compose (default 8080), or NEXUS_URL · CHROME_PATH (default: the macOS app, else
-// google-chrome / chromium / chromium-browser on PATH). DEMO_LOOP_RECORD=<dir> (opt-in, never set in CI) also keeps
+// google-chrome / chromium / chromium-browser on PATH). NEXUS_LANG=en runs the loop in the English UI with the English
+// prompt, against cassettes/demo-loop-en.jsonl; the default is Vietnamese. DEMO_LOOP_RECORD=<dir> (opt-in, never set in CI) also keeps
 // every frame each page paints, as <builder|rep>-<epoch ms>.jpg, and the steps' times in <dir>/timeline.json: the
 // raw material of the README's GIF (docs/media). The loop itself runs the same with or without it.
 //
@@ -22,7 +23,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import puppeteer from "puppeteer-core";
-import { ASSISTANT as assistant, attr, button, cards, clickInCard, connect, findChrome, openFromMenu, t, waitApplied, waitPath, waitText } from "./studio-driver.mjs";
+import { ASSISTANT as assistant, attr, button, cards, clickInCard, connect, findChrome, LANG, openFromMenu, t, waitApplied, waitPath, waitText } from "./studio-driver.mjs";
 
 const BASE = (process.env.NEXUS_URL ?? `http://localhost:${process.env.NEXUS_PORT || 8080}`).replace(/\/$/, "");
 const TENANT = "northwind";
@@ -32,10 +33,15 @@ const PERSONAS = {
   rep: { email: "test@example.com", password: "Demo-Rep-2026!" },
 };
 // Fixed: the cassette is keyed on it. It says who will use the app, so the assistant proposes the access too (#2).
-const PROMPT =
-  "Build a small helpdesk app: a Tickets table with a title, a description, a priority (low/medium/high) and a status " +
-  "(open/closed), and a menu entry for it. Our sales reps (Nhân viên kinh doanh) can see all tickets, create them, and " +
-  "edit their own; nobody but managers deletes.";
+// NEXUS_LANG=en has its own prompt and cassette (cassettes/demo-loop-en.jsonl, #6): it names the role by its code, not
+// by the Vietnamese label the seed gives it, so the whole request is English and so is what the builder proposes.
+const PROMPT = LANG === "en"
+  ? "Build a small helpdesk app: a Tickets table with a title, a description, a priority (low/medium/high) and a status " +
+    "(open/closed), and a menu entry for it. Our sales reps (the crm_sales_rep role) can see all tickets, create them, " +
+    "and edit their own; nobody but managers deletes."
+  : "Build a small helpdesk app: a Tickets table with a title, a description, a priority (low/medium/high) and a status " +
+    "(open/closed), and a menu entry for it. Our sales reps (Nhân viên kinh doanh) can see all tickets, create them, and " +
+    "edit their own; nobody but managers deletes.";
 const REP_ROLE = "crm_sales_rep"; // the role the seed gives the rep: "Nhân viên kinh doanh"
 const TABLE = "tickets"; // what the recorded proposal builds: a stack that already has it has run the loop before
 const TICKET = "Printer on floor 2 is jammed"; // the rep's
@@ -421,6 +427,10 @@ try {
     const t0 = Date.now();
     try {
       const note = await run();
+      // An uncaught error in either page fails the step it happened in, even when the step's own check passed: a
+      // hydration mismatch (React #418) is one, and it is otherwise invisible in a passing run (#6).
+      const pageErrors = [builder, rep].flatMap((p) => (p ? errors.get(p).splice(0) : []));
+      if (pageErrors.length) throw new Error(`page error: ${pageErrors.join(" | ")}`);
       await active.screenshot({ path: file });
       console.log(`ok   ${String(i + 1).padStart(2)} ${name} (${((Date.now() - t0) / 1000).toFixed(1)}s) — ${note}`);
     } catch (err) {

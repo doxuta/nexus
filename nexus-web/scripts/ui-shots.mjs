@@ -119,6 +119,9 @@ try {
       const ctx = await browser.createBrowserContext();
       const page = await ctx.newPage();
       page.on("pageerror", (err) => errors.push(String(err.message ?? err)));
+      // NEXUS_LANG=en shoots the English UI; the default is Vietnamese (headless Chrome lists only English, which the
+      // UI would otherwise follow: getLocale in lib/i18n).
+      await page.evaluateOnNewDocument((locale) => localStorage.setItem("nexus.prefs.v1", JSON.stringify({ locale })), process.env.NEXUS_LANG === "en" ? "en" : "vi");
       if (!persona) {
         // Anonymous routes: demo mode (NEXT_PUBLIC_DEMO_MODE) would auto-login and bounce /login to
         // /home. The logout opt-out flag lib/api.ts honours keeps the page anonymous.
@@ -157,6 +160,12 @@ try {
 } finally {
   await browser.close();
   writeReports();
+}
+// A shot with a page error (an uncaught error, a hydration mismatch) fails the run (#6), as the verify-ui skill says.
+const broken = manifest.filter((m) => m.errors.length > 0);
+if (broken.length) {
+  for (const m of broken) console.error(`FAIL ${m.route} @${m.width}: ${m.errors.join(" | ")}`);
+  process.exit(1);
 }
 function writeReports() {
 fs.writeFileSync(path.join(outDir, "report.json"), JSON.stringify(manifest.map(({ route, width, status, overflowPx, errors }) => ({ route, width, status, overflowPx, errors })), null, 2));

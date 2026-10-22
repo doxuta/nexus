@@ -9,7 +9,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { skipNextRouteFocus } from "@/components/studio/useStudioRouteFocus";
 import type { AiDraftItem } from "@/lib/aiBuilder";
-import { t } from "@/lib/i18n";
+import { t, tf } from "@/lib/i18n";
 import { parseStudioPath, routeForChange, ROUTES, zoneOfRoute } from "@/lib/studioRoutes";
 import { stepOfRoute } from "@/lib/buildSteps";
 import type { I18nKey } from "@/lib/i18n/vi";
@@ -37,12 +37,20 @@ export const PAINTED: ReadonlyArray<{ docType: string; op: ProposalOp }> = [
   { docType: "branding", op: "update" },
 ];
 
+// The server names a change in Vietnamese (internal/ai/change.go: Bảng "x", Trường "y"); a table or a field is named again
+// here from its code, so the page draws it in the UI language. Other kinds keep the server's label.
+function docLabel(c: NonNullable<AiDraftItem["change"]>): string {
+  if (c.docType === "entity" && c.target?.entity) return tf("studio.build.ai.doc.entity", { name: c.target.entity });
+  if (c.docType === "field" && c.target?.field) return tf("studio.build.ai.doc.field", { name: c.target.field });
+  return c.label;
+}
+
 /** The card's change from the draft the server sent; null when the server sent no `change` (older draft) or an op we don't know. */
 export function proposedFromItem(item: AiDraftItem, proposalKey: string): ProposedChange | null {
   const c = item.change;
   if (!c || (c.op !== "create" && c.op !== "update" && c.op !== "delete")) return null;
   return {
-    proposalKey, docType: c.docType, docKey: c.docKey, op: c.op as ProposalOp, label: c.label, before: c.before, after: c.after,
+    proposalKey, docType: c.docType, docKey: c.docKey, op: c.op as ProposalOp, label: docLabel(c), before: c.before, after: c.after,
     changedPaths: c.changedPaths, moreChanged: c.moreChanged, appName: item.entity?.appName,
     target: { docType: c.docType, docKey: c.docKey, ...c.target },
   };

@@ -2,6 +2,8 @@
 // No backend: these are client-only UI preferences.
 // Shape: NexusPrefs. Read with loadPrefs(), write with savePrefs().
 
+import { getLocale } from "@/lib/i18n";
+
 export interface NexusPrefs {
   /** UI colour scheme */
   theme: "dark" | "light" | "system";
@@ -27,12 +29,14 @@ export const DEFAULT_PREFS: NexusPrefs = {
 
 export function loadPrefs(): NexusPrefs {
   if (typeof window === "undefined") return DEFAULT_PREFS;
+  // The language not saved yet is the one the UI picked (?lang, the browser), not a fixed Vietnamese.
+  const defaults = { ...DEFAULT_PREFS, locale: getLocale() };
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_PREFS;
-    return { ...DEFAULT_PREFS, ...JSON.parse(raw) } as NexusPrefs;
+    if (!raw) return defaults;
+    return { ...defaults, ...JSON.parse(raw) } as NexusPrefs;
   } catch {
-    return DEFAULT_PREFS;
+    return defaults;
   }
 }
 

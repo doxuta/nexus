@@ -1,3 +1,5 @@
+"use client";
+
 // AuthShell — ONE shared frame for the whole auth family (login / forgot-password /
 // reset-password / SSO complete), mounted once in app/(auth)/layout.tsx.
 // SLDS has no login blueprint (RESEARCH-2026-09 §5.1/§5.2), so the frame is composed from
@@ -12,11 +14,15 @@
 // brand-95 (the blueprint wrapper's #eef4ff) so the band's ::after fade has no seam.
 import type { ReactNode } from "react";
 import { Spinner } from "@/components/slds/Spinner";
+import { useLocaleReady } from "@/lib/i18n";
 
+// The pages render their text only in the browser: /forgot-password and /reset-password were server-rendered in
+// Vietnamese and then hydrated in English (React #418, issue #6). /login already rendered nothing on the server.
 export function AuthShell({ children }: { children: ReactNode }) {
+  const ready = useLocaleReady();
   return (
     <div className="nx-auth-band slds-brand-band slds-brand-band_large z-0 min-h-screen">
-      <main className="mx-auto w-full max-w-[26rem] px-4 pt-12 pb-12 sm:pt-20">{children}</main>
+      <main className="mx-auto w-full max-w-[26rem] px-4 pt-12 pb-12 sm:pt-20">{ready ? children : null}</main>
     </div>
   );
 }

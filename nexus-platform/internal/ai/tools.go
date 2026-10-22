@@ -167,7 +167,7 @@ func toolDefinitionsBase() []Tool {
 					"type": "object",
 					"properties": map[string]any{
 						"name":   map[string]any{"type": "string", "description": "Tên entity, snake_case số nhiều (vd 'patients')."},
-						"label":  map[string]any{"type": "string", "description": "Nhãn hiển thị tiếng Việt (vd 'Bệnh nhân')."},
+						"label":  map[string]any{"type": "string", "description": "Nhãn hiển thị, theo ngôn ngữ người dùng (vd 'Bệnh nhân', 'Patients')."},
 						"fields": fieldArraySchema(),
 					},
 					"required": []string{"name", "label", "fields"},
@@ -184,7 +184,7 @@ func toolDefinitionsBase() []Tool {
 					"properties": map[string]any{
 						"entity":    map[string]any{"type": "string", "description": "Tên entity đích (đã tồn tại)."},
 						"name":      map[string]any{"type": "string", "description": "Tên field, snake_case."},
-						"label":     map[string]any{"type": "string", "description": "Nhãn hiển thị tiếng Việt."},
+						"label":     map[string]any{"type": "string", "description": "Nhãn hiển thị, theo ngôn ngữ người dùng."},
 						"fieldType": fieldTypeSchema(),
 						"options":   fieldOptionsSchema(),
 						"required":  map[string]any{"type": "boolean", "description": "Field bắt buộc?"},
@@ -285,7 +285,7 @@ func toolDefinitionsBase() []Tool {
 					"type": "object",
 					"properties": map[string]any{
 						"name":        map[string]any{"type": "string", "description": "Slug app [a-z][a-z0-9_]* tối đa 60 ký tự (vd 'spa_management')."},
-						"label":       map[string]any{"type": "string", "description": "Tên hiển thị tiếng Việt có dấu (vd 'Quản lý Spa')."},
+						"label":       map[string]any{"type": "string", "description": "Tên hiển thị, theo ngôn ngữ người dùng (vd 'Quản lý Spa', 'Spa Manager')."},
 						"icon":        map[string]any{"type": "string", "description": "Tuỳ chọn: tên lucide icon (vd 'sparkles')."},
 						"color":       map[string]any{"type": "string", "description": "Tuỳ chọn: brand tone (token màu, ≤20 ký tự)."},
 						"description": map[string]any{"type": "string", "description": "Tuỳ chọn: mô tả ngắn app làm gì."},
@@ -308,9 +308,9 @@ func toolDefinitionsBase() []Tool {
 						"field":  map[string]any{"type": "string", "description": "Tên field cần sửa (đã tồn tại trên entity)."},
 						"changes": map[string]any{
 							"type":        "object",
-							"description": "CHỈ các thuộc tính muốn đổi (bỏ key = giữ nguyên): label, description, isRequired, defaultValue, options. options gửi TRỌN BỘ object mới theo shape của fieldType (như propose_field) — với picklist/multi_select là {values:[...]} đầy đủ, không phải phần thêm. QUAN TRỌNG: nếu field đang có valueLabels (nhãn hiển thị tiếng Việt theo mã) thì PHẢI chép nguyên valueLabels vào options mới — bỏ nó là xoá sạch nhãn của khách.",
+							"description": "CHỈ các thuộc tính muốn đổi (bỏ key = giữ nguyên): label, description, isRequired, defaultValue, options. options gửi TRỌN BỘ object mới theo shape của fieldType (như propose_field) — với picklist/multi_select là {values:[...]} đầy đủ, không phải phần thêm. QUAN TRỌNG: nếu field đang có valueLabels (nhãn hiển thị theo mã) thì PHẢI chép nguyên valueLabels vào options mới — bỏ nó là xoá sạch nhãn của khách.",
 							"properties": map[string]any{
-								"label":        map[string]any{"type": "string", "description": "Nhãn hiển thị mới (tiếng Việt có dấu)."},
+								"label":        map[string]any{"type": "string", "description": "Nhãn hiển thị mới, theo ngôn ngữ người dùng."},
 								"description":  map[string]any{"type": "string", "description": "Mô tả field mới (≤500 ký tự)."},
 								"isRequired":   map[string]any{"type": "boolean", "description": "Field bắt buộc?"},
 								"defaultValue": map[string]any{"type": "string", "description": "Giá trị mặc định mới (chuỗi; \"\" để xoá default). Phải hợp kiểu field."},
@@ -362,7 +362,7 @@ func toolDefinitionsBase() []Tool {
 						"entity": map[string]any{"type": "string", "description": "Tên entity nhận dữ liệu mẫu."},
 						"rows": map[string]any{
 							"type":        "array",
-							"description": "Danh sách record mẫu (1..20), mỗi phần tử là object {tên_field: giá trị}. Dữ liệu tiếng Việt thực tế, đa dạng; KHÔNG đặt id hay cột hệ thống (engine tự sinh). Row muốn được row khác (entity khác, propose_records SAU) tham chiếu thì thêm khoá \"$ref\":\"@tên_ngắn\".",
+							"description": "Danh sách record mẫu (1..20), mỗi phần tử là object {tên_field: giá trị}. Dữ liệu thực tế, đa dạng, theo ngôn ngữ người dùng; KHÔNG đặt id hay cột hệ thống (engine tự sinh). Row muốn được row khác (entity khác, propose_records SAU) tham chiếu thì thêm khoá \"$ref\":\"@tên_ngắn\".",
 							"items":       map[string]any{"type": "object"},
 						},
 					},
@@ -478,7 +478,7 @@ func toolDefinitionsBase() []Tool {
 					"type": "object",
 					"properties": map[string]any{
 						"name":       map[string]any{"type": "string", "description": "Tên máy của queue, snake_case không dấu, tối đa 64 ký tự (vd 'lead_moi_hom_nay')."},
-						"label":      map[string]any{"type": "string", "description": "Nhãn hiển thị tiếng Việt có dấu (vd 'Lead mới hôm nay')."},
+						"label":      map[string]any{"type": "string", "description": "Nhãn hiển thị, theo ngôn ngữ người dùng (vd 'Lead mới hôm nay')."},
 						"entity":     map[string]any{"type": "string", "description": "Entity nguồn của queue."},
 						"roleName":   map[string]any{"type": "string", "description": "Tuỳ chọn: TÊN role được thấy queue này (vd 'sales_rep'); bỏ trống = mọi người."},
 						"filters":    workQueueFilterArraySchema(),
@@ -717,7 +717,7 @@ func fieldOptionsSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"description": "Cấu hình + luật validation theo fieldType. " +
-			"picklist/multi_select BẮT BUỘC {values:[chuỗi không rỗng,...]} — MÃ lưu trữ ổn định (tiếng Anh không dấu OK); kèm TUỲ CHỌN valueLabels {mã: nhãn tiếng Việt} cho chữ hiện ra — người dùng đọc nhãn, hệ thống lưu mã. " +
+			"picklist/multi_select BẮT BUỘC {values:[chuỗi không rỗng,...]} — MÃ lưu trữ ổn định (tiếng Anh không dấu OK); kèm TUỲ CHỌN valueLabels {mã: nhãn theo ngôn ngữ người dùng} cho chữ hiện ra — người dùng đọc nhãn, hệ thống lưu mã. " +
 			"picklist ĐƠN có thể PHỤ THUỘC một picklist đơn khác trên CÙNG entity (vd Quận phụ thuộc Tỉnh): thêm controllingField:'<tên field cha>' và dependentValues:{'<mã giá trị của cha>':['<mã con được phép>',...]} — mỗi khoá là một mã trong values của field CHA, mỗi mã con phải nằm trong values của chính field này, ít nhất một cha có con; field cha phải có sẵn (hoặc propose trước). Người dùng chỉ chọn được con thuộc cha đã chọn. " +
 			"number: min/max (số, min<=max), step (>0). " +
 			"text/rich_text: maxLength (số nguyên dương), pattern (regex RE2, so full-match). " +

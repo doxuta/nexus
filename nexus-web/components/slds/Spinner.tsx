@@ -38,7 +38,9 @@ export function Spinner({ size = "medium", variant = "base", inline, delayed, co
         !container && className,
       )}
     >
-      <span className="slds-assistive-text">{label ?? t("slds.spinner.loading")}</span>
+      {/* The server renders Vietnamese (it cannot know ?lang or the browser's language, lib/i18n getLocale); a page
+          that is still loading is server-rendered with this spinner, so its text may differ once, harmlessly. */}
+      <span className="slds-assistive-text" suppressHydrationWarning>{label ?? t("slds.spinner.loading")}</span>
       <div className="slds-spinner__dot-a" />
       <div className="slds-spinner__dot-b" />
     </div>

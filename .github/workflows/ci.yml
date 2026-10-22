@@ -173,3 +173,41 @@ jobs:
       - name: logs on failure
         if: failure()
         run: docker compose logs --tail 300
+
+  demo-loop-en:
+    name: demo loop in English (compose · AI replayed from the English cassette · builder and rep in Chrome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: nexus-web/package-lock.json
+      - name: docker compose up, the assistant answering from cassettes/demo-loop-en.jsonl (no model, no key)
+        env:
+          AI_ENABLED: "true"
+          AI_GATEWAY_MODE: replay
+          AI_GATEWAY_CASSETTE: /cassettes/demo-loop-en.jsonl
+        run: docker compose up --build -d
+      - name: puppeteer-core
+        working-directory: nexus-web
+        run: npm ci
+      - name: wait for the seed to finish
+        run: |
+          code=$(docker wait nexus-seed-1)
+          docker compose logs seed
+          [ "$code" = 0 ]
+      - name: the loop in the English UI, with the English prompt, in the runner's Chrome
+        working-directory: nexus-web
+        run: NEXUS_LANG=en CHROME_PATH="$(command -v google-chrome)" node scripts/demo-loop.mjs ../demo-loop-en-shots
+      - name: screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-loop-en-screenshots
+          path: demo-loop-en-shots/
+          if-no-files-found: ignore
+      - name: logs on failure
+        if: failure()
+        run: docker compose logs --tail 300

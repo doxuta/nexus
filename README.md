@@ -84,7 +84,8 @@ flowchart TD
 docker compose up --build
 ```
 
-Open <http://localhost:8080> (set `NEXUS_PORT` to use another port). Workspace code: `northwind`.
+Open <http://localhost:8080> (set `NEXUS_PORT` to use another port). Workspace code: `northwind`. For the English UI,
+open <http://localhost:8080/login?lang=en>: the choice is kept for the next pages.
 
 | Who | Email | Password | Sees |
 |---|---|---|---|
@@ -105,7 +106,14 @@ docker compose down -v          # a replayed stack answers one run
 ```
 
 It prints one `ok` line per step and saves one screenshot per step; the first failing step exits 1. Set `CHROME_PATH`
-if Chrome is not found, and `NEXUS_PORT` for both commands if 8080 is taken.
+if Chrome is not found, and `NEXUS_PORT` for both commands if 8080 is taken. For the English run, replay
+`/cassettes/demo-loop-en.jsonl` instead and run the loop with `NEXUS_LANG=en`: the prompt, the UI and the recorded
+answers are English. CI runs both.
+
+Headless Chrome lists only English, and the UI follows a browser that lists English and no Vietnamese. The browser
+scripts (`demo-loop.mjs`, `ui-shots.mjs`, the others in `nexus-web/scripts/`) save the language for each page they
+open: `NEXUS_LANG=vi` by default, `NEXUS_LANG=en` on request. A new puppeteer script gets the English UI unless it
+does the same (`signIn` in `studio-driver.mjs`).
 
 ### Connect Claude Code over MCP
 
@@ -212,8 +220,20 @@ on this repository's Security tab.
 - **Frozen:** the packs beyond the demo, approvals (`internal/bpm`), work queues, dashboards, calendars, per-tenant
   backup (`internal/tenantbackup`) and the Doctor (`internal/doctor`) are in the tree and tested in CI, but no open
   issue extends them.
-- **Vietnamese first.** The English catalog holds 219 of the 6,710 keys in `nexus-web/lib/i18n`, and older screens
-  still hold Vietnamese literals; [#6](https://github.com/doxuta/nexus/issues/6) measures the demo path first.
+- **Vietnamese first, English on the demo path.** `?lang=en`, or a browser that lists English and no Vietnamese,
+  picks English. The English catalog holds 974 of the 6,830 keys in `nexus-web/lib/i18n`: the 421 the demo loop
+  renders ([#6](https://github.com/doxuta/nexus/issues/6) measured them), the sign-in page, the assistant panel's
+  keys and its cards, the shell's menus and a few neighbours; other screens fall back to Vietnamese.
+  Still Vietnamese in English mode:
+  - in the assistant: the words of a changed path on an update card, and the approval, work-queue and sample-data
+    summary lines (`lib/aiBuilder.ts`);
+  - from the server or the data: the seeded CRM, the default record layout's section titles, and draft names in the
+    publish list.
+
+  The builder answers and labels in the language it is asked in. `cassettes/demo-loop-en.jsonl` is that answer in
+  English. The default demo loop, and the GIF above, replay `cassettes/demo-loop.jsonl`. That cassette was recorded
+  when the builder answered only in Vietnamese, so the names it proposes stay Vietnamese (Phiếu hỗ trợ, Hỗ trợ
+  khách hàng) whatever the UI language.
 - **Rollback re-hides; it does not delete** ([ADR 0002](docs/adr/0002-schema-cutoff-drafts-and-rollback.md)).
   Schema born after the target is hidden again and its rows stay; attribute edits of a field or table are not
   reverted; changes applied at once are undone one entry at a time with Revert.

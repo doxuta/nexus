@@ -266,9 +266,9 @@ type Link = (id: RouteId) => string;
 export function proposalDone(item: AiDraftItem, createdId: string | undefined, link: Link): ProposalLink {
   const studio = (text: string, id: RouteId, label: string): ProposalLink => ({ text, href: link(id), label });
   switch (item.kind) {
-    case "layout": return studio("Đã lưu bố cục.", "dung/man-hinh", "Mở Màn hình");
-    case "workflow": return studio("Đã tạo thành công.", "dung/tu-dong", "Mở Tự động");
-    case "report": return { text: "Đã tạo thành công.", href: "/reports", label: "Mở Báo cáo" };
+    case "layout": return studio(t("studio.assistant.done.layout"), "dung/man-hinh", t("studio.assistant.done.layoutLink"));
+    case "workflow": return studio(t("studio.assistant.done.created"), "dung/tu-dong", t("studio.assistant.done.automationLink"));
+    case "report": return { text: t("studio.assistant.done.created"), href: "/reports", label: t("studio.assistant.done.reportsLink") };
     case "app":
       // Staff see an app's tables only through their own role's grants (an admin testing it cannot see that gap), so the
       // line says how they get them: tell the assistant who uses the app (an access card), or tick it on the Access page.
@@ -277,22 +277,22 @@ export function proposalDone(item: AiDraftItem, createdId: string | undefined, l
         href: `/home?app=${encodeURIComponent(item.app?.name ?? "")}`,
         label: t("studio.assistant.done.appLink"),
       };
-    case "edit_field": return studio("Đã cập nhật trường.", "dung/du-lieu", "Mở Dữ liệu");
-    case "delete_field": return studio("Đã xoá trường.", "dung/du-lieu", "Mở Dữ liệu");
-    case "delete_entity": return studio("Đã xoá đối tượng.", "dung/du-lieu", "Mở Dữ liệu");
-    case "records": return { text: "Đã tạo dữ liệu.", href: `/${item.records?.entity ?? ""}`, label: "Mở danh sách" };
-    case "approval": return studio("Đã tạo quy trình duyệt.", "dung/tu-dong/duyet", "Mở Quy trình duyệt");
+    case "edit_field": return studio(t("studio.assistant.done.fieldEdited"), "dung/du-lieu", t("studio.assistant.done.dataLink"));
+    case "delete_field": return studio(t("studio.assistant.done.fieldDeleted"), "dung/du-lieu", t("studio.assistant.done.dataLink"));
+    case "delete_entity": return studio(t("studio.assistant.done.tableDeleted"), "dung/du-lieu", t("studio.assistant.done.dataLink"));
+    case "records": return { text: t("studio.assistant.done.records"), href: `/${item.records?.entity ?? ""}`, label: t("studio.assistant.done.listLink") };
+    case "approval": return studio(t("studio.assistant.done.approval"), "dung/tu-dong/duyet", t("studio.assistant.done.approvalLink"));
     case "dashboard":
-      return { text: "Đã tạo bảng điều khiển.", href: createdId ? `/dashboards/${createdId}` : "/dashboards", label: "Mở bảng điều khiển" };
-    case "workqueue": return studio("Đã tạo hàng đợi.", "dung/tu-dong/hang-doi", "Mở Hàng đợi việc");
+      return { text: t("studio.assistant.done.dashboard"), href: createdId ? `/dashboards/${createdId}` : "/dashboards", label: t("studio.assistant.done.dashboardLink") };
+    case "workqueue": return studio(t("studio.assistant.done.queue"), "dung/tu-dong/hang-doi", t("studio.assistant.done.queueLink"));
     case "access": return studio(t("studio.assistant.done.access"), "dung/nguoi-dung-quyen", t("studio.assistant.done.accessLink"));
-    default: return studio("Đã tạo thành công.", "dung/du-lieu", "Mở Dữ liệu");
+    default: return studio(t("studio.assistant.done.created"), "dung/du-lieu", t("studio.assistant.done.dataLink"));
   }
 }
 
 /** The fix-it link of the partial-success (warn) line: apps/tables get fixed in "App và menu", rows in their own list. */
 export function proposalWarnLink(item: AiDraftItem, link: Link): Omit<ProposalLink, "text"> | null {
-  if (item.kind === "app" || item.kind === "entity") return { href: link("dung/man-hinh/app"), label: "Mở App và menu" };
-  if (item.kind === "records" && item.records) return { href: `/${item.records.entity}`, label: "Mở danh sách" };
+  if (item.kind === "app" || item.kind === "entity") return { href: link("dung/man-hinh/app"), label: t("studio.assistant.done.appsLink") };
+  if (item.kind === "records" && item.records) return { href: `/${item.records.entity}`, label: t("studio.assistant.done.listLink") };
   return null;
 }

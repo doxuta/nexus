@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import vi from "@/lib/i18n/vi";
+import en from "@/lib/i18n/en";
 
 const ROOT = join(__dirname, "..", "components", "studio", "assistant");
 
@@ -29,8 +30,8 @@ describe("studio assistant gate", () => {
     for (const { p, s } of sources) expect(s, p).not.toMatch(re);
   });
 
-  it('has no "AI" in studio.assistant.* values', () => {
-    const bad = Object.entries(vi as Record<string, string>)
+  it.each([["vi", vi], ["en", en]])('has no "AI" in studio.assistant.* values (%s)', (_lang, catalog) => {
+    const bad = Object.entries(catalog as Record<string, string>)
       .filter(([k, v]) => k.startsWith("studio.assistant.") && /\bAI\b/.test(v))
       // open/close/region predate this slice (#421) and are owned by the dock lát (ai3).
       .filter(([k]) => !["studio.assistant.open", "studio.assistant.region"].includes(k));
