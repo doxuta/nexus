@@ -98,7 +98,7 @@ describe("DashboardAuthoringPanel", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Bật tìm nhanh ngay" }));
     });
-    expect(api.updateField).toHaveBeenCalledWith("f-note", { options: { indexed: true } });
+    expect(api.updateField).toHaveBeenCalledWith("f-note", { indexed: true });
 
     fireEvent.change(groupBy, { target: { value: "doctor" } });
     await act(async () => {
