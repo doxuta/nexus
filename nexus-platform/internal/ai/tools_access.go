@@ -103,7 +103,19 @@ func (e *toolExecutor) proposeAccess(ctx context.Context, argsJSON string) strin
 	if err != nil {
 		return toolErr("ACCESS_PROPOSE_FAILED: %v", err)
 	}
-	users, err := probes.Users.ListUsers(ctx, e.tenantID)
+	// One query for the admins and operators holding a role this call names (issue #23): a refused
+	// grant is still judged in order below, so a role that does not resolve is simply not asked about.
+	var named []string
+	for _, g := range raw {
+		var ref string
+		if json.Unmarshal(g["role"], &ref) != nil {
+			continue // not a string: refused as INVALID_ARGS below
+		}
+		if r, msg := resolveAccessRole(roles, ref, 0); msg == "" {
+			named = append(named, r.ID)
+		}
+	}
+	users, err := probes.Users.PrivilegedHolders(ctx, e.tenantID, named)
 	if err != nil {
 		return toolErr("ACCESS_PROPOSE_FAILED: %v", err)
 	}
@@ -239,7 +251,8 @@ func resolveAccessRole(roles []auth.Role, ref string, n int) (auth.Role, string)
 }
 
 // privilegedHolder says who makes the role privileged ("" = nobody): an admin or a platform operator
-// holding it. They bypass access control anyway, and the assistant stays off their roles.
+// holding it (users = PrivilegedHolders). They bypass access control anyway, and the assistant stays
+// off their roles.
 func privilegedHolder(users []auth.User, roleID string) string {
 	for _, u := range users {
 		if u.RoleID == nil || *u.RoleID != roleID {

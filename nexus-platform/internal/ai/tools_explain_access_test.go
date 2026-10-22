@@ -8,6 +8,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,11 +19,21 @@ import (
 
 type fakeAccessUsers struct {
 	byKey    map[string]*auth.User  // key: tenantID+"/"+email or +id
-	byTenant map[string][]auth.User // ListUsers (propose_access)
+	byTenant map[string][]auth.User // PrivilegedHolders (propose_access)
+	asked    [][]string             // the roleIDs of each PrivilegedHolders call
 }
 
-func (f *fakeAccessUsers) ListUsers(_ context.Context, tenantID string) ([]auth.User, error) {
-	return f.byTenant[tenantID], nil
+// PrivilegedHolders filters as the SQL does (tenant, role in roleIDs, admin or operator) and records
+// which roles were asked about.
+func (f *fakeAccessUsers) PrivilegedHolders(_ context.Context, tenantID string, roleIDs []string) ([]auth.User, error) {
+	f.asked = append(f.asked, roleIDs)
+	var out []auth.User
+	for _, u := range f.byTenant[tenantID] {
+		if u.RoleID != nil && slices.Contains(roleIDs, *u.RoleID) && (u.IsAdmin || u.IsPlatformOperator) {
+			out = append(out, u)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeAccessUsers) GetUserByEmail(_ context.Context, tenantID, email string) (*auth.User, error) {

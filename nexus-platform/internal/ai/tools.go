@@ -3104,8 +3104,9 @@ func (e *toolExecutor) proposeWorkQueue(ctx context.Context, argsJSON string) st
 type accessUserLookup interface {
 	GetUserByEmail(ctx context.Context, tenantID, email string) (*auth.User, error)
 	GetUserByID(ctx context.Context, tenantID, id string) (*auth.User, error)
-	// ListUsers backs propose_access: never a role an admin or a platform operator holds.
-	ListUsers(ctx context.Context, tenantID string) ([]auth.User, error)
+	// PrivilegedHolders backs propose_access: the admins and platform operators holding one of
+	// roleIDs (never a role one of them holds), not every user of the tenant (issue #23).
+	PrivilegedHolders(ctx context.Context, tenantID string, roleIDs []string) ([]auth.User, error)
 }
 
 type accessRoleLookup interface {
