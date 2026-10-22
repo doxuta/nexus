@@ -45,6 +45,8 @@ jobs:
           python3 scripts/test_acceptance_named_credentials.py
           python3 scripts/test_seed_demo.py
           python3 scripts/test_check_orphan_endpoints.py
+      - name: orphan-endpoint gate (a route no web code calls is wired or excused)
+        run: python3 scripts/check-orphan-endpoints.py --strict
       - name: eval pass-rule unit tests
         run: python3 ../evals/mcp/test_run.py
 
