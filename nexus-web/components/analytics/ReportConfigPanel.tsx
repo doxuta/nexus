@@ -338,6 +338,7 @@ function ReportConfigForm({ reportId, meta, onSavedToDraft }: { reportId: string
     setDelBusy(true);
     try {
       await deleteReport(reportId);
+      emitDraftsChanged("report"); // a report "delete" draft (or a dropped draft-only report) on a delivered project: the header recounts
       await qc.invalidateQueries({ queryKey: qk.reports() });
       toast.success(t("page.reports.config.deleted"));
       router.push(embedded ? studioHref(activeProjectSlug(), "dung/bao-cao") : workshop ? workshop.panelHref("bao-cao") : "/reports");
