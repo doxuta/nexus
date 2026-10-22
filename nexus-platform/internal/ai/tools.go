@@ -538,10 +538,12 @@ func toolDefinitionsBase() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "list_roles",
-				Description: "Liệt kê TÊN các vai (role) đang có của tenant. BẮT BUỘC gọi trước khi dùng roleName trong propose_workqueue, người duyệt (approverType='role') trong propose_approval hoặc role trong propose_access — tên vai không có thật sẽ làm bước Apply thất bại. Chưa có vai phù hợp thì bỏ trống roleName (queue hiện với mọi người) hoặc dùng approverType='user'.",
+				Description: "Lists the workspace's role names. Call it before naming a role in propose_workqueue (roleName), propose_approval (approverType 'role') or propose_access: a role that does not exist fails at Apply. No fitting role: leave roleName empty or use approverType 'user'. grants: true adds each role's current grants (entityName '*' = every table, accessLevel = which rows) to answer who can view or edit a table. Admins bypass grants. Read-only.",
 				Parameters: map[string]any{
-					"type":       "object",
-					"properties": map[string]any{},
+					"type": "object",
+					"properties": map[string]any{
+						"grants": map[string]any{"type": "boolean", "description": "true: also list each role's current grants."},
+					},
 				},
 			},
 		},
@@ -803,7 +805,7 @@ func (e *toolExecutor) dispatch(ctx context.Context, name, argsJSON string) stri
 	case "get_app":
 		return e.getApp(ctx, argsJSON)
 	case "list_roles":
-		return e.listRoles(ctx)
+		return e.listRoles(ctx, argsJSON)
 	case "snapshot_model":
 		return e.snapshotModel(ctx)
 	case "propose_entity":
@@ -1313,13 +1315,25 @@ func (p proposedField) toDraftField(entity string) DraftField {
 
 func ptrDraftField(f DraftField) *DraftField { return &f }
 
-// listRoles returns the tenant's role names so the model can only NAME a role that exists.
+// listRoles returns the tenant's role names so the model can only NAME a role that exists; with
+// {grants: true}, every role with its grants (listRoleGrants, issue #23).
 //
 // propose_workqueue's roleName and propose_approval's role approver are resolved to ids at Apply,
 // and until now the model had no way to see the list — so it produced a reasonable-sounding name
 // and the Apply failed on a role nobody had created. Failing at Apply is the worst place to learn
 // it: the proposal already looked right and the person already pressed the button.
-func (e *toolExecutor) listRoles(ctx context.Context) string {
+func (e *toolExecutor) listRoles(ctx context.Context, argsJSON string) string {
+	var a struct {
+		Grants bool `json:"grants"`
+	}
+	if strings.TrimSpace(argsJSON) != "" {
+		if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
+			return toolErr("INVALID_ARGS: %v", err)
+		}
+	}
+	if a.Grants {
+		return e.listRoleGrants(ctx)
+	}
 	names, err := e.reader.ListRoleNames(ctx, e.tenantID)
 	if err != nil {
 		return toolErr("ROLES_READ_FAILED: không đọc được danh sách vai: %v", err)

@@ -197,10 +197,7 @@ func (e *toolExecutor) proposeAccess(ctx context.Context, argsJSON string) strin
 			e.draft = e.draft[:from]
 			return toolErr("ACCESS_PROPOSE_FAILED: %v", err)
 		}
-		before := make([]services.RoleActionView, len(acts))
-		for i, a := range acts {
-			before[i] = services.RoleActionView{EntityName: a.EntityName, Action: a.Action, AccessLevel: a.AccessLevel}
-		}
+		before := grantViews(acts)
 		after := mergeAccessGrants(before, p.grants)
 		if slices.Equal(after, before) {
 			unchanged = append(unchanged, p.role.Name)
@@ -225,6 +222,43 @@ func (e *toolExecutor) proposeAccess(ctx context.Context, argsJSON string) strin
 		out["unchanged"] = unchanged // already had it all: no card for these
 	}
 	return toolOK(out)
+}
+
+// listRoleGrants is list_roles {grants: true} (issue #23): every role of the tenant with its current
+// grants, so "who can edit contacts?" gets a whole answer. A read: the tenant is the executor's,
+// nothing is buffered or written, which is why MCP offers it too.
+// ponytail: two reads per role (ListActionsForRole re-checks the role's tenant); a tenant has tens of
+// roles. One JOIN over acl_roles/acl_role_actions if that ever shows up.
+func (e *toolExecutor) listRoleGrants(ctx context.Context) string {
+	var probes *AccessProbes
+	if c, ok := e.reader.(AccessProbeCarrier); ok {
+		probes = c.AccessProbes()
+	}
+	if probes == nil || probes.Roles == nil {
+		return toolErr("ROLES_GRANTS_UNAVAILABLE: the server has no role reader wired for the assistant; call list_roles without grants")
+	}
+	roles, err := probes.Roles.ListRoles(ctx, e.tenantID)
+	if err != nil {
+		return toolErr("ROLES_READ_FAILED: %v", err)
+	}
+	out := make([]map[string]any, 0, len(roles))
+	for _, r := range roles {
+		acts, err := probes.Roles.ListActionsForRole(ctx, e.tenantID, r.ID)
+		if err != nil {
+			return toolErr("ROLES_READ_FAILED: role %q: %v", r.Name, err)
+		}
+		out = append(out, map[string]any{"name": r.Name, "label": r.Label, "grants": grantViews(acts)})
+	}
+	return toolOK(map[string]any{"roles": out})
+}
+
+// grantViews is a role's grant rows as the API and the access card show them; never nil.
+func grantViews(acts []auth.RoleAction) []services.RoleActionView {
+	out := make([]services.RoleActionView, len(acts))
+	for i, a := range acts {
+		out[i] = services.RoleActionView{EntityName: a.EntityName, Action: a.Action, AccessLevel: a.AccessLevel}
+	}
+	return out
 }
 
 // resolveAccessRole finds the role by its name, else by its label when exactly one role carries it

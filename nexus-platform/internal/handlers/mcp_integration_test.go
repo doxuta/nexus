@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -819,4 +820,58 @@ func TestMCP_SettledProposalsAreNotReplayed(t *testing.T) {
 		}
 		mustPropose(t, "propose_field", map[string]any{"entity": "st_visits", "name": "doctor", "label": "Doctor", "fieldType": "user"}) // doctor_id is free
 	})
+}
+
+// Issue #23: an outside agent answers "who can edit contacts?" whole. nexus_list_roles {grants: true}
+// lists this workspace's roles with their grants (the role reader main.go wires), never another
+// tenant's, and as a read it leaves the token's thread alone.
+func TestMCP_ListRolesWithGrants(t *testing.T) {
+	gdb, sx := a4SetupMigratedDB(t)
+	ctx := context.Background()
+	const tenant, other = "ten-mcp-grants", "ten-mcp-grants-b"
+	builderID := mcpBuilder(t, gdb, tenant, "mcp-grants")
+	a4SeedTenant(t, gdb, other, "mcp-grants-b", "mcp-grants-b")
+	roleRepo := auth.NewRoleRepository(gdb)
+	roles := services.NewRoleService(roleRepo)
+	if _, err := roles.CreateRole(ctx, tenant, services.CreateRoleInput{Name: "it_contacts_editor", Label: "Contacts editor", Actions: []services.RoleActionInput{
+		{EntityName: "it_contacts", Action: "view", AccessLevel: "all"}, {EntityName: "it_contacts", Action: "edit", AccessLevel: "owner"}}}); err != nil {
+		t.Fatalf("role: %v", err)
+	}
+	if _, err := roles.CreateRole(ctx, other, services.CreateRoleInput{Name: "it_other_tenant_role", Label: "B"}); err != nil {
+		t.Fatalf("other tenant's role: %v", err)
+	}
+	store := ai.NewSessionStore(sx)
+	mcpSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(gdb), store, auth.NewUserRepository(gdb))
+	tok, secret, err := mcpSvc.Issue(ctx, auth.Subject{UserID: builderID, TenantID: tenant, IsAdmin: true}, nil)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	agent := ai.NewAIBuilderAgent(config.AIConfig{}, nil, ai.ReaderWithAccessProbes(metadata.NewRepository(gdb), &ai.AccessProbes{Roles: roleRepo}), nil, nil, zap.NewNop())
+	ts := httptest.NewServer(mcpserver.New(mcpSvc, agent, store, nil, zap.NewNop()))
+	defer ts.Close()
+	cs := mcpConnect(t, ts.URL, secret)
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "nexus_list_roles", Arguments: map[string]any{"grants": true}})
+	if err != nil || res.IsError {
+		t.Fatalf("list_roles grants: %v %s", err, mcpText(res))
+	}
+	var out struct {
+		Result struct {
+			Roles []struct {
+				Name   string                    `json:"name"`
+				Grants []services.RoleActionView `json:"grants"`
+			} `json:"roles"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(mcpText(res)), &out); err != nil {
+		t.Fatalf("decode %s: %v", mcpText(res), err)
+	}
+	want := []services.RoleActionView{{EntityName: "it_contacts", Action: "edit", AccessLevel: "owner"}, {EntityName: "it_contacts", Action: "view", AccessLevel: "all"}}
+	if len(out.Result.Roles) != 1 || out.Result.Roles[0].Name != "it_contacts_editor" || !reflect.DeepEqual(out.Result.Roles[0].Grants, want) {
+		t.Fatalf("roles = %+v; want only this workspace's role with %v", out.Result.Roles, want)
+	}
+	var rows int
+	if err := sx.Get(&rows, "SELECT COUNT(*) FROM sys_ai_messages WHERE session_id = ? AND tenant_id = ?", tok.SessionID, tenant); err != nil || rows != 2 {
+		t.Fatalf("thread rows = %d (%v); want only the 2 of the key's opening turn", rows, err)
+	}
 }
