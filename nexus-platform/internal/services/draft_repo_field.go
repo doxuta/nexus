@@ -362,52 +362,6 @@ func (r *DraftFieldRepo) SaveEdit(ctx context.Context, tenantID string, effectiv
 	return draftOnly, nil
 }
 
-// indexedOnlyOptions reads options that differ from the LIVE options in "indexed" alone as "set
-// indexed" (#56): it returns the options the builder sees (overlay: a pending draft's included) with
-// the sent flag laid on; nil means the sent options are meant whole.
-//
-// "Bật index ngay" outside /studio (the customer app's /reports, a dashboard) reads the field live
-// and sends those options back whole. Taken whole they put the live options over the pending draft:
-// SaveEdit found want == have and deleted it, or overwrote the draft's options. indexed is never
-// drafted, so the overlay's flag is the live one and a Studio hand revert (indexed untouched) does
-// not match: it still drops the draft. ponytail: a Studio save that reverts the options to live AND
-// flips indexed in one go reads as indexed-only too; the draft stays, shown as pending (no loss).
-// Upgrade path if that matters: a narrow "indexed" key on PUT /admin/fields/:id.
-func indexedOnlyOptions(sent map[string]any, live, overlay *string) (map[string]any, error) {
-	liveOpts, err := optionsMap(live)
-	if err != nil {
-		return nil, err
-	}
-	if boolOpt(sent, "indexed") == boolOpt(liveOpts, "indexed") {
-		return nil, nil
-	}
-	sentJSON, err := optionsJSON(sent)
-	if err != nil {
-		return nil, err
-	}
-	sentRest, err := optionsWithoutIndexed(sentJSON)
-	if err != nil {
-		return nil, err
-	}
-	liveRest, err := optionsWithoutIndexed(live)
-	if err != nil {
-		return nil, err
-	}
-	if string(sentRest) != string(liveRest) {
-		return nil, nil
-	}
-	out, err := optionsMap(overlay)
-	if err != nil {
-		return nil, err
-	}
-	if v, ok := sent["indexed"]; ok {
-		out["indexed"] = v
-	} else {
-		delete(out, "indexed")
-	}
-	return out, nil
-}
-
 // SaveReorder turns "the i-th id gets field_order (i+1)*10" into one field draft per field whose
 // position changes. Each draft starts from the field AS THE BUILDER SEES IT (live + any pending edit),
 // so a reorder merges into an existing edit draft of the same field; a field put back at its live

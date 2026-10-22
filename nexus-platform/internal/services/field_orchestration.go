@@ -966,17 +966,23 @@ func (s *FieldService) EditField(ctx context.Context, tenantID string, in EditFi
 			return nil, fmt.Errorf("services.EditField: resolve live field for audit: %w", lerr)
 		}
 		beforeField = *live
-		// #56: options sent alone that differ from the LIVE row in "indexed" only are "set indexed"
-		// ("Bật index ngay" outside /studio read the field live): lay the flag onto the builder's view.
-		if in.Options != nil && in.Label == nil && in.IsRequired == nil && in.DefaultVal == nil && in.FieldOrder == nil && in.Description == nil {
-			merged, merr := indexedOnlyOptions(in.Options, live.Options, field.Options)
-			if merr != nil {
-				return nil, fmt.Errorf("services.EditField: %w", merr)
-			}
-			if merged != nil {
-				in.Options = merged
-			}
+	}
+	// #56: "set indexed" is resolved against the field as resolved above, never against a copy of the
+	// options the caller read (outside /studio that read is live: taken whole, it dropped the draft).
+	if in.Indexed != nil {
+		if in.Options != nil {
+			return nil, invalid("FIELD_INDEXED_WITH_OPTIONS", "gửi indexed hoặc options, không gửi cả hai")
 		}
+		opts, oerr := optionsMap(field.Options)
+		if oerr != nil {
+			return nil, fmt.Errorf("services.EditField: %w", oerr)
+		}
+		if *in.Indexed {
+			opts["indexed"] = true
+		} else {
+			delete(opts, "indexed")
+		}
+		in.Options = opts
 	}
 
 	// ONE-body validation + apply-to-copy, shared verbatim with the AI Builder's

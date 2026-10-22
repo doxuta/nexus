@@ -179,6 +179,9 @@ type editFieldRequest struct {
 	// FieldOrder / Description (W5): mutable, apply-when-non-nil like the other pointers.
 	FieldOrder  *int    `json:"fieldOrder"`
 	Description *string `json:"description"`
+	// Indexed (#56): set options.indexed only, merged into the options as they stand (a pending
+	// draft's included). Not combinable with options (422 FIELD_INDEXED_WITH_OPTIONS).
+	Indexed *bool `json:"indexed"`
 }
 
 // EditField handles PUT /admin/fields/:id: it updates a field's mutable attributes
@@ -209,6 +212,7 @@ func (h *AdminEntityHandler) EditField(c *gin.Context) {
 		FieldType:   req.FieldType,
 		FieldOrder:  req.FieldOrder,
 		Description: req.Description,
+		Indexed:     req.Indexed,
 	}
 	if req.Options != nil {
 		in.Options = *req.Options
