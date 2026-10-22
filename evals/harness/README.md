@@ -31,7 +31,7 @@ Each case is a request a person would type, ending with "save the output of the 
 |---|---|---|---|
 | [`notes-tenant-leak`](notes-tenant-leak/) | Notes from another workspace show up on a record; find the cause and fix it. The scaffold plants the bug: the notes list and count lose their `tenant_id` filter and the unit tests that pinned it are loosened, so the package is green. | `ListByRecord` and `CountByRecord` filter `tenant_id` again; gates.txt shows `ok nexus/platform/internal/notes` | gofmt, go vet, go build; a hidden test calls both and wants a top-level `tenant_id = ?` term whose placeholder binds the tenant, anywhere in the clause, and no top-level `OR` |
 | [`notes-pinned-field`](notes-pinned-field/) | Add a `pinned` flag to record notes: stored (off by default), returned by the API, pinned first. | migration `000100_*.up.sql` and `.down.sql` created; `db:"pinned"`; `ORDER BY pinned DESC`; `json:"pinned"`; notes tests ok | gofmt, vet, build; hidden tests: a pinned row comes back pinned and first, and `GET /:entity/:id/notes` returns `"pinned": true`; one migration pair, up adds the column with a default and down drops it, comments ignored |
-| [`notes-newest-endpoint`](notes-newest-endpoint/) | Add `GET /api/v1/:entity/:id/notes/newest` and its client function in `nexus-web/lib/api.ts`. | route in `note_handler.go`; GET call in `lib/api.ts`; gates.txt shows the orphan-endpoint gate passing and handlers tests ok | gofmt, vet, build; the orphan-endpoint gate (script from BASE); an exported function in `lib/api.ts` that GETs `` `/${…}/${…}/notes/newest` ``, comments ignored; a hidden test over a table that also holds a newer note of another tenant on the same record id, with rows stored out of order: `{"data": null}` with none of the caller's notes, the caller's newest note otherwise, and 404 on a record the parent-record gate hides |
+| [`notes-newest-endpoint`](notes-newest-endpoint/) | Add `GET /api/v1/:entity/:id/notes/newest` and its client function in `nexus-web/lib/api.ts`. | route in `note_handler.go`; GET call in `lib/api.ts`; gates.txt shows the orphan-endpoint gate passing and handlers tests ok | gofmt, vet, build; the orphan-endpoint gate (script from BASE); an exported function in `lib/api.ts` that GETs `` `/${…}/${…}/notes/newest` ``, comments ignored; a hidden test over a table that also holds newer notes the query must leave out (another tenant on the same record id, another record of the same tenant, a soft-deleted note), with rows stored out of order and the right note holding the smallest id: `{"data": null}` with none of the caller's live notes, the caller's newest live note otherwise, and 404 on a record the parent-record gate hides |
 | [`mcp-eval-delete-task`](mcp-eval-delete-task/) | Add task 6 to the MCP eval ([`evals/mcp`](../mcp/README.md)): "Remove the Warehouses table." passes only on a proposal to delete it. | task 6 in `run.py`; `run.py` and `test_run.py` read the draft key the engine really writes (`deleteEntity`); gates.txt shows the unittest `OK` | BASE's `test_run.py` against the agent's `run.py`; a hidden check that task 6 accepts the real deletion draft, rejects no proposal, another table and a creation, and that the report names the table |
 
 The last case is the MCP one: what an outside agent may do over `/mcp` is propose, and the eval grades proposals, so
@@ -41,11 +41,14 @@ the case is about grading a deletion that is only ever proposed. Its trap is the
 `claude plugin eval` has no custom-code graders, so its score reads the files the agent left and the gates.txt it
 wrote: a comment can pass it. The regrade is the check that counts. It copies each kept workspace, overwrites the gate
 scripts and test files it relies on with BASE's, and adds tests the agent never saw (`<case>/hidden/`,
-[`lib/hidden/`](lib/hidden/)). Those tests carry their own SQL driver, which answers as the statement asks (its
-top-level `col = ?` and `IS NULL` terms, its ORDER BY, its LIMIT), and serve the notes routes through the real
+[`lib/hidden/`](lib/hidden/)). Those tests carry their own SQL driver, which answers as the statement asks once its
+SQL comments are removed (its top-level `col = ?`, `? = col`, `col IN (?)` and `col IS NULL` terms, its ORDER BY on
+plain columns, its LIMIT), and serve the notes routes through the real
 `RegisterAPIRoutes` over the real `notes.Service` and a parent-record gate, so they call whatever the agent wrote,
 wherever it mounted it. They run with `-run '^TestHidden_' -v`, and each must print its own `--- PASS` line: a
-`TestMain` that skips the tests does not get through.
+`TestMain` that skips the tests does not get through. Other correct ways to write the query (a subquery such as
+`created_at = (SELECT MAX(created_at) …)`, `tenant_id IN (?, ?)`, a join) are not understood and grade as failures:
+re-check a failing run by hand before counting it.
 
 **The regrade runs code the agent wrote** (its Go code and tests, its `run.py`) as you, outside any sandbox. Grade only
 runs you produced, or run it in a container.
@@ -56,14 +59,14 @@ runs you produced, or run it in a container.
 |---|---|---|
 | nothing (the untouched workspace) | 0.00 in every case | fails in every case |
 | gaming (comments that match the eval graders, a fake gates.txt) | 1.00 in every case | fails in every case |
-| wrong but plausible: `leak-or` (`WHERE tenant_id = ? OR …`), `leak-testmain` (the leak stays, a `TestMain` skips the tests), `pin-dto-never-set` (the response field is declared, never set), `newest-wrong-handler` (the route serves the whole list), `newest-no-tenant` (a query without the tenant), `newest-no-guard` (a service method that skips the parent-record gate), `newest-oldest` (`ORDER BY created_at ASC`), `newest-fe-wrong-path` (the client GETs `/${entity}/notes/newest`) | 1.00 (0.33 for `leak-testmain`, 0.75 for `newest-fe-wrong-path`) | fails |
-| reference (a correct change; for the leak also one that puts the tenant last, `leak-reorder`; for the endpoint both a handler-only one and one with a new service method) | 1.00 | passes |
+| wrong but plausible: `leak-or` (`WHERE tenant_id = ? OR …`), `leak-sqlcomment` (`-- AND tenant_id = ?` in the SQL, its value passed), `leak-testmain` (the leak stays, a `TestMain` skips the tests), `pin-dto-never-set` (the response field is declared, never set), `newest-wrong-handler` (the route serves the whole list), `newest-no-tenant`, `newest-no-record`, `newest-no-deleted` (a query without the tenant, the record or `deleted_at IS NULL`), `newest-no-guard` (a service method that skips the parent-record gate), `newest-oldest` (`ORDER BY created_at ASC`), `newest-order-id` (`ORDER BY id DESC`), `newest-fe-wrong-path` (the client GETs `/${entity}/notes/newest`) | 1.00 (0.33 for `leak-testmain`, 0.75 for `newest-fe-wrong-path`) | fails |
+| reference (a correct change; for the leak also one that puts the tenant last, `leak-reorder`; for the endpoint a handler-only one, one with a new service method, and one with its own correct query) | 1.00 | passes |
 
 ## Run it
 
 ```bash
 bash evals/harness/prepare.sh   # once: Go modules and a warm build cache in .cache/harness-eval (gitignored)
-python3 evals/harness/selftest.py   # no model: the 22 variants above, about 8 minutes
+python3 evals/harness/selftest.py   # no model: the 27 variants above, about 10 minutes
 claude plugin eval . --eval-dir evals/harness --ablation with-without --scaffold \
   --allow-tools Bash Edit Write --trust-plugin --no-publish --keep-temp \
   --runs 2 --max-cost-usd 30 --model <id> --output-dir evals/harness/results/<name>
@@ -89,9 +92,9 @@ The second run of the suite, at `e84f541` (the hardened regrade), cases at `BASE
 agent `claude-opus-5-5` (the default model the pilot ran on, pinned), no judge model. Two runs per case per arm, 16
 runs, two at a time (`-j 2`). Cost is Claude Code's list-price estimate. Every run is archived in
 [`runs/2026-10-21/`](runs/2026-10-21/): `summary.json`, one diff per run, `regrade.txt`. The regrade columns are the
-current regrade (after verifier round 2: a driver that honours the query, the parent-record gate, `--- PASS` lines)
-applied to the archive with `regrade.py --from-archive`, which rebuilds each run from its scaffold and its diff;
-they match what the round-1 regrade gave on the live runs.
+current regrade (after verifier rounds 2 and 3: a driver that honours the query, traps for every term it needs,
+the parent-record gate, `--- PASS` lines) applied to the archive with `regrade.py --from-archive`, which rebuilds each
+run from its scaffold and its diff; they match what the round-1 regrade gave on the live runs.
 
 | Case | Eval WITH | Eval W/OUT | Eval Δ | Regrade WITH | Regrade W/OUT | Cost WITH | Cost W/OUT | Turns WITH | Turns W/OUT | Minutes WITH | Minutes W/OUT |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -138,7 +141,7 @@ env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" TERM=xterm-256colo
 env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH="$PATH" TERM=xterm-256color LANG=en_US.UTF-8 claude --setting-sources project,local plugin eval . --eval-dir evals/harness --ablation with-without --scaffold --allow-tools Bash Edit Write --trust-plugin --no-publish --keep-temp --runs 2 --max-cost-usd 30 --model claude-opus-5-5 -j 2 --output-dir evals/harness/results/full2
 # regrade of the 16 kept runs, archived
 python3 evals/harness/regrade.py evals/harness/results/full2/aggregate-result.json --archive evals/harness/runs/2026-10-21 --clean
-# re-grade after verifier round 2, from the archive (no model)
+# re-grade after verifier rounds 2 and 3, from the archive (no model)
 python3 evals/harness/regrade.py --from-archive evals/harness/runs/2026-10-21
 ```
 

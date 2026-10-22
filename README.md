@@ -178,7 +178,7 @@ fails any run where a test skips.
   and runs four small changes to a scaffolded copy of the repo with it and without it: fix a planted tenant-filter
   leak, add a field with its migration, add an endpoint with its web caller, add a task to the MCP eval. Code graders
   only, then a regrade that calls the code: hidden behavioural tests, gofmt, vet, the gates from the base commit; a
-  self-test shows that doing nothing, gaming with comments and eight wrong-but-plausible changes all fail it.
+  self-test shows that doing nothing, gaming with comments and twelve wrong-but-plausible changes all fail it.
   `claude-opus-5-5`, two runs per case per arm, $12.80, recorded on 2026-10-21. Each delta is one run, and neither is
   the harness: no with-arm run dispatched its agents or used its skills. One W/OUT run left a file `gofmt` flags;
   one correct W/OUT run missed a too-narrow eval pattern ([results](evals/harness/README.md)).
