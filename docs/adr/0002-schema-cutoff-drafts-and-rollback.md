@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Recorded:** 2026-10-17, after the fact. Citations are pinned to `d300dfc`, main after #20 (MCP) and #21 (access);
-  those that "The second-precision edge" gained with [#19] to `164ce69`.
+  those that "The second-precision edge" gained with [#19] to `164ce69`, and those it gained with [#13] to `ec1c013`.
 - **Paths:** `internal/` and `cmd/` are under `nexus-platform/`. Every link is pinned to a commit named above.
 
 ## Context
@@ -79,20 +79,32 @@ Rollback is refused while anything is pending, or when the head or the plan move
 `created_at` and the cutoff are floored to the second ([`internal/metadata/metadata.go:149-155`],
 [`internal/services/draft_gate_cutoff.go:31-55`]), and the cutoff's own second counts as released
 ([`internal/services/schema_visibility.go:18-27`]). So a cutoff never names a second the version did not read in full.
-Every version, the baseline included, names the second of the newest definition it read, or keeps the head's cutoff
-when it read none (a tenant with no definition at all gets the last second that is over). While that second still
-runs, the version waits it out and re-reads, refusing `DRAFTS_CHANGED` if the set moved; a definition stamped ahead of
-its clock is not waited for past a second, and stays hidden and pending
-([`internal/services/publish_hidden_new.go:209-248`], [`internal/services/publish_service.go:400-403`]). A rollback
+Every version, the baseline included, names the second of the newest definition it read but never a second still
+running, or keeps the head's cutoff when it read none (a tenant with no definition at all gets the last second that is
+over). Before it takes the tenant lock, a version whose tenant has a definition born in the running second waits that
+second out, at most one; what is born in the running second after that, or stamped ahead of its clock, stays hidden
+and pending ([`internal/services/publish_hidden_new.go:196-249`]). Every schema writer takes the tenant row
+`FOR SHARE`, then stamps every row it inserts with one `created_at` read after the lock, and a version holds the row
+`FOR UPDATE` from before its snapshot until it commits ([`internal/metadata/repository.go:577-594`]): a write is in
+the version's snapshot, or stamped after the version committed, later than its cutoff, and one write never lies on
+two sides of a cutoff. The tenants row is locked before any `sys_*` row
+([`internal/services/publish_service.go:312-314`]), except by a tenant restore, which updates `tenants` at the end of
+its transaction ([`internal/tenantbackup/restore_store.go:536`]). It runs under the write freeze; a schema write
+still in flight when the freeze began can deadlock with it, and InnoDB then rolls one of the two back. A rollback
 writes its target's cutoff, a second the target read in full ([`internal/services/publish_rollback.go:697-707`]).
 Until [#19] the baseline, and a publish whose newest definition was stamped ahead of its clock, named the running
 second: a table born later in it reached the customer with no publish, was never pending, and stayed visible after a
 rollback to the baseline. The rollback test that relied on it now gets `DRAFTS_PENDING` for such a table, and
 `ROLLBACK_NAME_TAKEN` once it is published ([`internal/services/rollback_restore_schema_integration_test.go:285-305`]);
 one test stamps such a table in the version's own second for the baseline, a publish and a rollback
-([`internal/services/publish_cutoff_second_integration_test.go:103-175`]). Open ([#13]): an insert still uncommitted at
-the re-read slips through, and the wait (at most a second) holds the tenant lock, now in a baseline too when its newest
-definition was born in the running second.
+([`internal/services/publish_cutoff_second_integration_test.go:103-175`]). Until [#13] the schema writers took no lock:
+an insert still uncommitted at the version's re-read slipped through, released unread or half released, and the wait
+held the tenant lock; with the lock, rows stamped one by one could straddle a second and be split by the version
+that waited for them. Tests stop each repository writer after its first INSERT while a version runs, also across a
+second boundary, and watch the lock's holder in `performance_schema`
+([`internal/services/publish_writer_lock_integration_test.go:171-404`]). The
+argument assumes one clock: a writer on a replica whose clock runs behind the publisher's can still stamp a definition
+at or before a cutoff already written.
 
 ## Consequences
 
@@ -112,6 +124,8 @@ path, and the history only grows.
   "required" flag rides a draft ([`internal/services/field_orchestration.go:357-367`]).
 - A direct history entry is written after the change commits; if that write fails, the change stays and the response
   carries a warning ([`internal/services/version_recorder.go:73-84`]).
+- Every schema write takes one more locking read and waits while a publish of its tenant runs
+  ([`internal/metadata/repository.go:577-594`]).
 - Another replica can serve the old cutoff for 5 s and the old documents for up to 60 s
   ([`internal/services/draft_gate_cutoff.go:22-24`], [`internal/services/publish_service.go:23-26`]).
 - The raise-only restore uses `VALUES()` in `ON DUPLICATE KEY UPDATE`, deprecated since MySQL 8.0.20
@@ -130,8 +144,8 @@ path, and the history only grows.
 - **Rollback deletes what a later publish created.** It destroys rows customers wrote. It lost to re-hiding.
 - **Sub-second timestamps, or a monotonic id.** Either needs a migration and changes every comparison, and neither is
   exact on its own: a cutoff read from the clock still covers an insert the version never read, and an id is allotted
-  at insert, not at commit. A cutoff taken from the definitions read is exact at second precision, but for the
-  uncommitted insert above, with no migration ([#19]). They lost.
+  at insert, not at commit. A cutoff taken from the definitions read is exact at second precision with no migration
+  ([#19]), once the schema writers wait for a running publish ([#13]). They lost.
 
 <!-- Links below are generated; each code link points at the commit named under Recorded. -->
 
@@ -171,8 +185,11 @@ path, and the history only grows.
 [`internal/services/publish_rollback.go:457-462`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/publish_rollback.go#L457-L462
 [`internal/services/draft_gate_cutoff.go:31-55`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/draft_gate_cutoff.go#L31-L55
 [`internal/services/schema_visibility.go:18-27`]: https://github.com/doxuta/nexus/blob/d300dfc617ac330dd06b6c4d41f37ae7079e2dc4/nexus-platform/internal/services/schema_visibility.go#L18-L27
-[`internal/services/publish_hidden_new.go:209-248`]: https://github.com/doxuta/nexus/blob/164ce69212f68c138142d6ed111ec7e40094cbd2/nexus-platform/internal/services/publish_hidden_new.go#L209-L248
-[`internal/services/publish_service.go:400-403`]: https://github.com/doxuta/nexus/blob/164ce69212f68c138142d6ed111ec7e40094cbd2/nexus-platform/internal/services/publish_service.go#L400-L403
+[`internal/services/publish_hidden_new.go:196-249`]: https://github.com/doxuta/nexus/blob/ec1c013f07a0b7a587aa27cf62e0b34c4659bc80/nexus-platform/internal/services/publish_hidden_new.go#L196-L249
+[`internal/metadata/repository.go:577-594`]: https://github.com/doxuta/nexus/blob/ec1c013f07a0b7a587aa27cf62e0b34c4659bc80/nexus-platform/internal/metadata/repository.go#L577-L594
+[`internal/services/publish_service.go:312-314`]: https://github.com/doxuta/nexus/blob/ec1c013f07a0b7a587aa27cf62e0b34c4659bc80/nexus-platform/internal/services/publish_service.go#L312-L314
+[`internal/tenantbackup/restore_store.go:536`]: https://github.com/doxuta/nexus/blob/ec1c013f07a0b7a587aa27cf62e0b34c4659bc80/nexus-platform/internal/tenantbackup/restore_store.go#L536
+[`internal/services/publish_writer_lock_integration_test.go:171-404`]: https://github.com/doxuta/nexus/blob/ec1c013f07a0b7a587aa27cf62e0b34c4659bc80/nexus-platform/internal/services/publish_writer_lock_integration_test.go#L171-L404
 [`internal/services/publish_rollback.go:697-707`]: https://github.com/doxuta/nexus/blob/164ce69212f68c138142d6ed111ec7e40094cbd2/nexus-platform/internal/services/publish_rollback.go#L697-L707
 [`internal/services/rollback_restore_schema_integration_test.go:285-305`]: https://github.com/doxuta/nexus/blob/164ce69212f68c138142d6ed111ec7e40094cbd2/nexus-platform/internal/services/rollback_restore_schema_integration_test.go#L285-L305
 [`internal/services/publish_cutoff_second_integration_test.go:103-175`]: https://github.com/doxuta/nexus/blob/164ce69212f68c138142d6ed111ec7e40094cbd2/nexus-platform/internal/services/publish_cutoff_second_integration_test.go#L103-L175

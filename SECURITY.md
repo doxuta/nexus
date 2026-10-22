@@ -117,9 +117,11 @@ session ([`nexus-web/lib/aiApply.ts:1-5`]), and a draft-class change then needs 
   the MCP note misdescribes an access card.
 - **404 instead of 403 ([#18]).** A record the rep can read but not edit answers `PUT` with 404. Existence is not leaked,
   but the reason is misstated.
-- **The cutoff's second ([#13]).** Metadata timestamps have second precision. Since [#19] a version's cutoff names the
-  newest definition it read, so a table born later in the same second stays hidden; a schema insert still uncommitted
-  when the publish re-reads can still slip past the cutoff.
+- **The cutoff's second.** Metadata timestamps have second precision. A version's cutoff names the newest definition
+  it read ([#19]), and every schema writer waits for a running publish ([#13]), so a table born later in the same
+  second, or still uncommitted when the publish reads, stays hidden. Both assume one clock: a writer on a replica whose
+  clock runs behind the publisher's can stamp a table at or before a cutoff already written, and the customer sees it
+  with no publish.
 
 <!-- Links below are generated; each code link points at d300dfc, named in the first paragraph. -->
 

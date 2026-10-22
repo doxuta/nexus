@@ -107,9 +107,9 @@ func schemaRowsBetween(ctx context.Context, q sqlx.QueryerContext, tenantID stri
 	return rows, nil
 }
 
-// releasedBy keeps the hidden-new rows the cutoff actually uncovers. A row stamped after it (the inserting
-// process's clock runs ahead of the publisher's, releaseCutoff does not wait for it) stays hidden and pending, so
-// it is not recorded as released.
+// releasedBy keeps the hidden-new rows the cutoff actually uncovers. A row stamped after it (in the second still
+// running under the lock, or ahead of the publisher's clock) stays hidden and pending, so it is not recorded as
+// released.
 func releasedBy(hidden []metaversion.DraftRow, cutoff time.Time) []metaversion.DraftRow {
 	out := make([]metaversion.DraftRow, 0, len(hidden))
 	for _, r := range hidden {
@@ -193,19 +193,35 @@ func splitHidden(rows []metaversion.DraftRow) (drafts, hidden []metaversion.Draf
 	return drafts, hidden
 }
 
-// releaseCutoff is the schema cutoff a version writes, read on its tx q: the second of the newest of ALL the
-// definitions it read as born after the head (schemaRowsBetween — listed or folded into a listed row, so it
-// releases what the builder was shown and everything that hangs from it); the head's own when it read none.
-// Never the clock (#19): the cutoff's own second counts as released, so a cutoff naming the running second
-// released a table born later in it that no version read. The version reads a REPEATABLE READ snapshot and
-// AddField / CreateEntity / RegisterRelationship do not take the tenant lock, so while that second still runs,
-// wait it out, then re-read the window on the pool (latest committed rows) and refuse DRAFTS_CHANGED when it
-// differs from what the version read. A row stamped further ahead (another process's clock) is not waited for
-// past a second: it stays hidden and pending. head nil (the baseline, or a head written before cutoffs) hid
-// nothing: every live definition is released, and a tenant with none gets the last second that is over.
-// ponytail: an INSERT still uncommitted at the re-read, stamped at or before the cutoff, can slip through;
-// closing that needs the schema writers to take the tenant lock FOR SHARE. The wait (≤ 1 s) runs under the
-// tenant lock, which also holds back that tenant's draft saves for that second.
+// settleSecond runs before a version takes the tenant lock (#13). When a definition was born in the second still
+// running, or is stamped ahead of this clock, it waits for that second to end, so that the cutoff the version then
+// takes under the lock (never past the last second that is over) releases a table created just before the click.
+// Never longer than a second, and never holding a lock: schema writes and draft saves do not wait for it.
+func (s *PublishService) settleSecond(ctx context.Context, tenantID string) error {
+	last := time.Now().UTC().Truncate(time.Second).Add(-time.Second)
+	born, err := schemaRowsBetween(ctx, s.db, tenantID, last, nil)
+	if err == nil && len(born) > 0 {
+		time.Sleep(time.Until(last.Add(2 * time.Second))) // to the end of the running second
+	}
+	return err
+}
+
+// releaseCutoff is the schema cutoff a version writes, read on its tx q under the tenant lock: the second of the
+// newest of ALL the definitions it read as born after the head (schemaRowsBetween — listed or folded into a listed
+// row, so it releases what the builder was shown and everything that hangs from it), but never past the last
+// second that is over; the head's own when it read none. Never the clock (#19): the cutoff's own second counts as
+// released, so a cutoff naming the running second released a table born later in it that no version read.
+// Exact because every schema writer takes the tenant row FOR SHARE before it stamps (#13,
+// metadata.lockTenantForSchemaWrite): an INSERT committed before the lock is in the version's snapshot (the
+// snapshot is taken at the first plain read, after the lock), and one that waited for the lock is stamped after
+// the commit, in a second later than the cutoff. A row stamped in the running second (the wait is settleSecond's,
+// before the lock) or ahead of this clock (another process's) stays hidden and pending. The re-read on the pool
+// still refuses DRAFTS_CHANGED when the window moved: a delete committed meanwhile, or a writer that bypasses the
+// repository. head nil (the baseline, or a head written before cutoffs) hid nothing: every live definition is
+// released, and a tenant with none gets the last second that is over.
+// ponytail: one clock. A writer on another replica whose clock runs behind the publisher's can still stamp at or
+// before the cutoff after the publish committed; flooring the stamp at the tenant's newest cutoff + 1 s, read
+// under the writer's lock, would close it.
 func (s *PublishService) releaseCutoff(ctx context.Context, q sqlx.QueryerContext, tenantID string, head *time.Time) (time.Time, error) {
 	after := time.Unix(0, 0).UTC() // before every TIMESTAMP: with no head cutoff, all is born after it
 	if head != nil {
@@ -214,9 +230,6 @@ func (s *PublishService) releaseCutoff(ctx context.Context, q sqlx.QueryerContex
 	born, err := schemaRowsBetween(ctx, q, tenantID, after, nil)
 	if err != nil {
 		return time.Time{}, err
-	}
-	if wait := time.Until(newestBorn(born, after, nil).Add(time.Second)); len(born) > 0 && wait > 0 { // a sibling may still be born in that second
-		time.Sleep(min(wait, time.Second)) // never longer: a row stamped further ahead stays pending
 	}
 	last := time.Now().UTC().Truncate(time.Second).Add(-time.Second) // the newest second that is over
 	cut := newestBorn(born, after, &last)

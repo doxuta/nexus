@@ -309,7 +309,9 @@ func (s *PublishService) fail(op string, err error) error {
 	return fmt.Errorf("services.PublishService.%s: %w", op, err)
 }
 
-// lockTenant takes tenants ... FOR UPDATE: publish / baseline / discard of one tenant run one at a time.
+// lockTenant takes tenants ... FOR UPDATE: publish / baseline / rollback / discard / a direct history entry of one
+// tenant run one at a time, and draft saves and schema writes (FOR SHARE on the same row) wait for them. It is the
+// first statement of its transaction: the tenants row before any sys_* row, the lock order of all of them.
 func lockTenant(ctx context.Context, tx *sqlx.Tx, tenantID string) error {
 	var id string
 	if err := tx.GetContext(ctx, &id, `SELECT id FROM tenants WHERE id = ? FOR UPDATE`, tenantID); err != nil {
@@ -373,6 +375,9 @@ func (s *PublishService) Baseline(ctx context.Context, tenantID, note string) (*
 	if err := s.validateNote(note); err != nil {
 		return nil, err
 	}
+	if err := s.settleSecond(ctx, tenantID); err != nil {
+		return nil, s.fail("Baseline", err)
+	}
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("services.PublishService.Baseline: begin: %w", err)
@@ -435,6 +440,9 @@ func (s *PublishService) Publish(ctx context.Context, tenantID string, req Publi
 	if err := s.validateNote(req.Note); err != nil {
 		return nil, err
 	}
+	if err := s.settleSecond(ctx, tenantID); err != nil {
+		return nil, s.fail("Publish", err)
+	}
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("services.PublishService.Publish: begin: %w", err)
@@ -454,8 +462,8 @@ func (s *PublishService) Publish(ctx context.Context, tenantID string, req Publi
 	if err != nil {
 		return nil, s.fail("Publish", err)
 	}
-	// Read in the tx's snapshot. The schema writers do not take the tenant lock, so what was born after that
-	// snapshot is caught by releaseCutoff, not by this read.
+	// Read in the tx's snapshot, taken after the tenant lock: a schema write committed before it is read here, and
+	// one waiting for the lock is stamped after this publish commits (releaseCutoff).
 	pending, headCut, err := s.pending(ctx, tx, tenantID, drafts)
 	if err != nil {
 		return nil, s.fail("Publish", err)

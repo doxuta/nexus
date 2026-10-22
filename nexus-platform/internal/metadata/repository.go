@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	gomysql "github.com/go-sql-driver/mysql"
@@ -295,6 +296,17 @@ func (r *Repository) NameClaimedByAnyTenant(ctx context.Context, name string) (b
 // compensating (DROP) if this fails.
 func (r *Repository) CreateEntityWithFields(ctx context.Context, e *EntityDefinition, fields []FieldDefinition, rels []RelationshipDefinition) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		at, err := lockTenantForSchemaWrite(tx, e.TenantID)
+		if err != nil {
+			return fmt.Errorf("metadata.CreateEntityWithFields: %w", err)
+		}
+		e.CreatedAt, e.UpdatedAt = at, at
+		for i := range fields {
+			fields[i].CreatedAt, fields[i].UpdatedAt = at, at
+		}
+		for i := range rels {
+			rels[i].CreatedAt, rels[i].UpdatedAt = at, at
+		}
 		if err := tx.Create(e).Error; err != nil {
 			// RM-27 serializer: a concurrent CreateEntity won the race and already persisted
 			// this (tenant_id, name), so our INSERT trips uq_sys_entities_tenant_name. Surface
@@ -336,16 +348,23 @@ func (r *Repository) CreateEntityWithFields(ctx context.Context, e *EntityDefini
 // service to add a field to an already-registered entity. The entity_id is supplied by
 // the service after a tenant-scoped GetEntityByName, so the field inherits that scoping.
 func (r *Repository) CreateField(ctx context.Context, f *FieldDefinition) error {
-	if err := r.db.WithContext(ctx).Create(f).Error; err != nil {
-		// RM-25 last-resort serializer: a concurrent AddField that won the race already
-		// persisted this (tenant_id, entity_id, name), so our INSERT trips the 000012
-		// unique key. Surface the typed sentinel so the service maps it to 409.
-		if isDuplicateFieldErr(err) {
-			return fmt.Errorf("metadata.CreateField: %w", ErrDuplicateField)
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		at, err := lockTenantForSchemaWrite(tx, f.TenantID)
+		if err != nil {
+			return fmt.Errorf("metadata.CreateField: %w", err)
 		}
-		return fmt.Errorf("metadata.CreateField: %w", err)
-	}
-	return nil
+		f.CreatedAt, f.UpdatedAt = at, at
+		if err := tx.Create(f).Error; err != nil {
+			// RM-25 last-resort serializer: a concurrent AddField that won the race already
+			// persisted this (tenant_id, entity_id, name), so our INSERT trips the 000012
+			// unique key. Surface the typed sentinel so the service maps it to 409.
+			if isDuplicateFieldErr(err) {
+				return fmt.Errorf("metadata.CreateField: %w", ErrDuplicateField)
+			}
+			return fmt.Errorf("metadata.CreateField: %w", err)
+		}
+		return nil
+	})
 }
 
 // CreateFieldWithRelationship persists a single field definition AND (ENG-REL2 #4) its
@@ -356,6 +375,14 @@ func (r *Repository) CreateField(ctx context.Context, f *FieldDefinition) error 
 // silently drifted, half-registered relation.
 func (r *Repository) CreateFieldWithRelationship(ctx context.Context, f *FieldDefinition, rel *RelationshipDefinition) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		at, err := lockTenantForSchemaWrite(tx, f.TenantID)
+		if err != nil {
+			return fmt.Errorf("metadata.CreateFieldWithRelationship: %w", err)
+		}
+		f.CreatedAt, f.UpdatedAt = at, at
+		if rel != nil {
+			rel.CreatedAt, rel.UpdatedAt = at, at
+		}
 		if err := tx.Create(f).Error; err != nil {
 			if isDuplicateFieldErr(err) {
 				return fmt.Errorf("metadata.CreateFieldWithRelationship: field: %w", ErrDuplicateField)
@@ -534,10 +561,36 @@ func (r *Repository) UpdateEntityMutable(ctx context.Context, tenantID string, e
 // entity — never read from client input. The caller is responsible for DDL compensation
 // if the write fails after the join table was already created.
 func (r *Repository) CreateRelationship(ctx context.Context, rel *RelationshipDefinition) error {
-	if err := r.db.WithContext(ctx).Create(rel).Error; err != nil {
-		return fmt.Errorf("metadata.CreateRelationship: %w", err)
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		at, err := lockTenantForSchemaWrite(tx, rel.TenantID)
+		if err != nil {
+			return fmt.Errorf("metadata.CreateRelationship: %w", err)
+		}
+		rel.CreatedAt, rel.UpdatedAt = at, at
+		if err := tx.Create(rel).Error; err != nil {
+			return fmt.Errorf("metadata.CreateRelationship: %w", err)
+		}
+		return nil
+	})
+}
+
+// lockTenantForSchemaWrite takes tenants ... FOR SHARE as the first statement of a transaction that creates a
+// table, field or relation (#13), and returns the one created_at every row of that transaction carries. A publish
+// holds that row FOR UPDATE from before it reads the schema until it commits, so such a write either commits
+// before the publish reads (the publish sees it) or takes its stamp after the publish committed, in a second
+// later than any cutoff the publish wrote: never an INSERT stamped at or before a cutoff that its publish could
+// not read. One stamp for the whole write, taken after the lock: rows stamped one by one as they were inserted
+// could fall on two sides of a second, and a version that waited for the write split it at its cutoff (a field
+// released without its relation row, a table without its required field). Shared locks do not wait for one
+// another, so a pack install's writes still run side by side; they only queue behind a publish.
+// Lock order: the tenants row first, then the sys_* rows — the order of publish, rollback and draft saves too.
+// A tenant with no tenants row (a test fixture) cannot publish: it locks nothing and is not an error.
+func lockTenantForSchemaWrite(tx *gorm.DB, tenantID string) (time.Time, error) {
+	var ids []string
+	if err := tx.Raw(`SELECT id FROM tenants WHERE id = ? FOR SHARE`, tenantID).Scan(&ids).Error; err != nil {
+		return time.Time{}, fmt.Errorf("lock tenant: %w", err)
 	}
-	return nil
+	return secondNow(), nil
 }
 
 // tombstoneSuffix derives the short "__deleted_" suffix source from a row id: the first
