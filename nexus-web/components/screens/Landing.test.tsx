@@ -39,11 +39,16 @@ describe("Landing", () => {
     expect(screen.getByText(en["landing.diff.measured.title"])).toBeTruthy();
   });
 
-  it("hydrates the server's Vietnamese without a mismatch, then switches to the reader's English", async () => {
-    // The server knows no preference: it renders Vietnamese. The reader's browser prefers English.
+  // The three ways a reader gets English (lib/i18n getLocale): a saved preference, ?lang=en, an English browser.
+  it.each([
+    ["a saved preference", () => prefer("en")],
+    ["?lang=en", () => window.history.replaceState(null, "", "/?lang=en")],
+    ["an English browser", () => vi.spyOn(navigator, "languages", "get").mockReturnValue(["en-US", "en"])],
+  ])("hydrates the server's Vietnamese without a mismatch, then switches to English for %s", async (_, englishReader) => {
+    // The server knows nothing about the reader: it renders Vietnamese.
     const html = renderToString(<Landing />);
     expect(html).toContain(viCatalog["landing.hero.title"]);
-    prefer("en");
+    englishReader();
 
     const container = document.createElement("div");
     container.innerHTML = html;
@@ -60,6 +65,8 @@ describe("Landing", () => {
     expect(logged.filter((m) => /hydrat|did not match|#418/i.test(m))).toEqual([]);
     expect(container.querySelector("h1")?.textContent).toBe(en["landing.hero.title"]);
     container.remove();
+    window.history.replaceState(null, "", "/");
+    vi.restoreAllMocks();
   });
 
   it("every landing string has English", () => {

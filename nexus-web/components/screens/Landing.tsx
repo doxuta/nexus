@@ -5,9 +5,8 @@
 // edit a typed, versioned, permissioned model; people review, publish and roll back.
 //
 // Language: the server cannot know the reader's language, so it renders Vietnamese, and the first client render
-// must produce the same text or React throws #418. The locale is therefore read through useSyncExternalStore with
-// a Vietnamese server snapshot: hydration matches the server, then the page re-renders in the reader's language.
-import { useSyncExternalStore } from "react";
+// must produce the same text or React throws #418. useHydratedLocale keeps Vietnamese through hydration, then the
+// page re-renders in the reader's language.
 import { clsx } from "clsx";
 import Link from "next/link";
 import Image from "next/image";
@@ -19,7 +18,7 @@ import { NexusLogo } from "@/components/brand/NexusLogo";
 import { Reveal } from "@/components/marketing/Reveal";
 import { MarketingAuthGate } from "@/components/marketing/MarketingAuthGate";
 import { BrowserFrame } from "@/components/marketing/BrowserFrame";
-import { getLocale, t } from "@/lib/i18n";
+import { t, useHydratedLocale } from "@/lib/i18n";
 import type { I18nKey } from "@/lib/i18n/vi";
 import heroApp from "@/public/landing/hero-app.png";
 
@@ -51,11 +50,8 @@ const READ_ON: (Omit<Item, "icon"> & { href: string })[] = [
   { href: WRITEUP, title: "landing.try.writeup.title", body: "landing.try.writeup.body" },
 ];
 
-const noSubscription = () => () => {};
-const serverLocale = () => "vi" as const;
-
 export function Landing() {
-  const locale = useSyncExternalStore(noSubscription, getLocale, serverLocale);
+  const locale = useHydratedLocale();
   const tr = (key: I18nKey) => t(key, locale);
 
   return (
