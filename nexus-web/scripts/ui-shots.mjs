@@ -161,6 +161,12 @@ try {
   await browser.close();
   writeReports();
 }
+// A shot with a page error (an uncaught error, a hydration mismatch) fails the run (#6), as the verify-ui skill says.
+const broken = manifest.filter((m) => m.errors.length > 0);
+if (broken.length) {
+  for (const m of broken) console.error(`FAIL ${m.route} @${m.width}: ${m.errors.join(" | ")}`);
+  process.exit(1);
+}
 function writeReports() {
 fs.writeFileSync(path.join(outDir, "report.json"), JSON.stringify(manifest.map(({ route, width, status, overflowPx, errors }) => ({ route, width, status, overflowPx, errors })), null, 2));
 fs.writeFileSync(path.join(outDir, "manifest.json"), JSON.stringify({ takenAt: new Date().toISOString(), ids, shots: manifest }, null, 2));

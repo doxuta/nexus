@@ -427,6 +427,10 @@ try {
     const t0 = Date.now();
     try {
       const note = await run();
+      // An uncaught error in either page fails the step it happened in, even when the step's own check passed: a
+      // hydration mismatch (React #418) is one, and it is otherwise invisible in a passing run (#6).
+      const pageErrors = [builder, rep].flatMap((p) => (p ? errors.get(p).splice(0) : []));
+      if (pageErrors.length) throw new Error(`page error: ${pageErrors.join(" | ")}`);
       await active.screenshot({ path: file });
       console.log(`ok   ${String(i + 1).padStart(2)} ${name} (${((Date.now() - t0) / 1000).toFixed(1)}s) — ${note}`);
     } catch (err) {
