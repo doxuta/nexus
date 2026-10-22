@@ -5,7 +5,7 @@
 // Scope: shell + auth + most-visible screens + the demo path (issue #6). Full screen-by-screen conversion is incremental.
 // i18n-TODO: mark untranslated strings with // i18n-TODO comment for future passes.
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import vi, { type I18nKey } from "./vi";
 import en from "./en";
 
@@ -78,4 +78,14 @@ export function HtmlLang() {
     document.documentElement.lang = getLocale();
   }, []);
   return null;
+}
+
+const noSubscription = () => () => {};
+/**
+ * False on the server and while the page hydrates, true afterwards. The server cannot know the language (it renders
+ * Vietnamese, see getLocale), so a server-rendered page whose text goes through t() renders that text only once this
+ * is true: the server's Vietnamese never meets the client's English (React #418).
+ */
+export function useLocaleReady(): boolean {
+  return useSyncExternalStore(noSubscription, () => true, () => false);
 }
