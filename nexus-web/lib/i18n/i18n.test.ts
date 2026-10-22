@@ -5,6 +5,9 @@ import { getLocale, t } from "@/lib/i18n";
 import viCatalog from "@/lib/i18n/vi";
 import enCatalog from "@/lib/i18n/en";
 import { loadPrefs } from "@/lib/prefs";
+import { layoutViewLabel, reportSummaryText, workflowActionText, workflowTriggerPhrase } from "@/lib/aiBuilder";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 describe("t() — Vietnamese (default locale)", () => {
   it("translates a shell nav key in Vietnamese", () => {
@@ -135,5 +138,27 @@ describe("en.ts", () => {
       .filter(([k, v]) => !(k in vi) || holes(v) !== holes(vi[k]))
       .map(([k, v]) => `${k}: "${v}"`);
     expect(bad).toEqual([]);
+  });
+});
+
+// Issue #6, round 2: the README sends English readers to /login?lang=en, and the assistant's cards build their text in
+// lib/aiBuilder.ts. Both follow the UI language.
+describe("English on the sign-in page and on the assistant's cards", () => {
+  afterEach(() => localStorage.clear());
+
+  it("every key the sign-in page renders has English", () => {
+    const src = readFileSync(join(__dirname, "..", "..", "components", "screens", "Login.tsx"), "utf8");
+    const keys = [...new Set([...src.matchAll(/\btf?\(\s*"([\w.]+)"/g)].map((m) => m[1]))];
+    expect(keys.length).toBeGreaterThan(30);
+    expect(keys.filter((k) => !(k in enCatalog))).toEqual([]);
+  });
+
+  it("card text is English in English, Vietnamese by default", () => {
+    expect(workflowTriggerPhrase("after_create")).toBe("Tạo mới bản ghi");
+    localStorage.setItem("nexus.prefs.v1", JSON.stringify({ locale: "en" }));
+    expect(workflowTriggerPhrase("after_create")).toBe("A record is created");
+    expect(layoutViewLabel("list")).toBe("List");
+    expect(workflowActionText({ type: "in_app_notification", userId: "$owner", title: "Overdue" })).toBe("Notify the record's owner: “Overdue”");
+    expect(reportSummaryText("summary", { metric: "count", groupBy: "stage", bucket: "month" })).toBe("Count of records · grouped by stage · per month");
   });
 });

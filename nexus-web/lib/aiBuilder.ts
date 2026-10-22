@@ -22,7 +22,7 @@ import type {
 } from "@/lib/api";
 import { newWidgetId } from "@/lib/widgetAuthoring";
 import { accessText } from "@/lib/accessLevels";
-import { tf } from "@/lib/i18n";
+import { t, tf } from "@/lib/i18n";
 import type { I18nKey } from "@/lib/i18n/vi";
 
 // Only user/assistant roles ever exist in a conversation — the backend injects its own system persona
@@ -1055,15 +1055,10 @@ export function resolveApprovalApprovers(
 
 // ── Draft-card display helpers (pure — the card JSX stays dumb) ─────────────────────────────────
 
-// layoutViewLabel: viewType → the Vietnamese label the layout card header shows. An unknown token
-// renders raw (honest — no guessing).
+// layoutViewLabel: viewType → the label the layout card header shows. An unknown token renders raw (honest — no
+// guessing).
 export function layoutViewLabel(viewType: string): string {
-  switch (viewType) {
-    case "edit": return "Form nhập liệu";
-    case "detail": return "Trang chi tiết";
-    case "list": return "Danh sách";
-    default: return viewType;
-  }
+  return viewType === "edit" || viewType === "detail" || viewType === "list" ? t(`aiCard.layoutView.${viewType}`) : viewType;
 }
 
 // One edit/detail section reduced for the card: title + the field names its cells reference.
@@ -1109,7 +1104,7 @@ export function summarizeLayoutDraft(
     const sections: AiLayoutSectionSummary[] = rawSections.map((s, i) => {
       const o = (s && typeof s === "object" ? s : {}) as { title?: unknown; columns?: unknown; fields?: unknown };
       return {
-        title: typeof o.title === "string" && o.title !== "" ? o.title : `Khu vực ${i + 1}`,
+        title: typeof o.title === "string" && o.title !== "" ? o.title : tf("aiCard.layout.section", { n: i + 1 }),
         columns: typeof o.columns === "number" && Number.isFinite(o.columns) ? o.columns : 1,
         fields: (Array.isArray(o.fields) ? o.fields : []).map(cellFieldName).filter((f): f is string => f !== null),
       };
@@ -1123,20 +1118,15 @@ export function summarizeLayoutDraft(
 // already says it, "KHI | Khi cập nhật…" would stutter). Only the three after-commit events are
 // proposable; an unknown token renders raw.
 export function workflowTriggerPhrase(trigger: string): string {
-  switch (trigger) {
-    case "after_create": return "Tạo mới bản ghi";
-    case "after_update": return "Cập nhật bản ghi";
-    case "after_delete": return "Xoá bản ghi";
-    default: return trigger;
-  }
+  return trigger === "after_create" || trigger === "after_update" || trigger === "after_delete" ? t(`aiCard.trigger.${trigger}`) : trigger;
 }
 
 // The 11 backend condition operators (workflow.go validOperators) → display tokens, same vocabulary
 // as the run-history trace (lib/workflowRuns OP_DISPLAY).
-const WORKFLOW_OP_TEXT: Record<string, string> = {
-  eq: "=", neq: "≠", gt: ">", gte: "≥", lt: "<", lte: "≤",
-  contains: "chứa", isnull: "rỗng", notnull: "không rỗng",
-  changed: "vừa đổi", changedTo: "vừa đổi thành",
+const WORKFLOW_OP_TEXT: Record<string, string> = { eq: "=", neq: "≠", gt: ">", gte: "≥", lt: "<", lte: "≤" };
+const WORKFLOW_OP_WORD: Record<string, I18nKey> = {
+  contains: "aiCard.op.contains", isnull: "aiCard.op.isnull", notnull: "aiCard.op.notnull",
+  changed: "aiCard.op.changed", changedTo: "aiCard.op.changedTo",
 };
 
 // A draft value as compact display text. Strings render bare (chips already isolate them); null is
@@ -1155,7 +1145,7 @@ function draftValueText(v: unknown): string {
 // workflowRuleText: one condition predicate as compact text — "stage = won", "note rỗng".
 // Null-operators carry no value; for any other op only a PRESENT value renders (never fabricated).
 export function workflowRuleText(r: AiDraftWorkflowRule): string {
-  const op = WORKFLOW_OP_TEXT[r.op] ?? r.op;
+  const op = WORKFLOW_OP_TEXT[r.op] ?? (WORKFLOW_OP_WORD[r.op] ? t(WORKFLOW_OP_WORD[r.op]) : r.op);
   if (r.op === "isnull" || r.op === "notnull" || r.value === undefined) return `${r.field} ${op}`;
   return `${r.field} ${op} ${draftValueText(r.value)}`;
 }
@@ -1174,54 +1164,44 @@ export function workflowActionText(a: AiDraftWorkflowAction): string {
   switch (a.type) {
     case "field_update":
       return a.value !== undefined
-        ? `Cập nhật ${a.field ?? "?"} = ${draftValueText(a.value)}`
-        : `Cập nhật ${a.field ?? "?"} (không kèm giá trị)`;
+        ? tf("aiCard.action.fieldUpdate", { field: a.field ?? "?", value: draftValueText(a.value) })
+        : tf("aiCard.action.fieldUpdateNoValue", { field: a.field ?? "?" });
     case "in_app_notification": {
-      const who = a.userId === "$owner" ? "chủ bản ghi" : (a.userId || "?");
-      return a.title ? `Thông báo cho ${who}: “${a.title}”` : `Thông báo cho ${who}`;
+      const who = a.userId === "$owner" ? t("aiCard.action.owner") : (a.userId || "?");
+      return a.title ? tf("aiCard.action.notify", { who, title: a.title }) : tf("aiCard.action.notifyNoTitle", { who });
     }
     case "email_alert":
-      return a.subject ? `Gửi email tới ${a.to ?? "?"}: “${a.subject}”` : `Gửi email tới ${a.to ?? "?"}`;
+      return a.subject ? tf("aiCard.action.email", { to: a.to ?? "?", subject: a.subject }) : tf("aiCard.action.emailNoSubject", { to: a.to ?? "?" });
     // Off the propose schema but not denied (specs/046 §3): a model can still buffer one, and Apply
     // sends its field — so the card must name the number it will overwrite (DAILY-QUEUE #164).
     case "set_elapsed":
-      return `Ghi thời gian xử lý (phút giờ làm việc) vào ${a.field ?? "?"}`;
+      return tf("aiCard.action.setElapsed", { field: a.field ?? "?" });
     // Only seen in the BEFORE side of an existing rule (the AI never proposes one): the url is
     // already cut to scheme://host, a vault connection shows as such — never a key.
     case "outbound_webhook":
-      return a.credentialId ? "Gọi webhook qua khoá kết nối" : `Gọi webhook tới ${a.url ?? "?"}`;
+      return a.credentialId ? t("aiCard.action.webhookVault") : tf("aiCard.action.webhook", { url: a.url ?? "?" });
     default:
       // Apply sends `field` for any type, so an unknown action still shows the field it targets.
       // The machine token itself is not shown (S13) — a person cannot read it.
-      return a.field ? `Hành động không nhận diện (trường ${a.field})` : "Hành động không nhận diện";
+      return a.field ? tf("aiCard.action.unknownField", { field: a.field }) : t("aiCard.action.unknown");
   }
 }
 
-// reportTypeLabel: report type → the Vietnamese badge label the report card shows. An unknown
-// token renders raw (honest — no guessing).
+// reportTypeLabel: report type → the badge label the report card shows. An unknown token renders raw (honest — no
+// guessing).
 export function reportTypeLabel(type: string): string {
-  switch (type) {
-    case "summary": return "Tổng hợp";
-    case "matrix": return "Ma trận";
-    case "tabular": return "Bảng";
-    default: return type;
-  }
+  return type === "summary" || type === "matrix" || type === "tabular" ? t(`aiCard.reportType.${type}`) : type;
 }
 
-// The 5 aggregate metrics (services validateReportConfig vocabulary) → Vietnamese lead words.
-const REPORT_METRIC_TEXT: Record<string, string> = {
-  count: "Đếm số bản ghi", sum: "Tổng", avg: "Trung bình", min: "Nhỏ nhất", max: "Lớn nhất",
-};
-
-// The 5 time buckets (W4 vocabulary) → Vietnamese unit words ("gộp theo tháng").
-const REPORT_BUCKET_TEXT: Record<string, string> = {
-  day: "ngày", week: "tuần", month: "tháng", quarter: "quý", year: "năm",
-};
-
-// The 7 having operators → Vietnamese phrases.
-const HAVING_OP_TEXT: Record<string, string> = {
-  gt: "lớn hơn", gte: "từ", lt: "nhỏ hơn", lte: "tối đa", eq: "bằng", neq: "khác", between: "trong khoảng",
-};
+// The 5 aggregate metrics (services validateReportConfig vocabulary), the 5 time buckets (W4 vocabulary) and the 7
+// having operators → their words in lib/i18n (aiCard.metric.*, aiCard.bucket.*, aiCard.having.*). An unknown token
+// renders raw.
+const REPORT_METRICS = new Set(["count", "sum", "avg", "min", "max"]);
+const REPORT_BUCKETS = new Set(["day", "week", "month", "quarter", "year"]);
+const HAVING_OPS = new Set(["gt", "gte", "lt", "lte", "eq", "neq", "between"]);
+const metricText = (m: string) => (REPORT_METRICS.has(m) ? t(`aiCard.metric.${m}` as I18nKey) : m);
+const bucketText = (b: string) => (REPORT_BUCKETS.has(b) ? t(`aiCard.bucket.${b}` as I18nKey) : b);
+const havingOpText = (op: string) => (HAVING_OPS.has(op) ? t(`aiCard.having.${op}` as I18nKey) : op);
 
 // reportSummaryText: the aggregation as ONE compact readable Vietnamese sentence for the report
 // card body — never a raw JSON dump. "Đếm số bản ghi · nhóm theo stage", "Tổng amount · nhóm theo
@@ -1232,42 +1212,42 @@ export function reportSummaryText(type: string, cfg: AiDraftReportConfig | null 
   const c = cfg ?? {};
   if (type === "tabular") {
     const n = Array.isArray(c.columns) ? c.columns.length : 0;
-    return n > 0 ? `Bảng dữ liệu ${n} cột` : "";
+    return n > 0 ? tf("aiCard.report.tabular", { n }) : "";
   }
   const parts: string[] = [];
   if (c.metric) {
-    const base = REPORT_METRIC_TEXT[c.metric] ?? c.metric;
+    const base = metricText(c.metric);
     // count takes no field; the numeric metrics read naturally as "Tổng amount" / "Trung bình amount"
     parts.push(c.metric !== "count" && c.field ? `${base} ${c.field}` : base);
   }
-  if (c.groupBy) parts.push(`nhóm theo ${c.groupBy}`);
-  if (c.bucket) parts.push(`gộp theo ${REPORT_BUCKET_TEXT[c.bucket] ?? c.bucket}`);
+  if (c.groupBy) parts.push(tf("aiCard.report.groupBy", { x: c.groupBy }));
+  if (c.bucket) parts.push(tf("aiCard.report.bucket", { x: bucketText(c.bucket) }));
   const axisText = (a: AiDraftReportAxis) =>
-    a.bucket ? `${a.field} (${REPORT_BUCKET_TEXT[a.bucket] ?? a.bucket})` : a.field;
-  if (c.columnGroup?.field) parts.push(`cột theo ${axisText(c.columnGroup)}`);
+    a.bucket ? `${a.field} (${bucketText(a.bucket)})` : a.field;
+  if (c.columnGroup?.field) parts.push(tf("aiCard.report.columnGroup", { x: axisText(c.columnGroup) }));
   if (Array.isArray(c.subGroups) && c.subGroups.length > 0) {
-    parts.push(`cấp phụ ${c.subGroups.map(axisText).join(", ")}`);
+    parts.push(tf("aiCard.report.subGroups", { x: c.subGroups.map(axisText).join(", ") }));
   }
   if (c.having) {
     const h = c.having;
-    const what = h.on === "count" ? "số bản ghi" : "giá trị";
-    // "ô" for a matrix (cells), "nhóm" for a multi-level summary (deepest-level groups).
-    const unit = type === "matrix" ? "ô" : "nhóm";
-    const op = HAVING_OP_TEXT[h.op] ?? h.op;
+    const what = t(h.on === "count" ? "aiCard.report.havingCount" : "aiCard.report.havingValue");
+    // cells for a matrix, the deepest-level groups for a multi-level summary.
+    const unit = t(type === "matrix" ? "aiCard.report.unitCell" : "aiCard.report.unitGroup");
+    const op = havingOpText(h.op);
     const hv = Array.isArray(h.values) ? h.values : [];
     const vals = h.op === "between" ? hv.join(" – ") : (hv[0] ?? "");
-    parts.push(`chỉ giữ ${unit} có ${what} ${op} ${vals}`.trim());
+    parts.push(tf("aiCard.report.having", { unit, what, op, vals }).trim());
   }
   return parts.join(" · ");
 }
 
-// VN row labels of the edit_field diff table — one entry per editable key, fixed display order.
-const EDIT_FIELD_KEY_LABEL: Record<EditFieldPatchKey, string> = {
-  label: "Nhãn",
-  description: "Mô tả",
-  isRequired: "Bắt buộc",
-  defaultValue: "Giá trị mặc định",
-  options: "Tuỳ chọn",
+// Row labels of the edit_field diff table (aiCard.editField.*) — one entry per editable key, fixed display order.
+const EDIT_FIELD_KEY_LABEL: Record<EditFieldPatchKey, I18nKey> = {
+  label: "aiCard.editField.label",
+  description: "aiCard.editField.description",
+  isRequired: "aiCard.editField.isRequired",
+  defaultValue: "aiCard.editField.defaultValue",
+  options: "aiCard.editField.options",
 };
 
 // One row of the edit_field diff table. before/after are ALREADY display text (mono cell values);
@@ -1279,7 +1259,7 @@ export interface AiEditFieldDiffRow { key: string; label: string; before?: strin
 // isRequired toggle is có/không everywhere else in the Studio); the rest reuses draftValueText
 // (strings bare, null spelled out, structures as JSON — never "[object Object]").
 function editValueText(v: unknown): string {
-  if (typeof v === "boolean") return v ? "có" : "không";
+  if (typeof v === "boolean") return t(v ? "aiCard.yes" : "aiCard.no");
   return draftValueText(v);
 }
 
@@ -1294,7 +1274,7 @@ export function editFieldDiffRows(e: AiDraftEditField): AiEditFieldDiffRow[] {
     if (after[k] === undefined) continue;
     rows.push({
       key: k,
-      label: EDIT_FIELD_KEY_LABEL[k],
+      label: t(EDIT_FIELD_KEY_LABEL[k]),
       before: before[k] !== undefined ? editValueText(before[k]) : undefined,
       after: editValueText(after[k]),
     });
