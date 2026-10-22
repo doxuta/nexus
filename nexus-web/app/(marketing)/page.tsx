@@ -9,9 +9,10 @@ import { Landing } from "@/components/screens/Landing";
 // — không asset bịa). metadataBase resolve URL tương đối; set NEXT_PUBLIC_SITE_URL ở môi
 // trường deploy (fallback localhost chỉ để build/dev không cảnh báo thiếu base).
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-const TITLE = "Nexus — Nền tảng metadata-driven của Nexus";
+const TITLE = "Nexus: nền tảng ứng dụng nghiệp vụ dành cho agent";
+// Metadata is rendered on the server, which renders Vietnamese (the default language; see Landing.tsx).
 const DESCRIPTION =
-  "Nhà máy nội bộ Nexus dựng ứng dụng nghiệp vụ (CRM, LMS, Ticketing…) từ metadata — 90% engine, 10% custom.";
+  "Agent không viết code ứng dụng: nó sửa một mô hình có kiểu, có phiên bản, có phân quyền. Người duyệt từng thay đổi, xuất bản và quay lại được.";
 const OG_IMAGE = {
   url: "/landing/og.png",
   width: 1200,
