@@ -52,8 +52,8 @@ export function AccessPage({ slug, app: appParam, bang }: { slug: string; app?: 
   const { visible, hidden } = splitByScope(entities, scope.entityNames, (e) => e.name);
   const tables = (bang ? visible.filter((e) => e.name === bang) : visible).map((e) => ({ name: e.name, label: e.label || e.name }));
 
-  // The assistant's access card being previewed ("Xem trước"): its role's cells, and the tables it names not built yet.
-  const ghost = accessGhost(useProposedChanges("role")[0] ?? null, roles, entities);
+  // The assistant's access card being previewed ("Xem trước"): its role's cells, and the tables it names the page does not draw.
+  const ghost = accessGhost(useProposedChanges("role")[0] ?? null, roles, entities, tables);
 
   // ── "+ Vai mới" strip ──
   const [open, setOpen] = useState(false);
@@ -139,7 +139,7 @@ export function AccessPage({ slug, app: appParam, bang }: { slug: string; app?: 
     body = (
       <AccessMatrix
         roles={roles}
-        tables={[...tables, ...ghost.pending]}
+        tables={[...tables, ...ghost.extra]}
         proposed={ghost.proposed}
         viewAs={viewAs}
         roleHref={(id) => studioHref(slug, "dung/nguoi-dung-quyen/vai/:id", { id })}
