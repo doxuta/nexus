@@ -81,9 +81,9 @@ func (s *s78Env) wlTenant(t *testing.T) *s78Env {
 }
 
 // wlPausedRepo is a metadata repository whose write stops after its first INSERT, inside its transaction, until
-// release is closed: a schema write in flight (a lone Create too: before gorm commits its own transaction).
-// inflight is closed when it stops.
-func wlPausedRepo(t *testing.T, s *s78Env) (repo *metadata.Repository, inflight, release chan struct{}) {
+// resume is called: a schema write in flight (a lone Create too: before gorm commits its own transaction).
+// inflight is closed when it stops. A test that fails first resumes it at cleanup, before its database goes.
+func wlPausedRepo(t *testing.T, s *s78Env) (repo *metadata.Repository, inflight chan struct{}, resume func()) {
 	t.Helper()
 	sqlDB, err := s.gdb.DB()
 	if err != nil {
@@ -93,14 +93,16 @@ func wlPausedRepo(t *testing.T, s *s78Env) (repo *metadata.Repository, inflight,
 	if err != nil {
 		t.Fatal(err)
 	}
-	inflight, release = make(chan struct{}), make(chan struct{})
-	var once sync.Once
+	inflight, release := make(chan struct{}), make(chan struct{})
+	var once, resumed sync.Once
+	resume = func() { resumed.Do(func() { close(release) }) }
+	t.Cleanup(resume)
 	if err := gdb.Callback().Create().After("gorm:create").Before("gorm:commit_or_rollback_transaction").Register("wl:pause", func(*gorm.DB) {
 		once.Do(func() { close(inflight); <-release })
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return metadata.NewRepository(gdb), inflight, release
+	return metadata.NewRepository(gdb), inflight, resume
 }
 
 // wlWaitLockOrDone returns once done is closed or a transaction waits for the tenant's row lock.
@@ -174,7 +176,7 @@ func TestPublishSchemaWriteInFlight_Integration(t *testing.T) {
 		t.Run("in flight before the publish locks/"+[]string{"table", "field", "relation field", "N-N"}[i], func(t *testing.T) {
 			s := root.wlTenant(t)
 			w := s.wlWrites(t)[i]
-			repo, inflight, release := wlPausedRepo(t, s)
+			repo, inflight, resume := wlPausedRepo(t, s)
 			wrote := make(chan struct{})
 			var werr error
 			go func() { defer close(wrote); werr = w.write(context.Background(), repo) }()
@@ -191,7 +193,7 @@ func TestPublishSchemaWriteInFlight_Integration(t *testing.T) {
 				_, perr = s.pub.Publish(s.bctx, s.tenant, PublishRequest{ChangesetHash: hash})
 			}()
 			s.wlWaitLockOrDone(t, published, "the publish")
-			close(release)
+			resume()
 			<-wrote
 			<-published
 			if werr != nil {
@@ -244,7 +246,7 @@ func TestPublishSchemaWriteInFlight_Integration(t *testing.T) {
 // exclusively, as performance_schema shows it every few milliseconds.
 func wlLockHeld(t *testing.T, sdb *sqlx.DB, tenant string, f func()) time.Duration {
 	t.Helper()
-	stop, done := make(chan struct{}), make(chan time.Duration)
+	stop, done := make(chan struct{}), make(chan time.Duration, 1)
 	go func() {
 		var longest time.Duration
 		var since time.Time
@@ -272,8 +274,7 @@ func wlLockHeld(t *testing.T, sdb *sqlx.DB, tenant string, f func()) time.Durati
 			}
 		}
 	}()
-	f()
-	close(stop)
+	func() { defer close(stop); f() }() // a Fatalf in f still stops the watcher
 	return <-done
 }
 
