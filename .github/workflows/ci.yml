@@ -47,6 +47,15 @@ jobs:
       - name: eval pass-rule unit tests
         run: python3 ../evals/mcp/test_run.py
 
+  harness:
+    name: careful guardrail (hook test suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pins the decision AND the hookSpecificOutput envelope, both directions (deny / ask / allow).
+      # No network, no secrets: python3 and bash from the runner image only.
+      - run: bash tools/careful/check-careful.test.sh
+
   integration:
     name: go integration (MySQL 8 · migrate up · -race)
     runs-on: ubuntu-latest
