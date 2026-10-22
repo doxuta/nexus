@@ -44,6 +44,7 @@ jobs:
           python3 scripts/test_acceptance_acl.py
           python3 scripts/test_acceptance_named_credentials.py
           python3 scripts/test_seed_demo.py
+          python3 scripts/test_check_orphan_endpoints.py
       - name: eval pass-rule unit tests
         run: python3 ../evals/mcp/test_run.py
 
