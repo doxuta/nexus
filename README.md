@@ -84,7 +84,8 @@ flowchart TD
 docker compose up --build
 ```
 
-Open <http://localhost:8080> (set `NEXUS_PORT` to use another port). Workspace code: `northwind`.
+Open <http://localhost:8080> (set `NEXUS_PORT` to use another port). Workspace code: `northwind`. For the English UI,
+open <http://localhost:8080/login?lang=en>: the choice is kept for the next pages.
 
 | Who | Email | Password | Sees |
 |---|---|---|---|
@@ -204,8 +205,12 @@ on this repository's Security tab.
 - **Frozen:** the packs beyond the demo, approvals (`internal/bpm`), work queues, dashboards, calendars, per-tenant
   backup (`internal/tenantbackup`) and the Doctor (`internal/doctor`) are in the tree and tested in CI, but no open
   issue extends them.
-- **Vietnamese first.** The English catalog holds 219 of the 6,710 keys in `nexus-web/lib/i18n`, and older screens
-  still hold Vietnamese literals; [#6](https://github.com/doxuta/nexus/issues/6) measures the demo path first.
+- **Vietnamese first, English on the demo path.** `?lang=en`, or a browser that lists English and no Vietnamese,
+  picks English. The English catalog holds 724 of the 6,762 keys in `nexus-web/lib/i18n`: the 421 the demo loop
+  renders ([#6](https://github.com/doxuta/nexus/issues/6) measured them), the shell's menus and a few neighbours;
+  other screens fall back to Vietnamese. Some text still comes from the server or the data in Vietnamese: the
+  seeded CRM, the default record layout's section titles, draft names in the publish list, and the replayed
+  assistant, whose cassette was recorded when the builder still answered only in Vietnamese.
 - **Rollback re-hides; it does not delete** ([ADR 0002](docs/adr/0002-schema-cutoff-drafts-and-rollback.md)).
   Schema born after the target is hidden again and its rows stay; attribute edits of a field or table are not
   reverted; changes applied at once are undone one entry at a time with Revert.
