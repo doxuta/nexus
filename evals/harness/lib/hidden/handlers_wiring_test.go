@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -36,14 +37,15 @@ func (hiddenGrantAll) Authorize(context.Context, string, string, string, string)
 	return true, "all", nil
 }
 
-// hiddenGuard is the parent-record gate: the caller may view record r1, and record r2 is not there for them.
+// hiddenGuard is the parent-record gate: the caller may view record r1, record r2 is not there for them, and the
+// entity name it resolves is the canonical (lower-case) one, which the notes must be stored and read under.
 type hiddenGuard struct{}
 
 func (hiddenGuard) ResolveNoteTarget(_ context.Context, scope services.RecordScope, _, entity, recordID string) (string, services.RecordScope, error) {
 	if recordID == "r2" {
 		return "", services.RecordScope{}, services.ErrRecordNotFound
 	}
-	return entity, scope, nil
+	return strings.ToLower(entity), scope, nil
 }
 
 // hiddenGet returns a GET helper over a router whose notes table holds rows, in the order given.

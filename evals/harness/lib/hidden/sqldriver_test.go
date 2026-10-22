@@ -5,9 +5,9 @@ package PKG
 // tests depend on nothing in the agent's workspace but the code under test.
 //
 // It answers as the statement asks, after removing its SQL comments: the top-level AND terms of the WHERE clause
-// that are `col = ?`, `? = col`, `col IN (?)` or `col IS NULL` filter the rows (a top-level OR filters nothing, since
-// it would let rows through anyway; any other term is ignored), ORDER BY sorts them by plain columns, LIMIT/OFFSET
-// cut them. Without an ORDER BY the rows keep the order the test stored them in. The tests store rows that only a
+// (parenthesised AND groups included) that are `col = ?`, `? = col`, `col IN (?)` or `col IS NULL` filter the rows (a
+// top-level OR filters nothing, since it would let rows through anyway; any other term is ignored), ORDER BY sorts
+// them by plain or table-qualified columns, LIMIT/OFFSET cut them. Without an ORDER BY the rows keep the order the test stored them in. The tests store rows that only a
 // correct query leaves out (another tenant, another record, a soft-deleted row, a newer row stored first, an id that
 // sorts the wrong way), so a query that forgets one of them returns the wrong row.
 
@@ -153,22 +153,38 @@ type hiddenConjunct struct {
 }
 
 // hiddenConjuncts splits a statement's WHERE clause, comments removed, into its top-level AND terms; topOr reports a
-// top-level OR.
+// top-level OR. A term wrapped whole in parentheses with no OR of its own is split in turn: (a AND b) AND c gives a,
+// b and c.
 func hiddenConjuncts(q string) (terms []hiddenConjunct, topOr bool) {
 	q = hiddenStrip(q)
 	loc := hiddenWhere.FindStringSubmatchIndex(q)
 	if loc == nil {
 		return nil, false
 	}
-	start, end := loc[2], loc[3]
+	return hiddenSplit(q, loc[2], loc[3])
+}
+
+func hiddenSplit(q string, start, end int) (terms []hiddenConjunct, topOr bool) {
 	depth, from := 0, start
 	cut := func(to int) {
-		text := strings.TrimSpace(q[from:to])
-		arg := -1
-		if strings.Contains(text, "?") {
-			arg = strings.Count(q[:from], "?")
+		a, b := from, to
+		for a < b && strings.ContainsRune(" \t\n\r", rune(q[a])) {
+			a++
 		}
-		terms = append(terms, hiddenConjunct{text, arg})
+		for b > a && strings.ContainsRune(" \t\n\r", rune(q[b-1])) {
+			b--
+		}
+		if b-a >= 2 && q[a] == '(' && hiddenClosing(q, a) == b-1 {
+			if inner, or := hiddenSplit(q, a+1, b-1); !or {
+				terms = append(terms, inner...)
+				return
+			}
+		}
+		arg := -1
+		if strings.Contains(q[a:b], "?") {
+			arg = strings.Count(q[:a], "?")
+		}
+		terms = append(terms, hiddenConjunct{q[a:b], arg})
 	}
 	for i := start; i < end; i++ {
 		switch q[i] {
@@ -191,6 +207,23 @@ func hiddenConjuncts(q string) (terms []hiddenConjunct, topOr bool) {
 	}
 	cut(end)
 	return terms, topOr
+}
+
+// hiddenClosing returns the index of the parenthesis that closes the one at q[open], or -1.
+func hiddenClosing(q string, open int) int {
+	depth := 0
+	for i := open; i < len(q); i++ {
+		switch q[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 func isWordByte(b byte) bool {

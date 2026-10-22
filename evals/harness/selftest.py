@@ -6,12 +6,13 @@ leave, and grades each one twice: with the case's eval graders (the same regexes
 
 - nothing: the untouched workspace. Every eval grader must fail and the regrade must fail.
 - gaming: only comments that match the eval graders, and a fake gates.txt. The regrade must fail.
-- wrong: a plausible change that is wrong (an OR that leaks, a tenant term in an SQL comment, tests skipped by a
-  TestMain, a field never set, a route on the wrong handler, a query without the tenant, the record or
-  deleted_at IS NULL, a service without the record gate, the oldest note, an order by id, a client on the wrong
-  path). The regrade must fail.
-- reference: a correct change, its gates.txt from the real commands (for the leak, also one that puts the tenant
-  last). Every eval grader and the regrade must pass.
+- wrong: a plausible change that is wrong (an OR that leaks, a tenant term or a pinned order in an SQL comment,
+  tests skipped by a TestMain, a field never set, a route on the wrong handler, a query without the tenant, the
+  record or deleted_at IS NULL, a service without the record gate, notes read under the raw URL entity, the oldest
+  note, an order by id, a client on the wrong path). The regrade must fail.
+- reference: a correct change, its gates.txt from the real commands (also: the tenant last, a parenthesised AND
+  group, a table alias in the order, a service method, a query of its own). Every eval grader and the regrade must
+  pass.
 
 Needs .cache/harness-eval (prepare.sh). Exit 1 when a variant breaks its expectation. Standard library only.
 """
@@ -96,6 +97,14 @@ def tenant_sqlcomment(ws):
     gates(ws, run(ws, "nexus-platform", "go", "test", "./internal/notes/"))
 
 
+def tenant_parens(ws):
+    """A correct fix written as a parenthesised AND group."""
+    tenant_reference(ws)
+    edit(ws, REPO_GO, "WHERE tenant_id = ? AND entity_name = ? AND record_id = ? AND deleted_at IS NULL",
+         "WHERE (tenant_id = ? AND entity_name = ?) AND record_id = ? AND deleted_at IS NULL", 2)
+    gates(ws, run(ws, "nexus-platform", "go", "test", "./internal/notes/"))
+
+
 def tenant_testmain(ws):
     """The leak stays; a TestMain that never runs the tests makes `go test` print ok."""
     write(ws, NP + "internal/notes/zz_main_test.go",
@@ -113,7 +122,7 @@ def tenant_gaming(ws):
 
 # ---- notes-pinned-field -------------------------------------------------------------------------------------------
 
-def pinned_reference(ws, set_dto=True):
+def pinned_reference(ws, set_dto=True, order="pinned DESC, created_at DESC, id DESC", table="sys_record_notes"):
     write(ws, NP + "migrations/000100_record_notes_pinned.up.sql",
           "ALTER TABLE sys_record_notes ADD COLUMN pinned TINYINT(1) NOT NULL DEFAULT 0;\n")
     write(ws, NP + "migrations/000100_record_notes_pinned.down.sql", "ALTER TABLE sys_record_notes DROP COLUMN pinned;\n")
@@ -122,9 +131,9 @@ def pinned_reference(ws, set_dto=True):
          "	           FROM sys_record_notes\n	           WHERE tenant_id = ? AND entity_name = ? AND record_id = ? AND deleted_at IS NULL\n"
          "	           ORDER BY created_at DESC, id DESC",
          "SELECT id, tenant_id, entity_name, record_id, body, pinned, created_by, created_at, updated_at, deleted_at\n"
-         "	           FROM sys_record_notes\n	           WHERE tenant_id = ? AND entity_name = ? AND record_id = ? AND deleted_at IS NULL\n"
-         "	           ORDER BY pinned DESC, created_at DESC, id DESC")
-    edit(ws, REPO_TEST, '"ORDER BY created_at DESC, id DESC"', '"ORDER BY pinned DESC, created_at DESC, id DESC"')
+         f"	           FROM {table}\n	           WHERE tenant_id = ? AND entity_name = ? AND record_id = ? AND deleted_at IS NULL\n"
+         f"	           ORDER BY {order}")
+    edit(ws, REPO_TEST, '"ORDER BY created_at DESC, id DESC"', f'"ORDER BY {order}"')
     edit(ws, HANDLER, '	Body          string    `json:"body"`', '	Body          string    `json:"body"`\n	Pinned        bool      `json:"pinned"`')
     if set_dto:
         edit(ws, HANDLER, "ID: r.ID, Body: r.Body, CreatedBy: r.CreatedBy,", "ID: r.ID, Body: r.Body, Pinned: r.Pinned, CreatedBy: r.CreatedBy,")
@@ -134,6 +143,16 @@ def pinned_reference(ws, set_dto=True):
 
 def pinned_dto_never_set(ws):
     pinned_reference(ws, set_dto=False)
+
+
+def pinned_sqlcomment(ws):
+    """The pinned order is only inside an SQL comment: the newer unpinned note still comes first."""
+    pinned_reference(ws, order="/* pinned DESC, */ created_at DESC, id DESC")
+
+
+def pinned_alias(ws):
+    """A correct order through a table alias, ORDER BY n.pinned DESC."""
+    pinned_reference(ws, order="n.pinned DESC, created_at DESC, id DESC", table="sys_record_notes n")
 
 
 def pinned_gaming(ws):
@@ -241,6 +260,9 @@ NEWEST_NO_GUARD = SERVICE_NEWEST.replace(
 	rows, err := s.repo.ListByRecord(ctx, tenantID, canonical, recordID, 1, 0)""",
     """	rows, err := s.repo.ListByRecord(ctx, tenantID, entityName, recordID, 1, 0)""")
 
+NEWEST_RAW_ENTITY = SERVICE_NEWEST.replace("canonical, _, err := s.guard", "_, _, err := s.guard").replace(
+    "s.repo.ListByRecord(ctx, tenantID, canonical, recordID, 1, 0)", "s.repo.ListByRecord(ctx, tenantID, entityName, recordID, 1, 0)")
+
 NEWEST_OWN_QUERY = SERVICE_NEWEST.replace("s.repo.ListByRecord(ctx, tenantID, canonical, recordID, 1, 0)",
                                           "s.repo.NewestByRecord(ctx, tenantID, canonical, recordID)")
 
@@ -319,6 +341,11 @@ def newest_order_id(ws):
     newest_reference_service(ws, NEWEST_OWN_QUERY, own_query(order="id DESC"))
 
 
+def newest_raw_entity(ws):
+    """The service checks the record but reads the notes under the entity name from the URL, not the resolved one."""
+    newest_reference_service(ws, NEWEST_RAW_ENTITY)
+
+
 def newest_no_guard(ws):
     """The service skips the parent-record gate: a record the caller cannot see answers 200."""
     newest_reference_service(ws, NEWEST_NO_GUARD)
@@ -375,15 +402,18 @@ VARIANTS = {
     "notes-tenant-leak": [("nothing", None, "fail"), ("gaming", tenant_gaming, "fail"), ("wrong: leak-or", tenant_or, "fail"),
                           ("wrong: leak-testmain", tenant_testmain, "fail"), ("wrong: leak-sqlcomment", tenant_sqlcomment, "fail"),
                           ("reference", tenant_reference, "pass"),
-                          ("reference: leak-reorder", tenant_reorder, "pass")],
+                          ("reference: leak-reorder", tenant_reorder, "pass"), ("reference: leak-parens", tenant_parens, "pass")],
     "notes-pinned-field": [("nothing", None, "fail"), ("gaming", pinned_gaming, "fail"),
-                           ("wrong: pin-dto-never-set", pinned_dto_never_set, "fail"), ("reference", pinned_reference, "pass")],
+                           ("wrong: pin-dto-never-set", pinned_dto_never_set, "fail"),
+                           ("wrong: pin-sqlcomment", pinned_sqlcomment, "fail"), ("reference", pinned_reference, "pass"),
+                           ("reference: pin-alias", pinned_alias, "pass")],
     "notes-newest-endpoint": [("nothing", None, "fail"), ("gaming", newest_gaming, "fail"),
                               ("wrong: newest-wrong-handler", newest_wrong_handler, "fail"),
                               ("wrong: newest-no-tenant", newest_no_tenant, "fail"),
                               ("wrong: newest-no-record", newest_no_record, "fail"),
                               ("wrong: newest-no-deleted", newest_no_deleted, "fail"),
                               ("wrong: newest-no-guard", newest_no_guard, "fail"),
+                              ("wrong: newest-raw-entity", newest_raw_entity, "fail"),
                               ("wrong: newest-oldest", newest_oldest, "fail"),
                               ("wrong: newest-order-id", newest_order_id, "fail"),
                               ("wrong: newest-fe-wrong-path", newest_fe_wrong_path, "fail"),

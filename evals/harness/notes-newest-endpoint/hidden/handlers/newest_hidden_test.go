@@ -5,7 +5,9 @@ package handlers
 // parent record's 404 when the caller cannot see the record. Besides the right note, the table holds, all newer: a
 // note of another tenant on the same record id, a note of the same tenant on another record, a soft-deleted note on
 // the record. The rows are stored out of order, and the right note has the smallest id. So a query without the
-// tenant, the record, `deleted_at IS NULL` or `ORDER BY created_at DESC` returns another note.
+// tenant, the record, `deleted_at IS NULL` or `ORDER BY created_at DESC` returns another note. The two-note request
+// names the entity in another case, so a query that uses the raw URL entity instead of the one the gate resolved
+// finds nothing.
 
 import (
 	"database/sql/driver"
@@ -37,7 +39,7 @@ func TestHidden_TheNewestNote(t *testing.T) {
 	rows := append([]map[string]driver.Value{hiddenNote("z9", "older", at)}, traps()...)
 	rows = append(rows, hiddenNote("a1", "newest", at.Add(time.Hour)))
 	get := hiddenGet(t, rows...)
-	code, body, raw = get("/api/v1/crm_accounts/r1/notes/newest")
+	code, body, raw = get("/api/v1/CRM_Accounts/r1/notes/newest") // the gate resolves it to crm_accounts
 	if code != http.StatusOK {
 		t.Fatalf("two live notes: status %d, want 200: %s", code, raw)
 	}
