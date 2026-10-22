@@ -397,6 +397,7 @@ function ReportConfigForm({ reportId, meta, onSavedToDraft }: { reportId: string
           fresh.id, fresh.name, [...(fresh.widgets ?? []), widget],
           fresh.description ?? undefined,
         );
+        emitDraftsChanged("dashboard"); // a dashboard draft on a delivered project: the header recounts
         await Promise.all([
           qc.invalidateQueries({ queryKey: qk.dashboards() }),
           qc.invalidateQueries({ queryKey: qk.dashboardRunAll(target.id) }),
@@ -405,6 +406,7 @@ function ReportConfigForm({ reportId, meta, onSavedToDraft }: { reportId: string
         toast.success(tf("page.reports.config.pinned", { name: target.name }));
       } else {
         await createDashboard(name.trim() || meta.name, [widget]);
+        emitDraftsChanged("dashboard");
         await Promise.all([
           qc.invalidateQueries({ queryKey: qk.dashboards() }),
           qc.invalidateQueries({ queryKey: ["admin", "dashboards"] }),

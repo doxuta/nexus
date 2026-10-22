@@ -349,6 +349,7 @@ export function DashboardViewer({ id, embedded = false, onDeleted }: { id: strin
     setDelLoading(true);
     try {
       await deleteDashboard(id);
+      emitDraftsChanged("dashboard"); // a dashboard "delete" draft (or a dropped draft-only one) on a delivered project: the header recounts
       queryClient.invalidateQueries({ queryKey: qk.dashboards() });
       toast.success(t("page.dashboards.viewer.deleted"));
       if (embedded) onDeleted?.();
