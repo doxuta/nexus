@@ -67,8 +67,10 @@ describe("Landing", () => {
     expect(landingKeys.filter((k) => !en[k])).toEqual([]);
   });
 
-  it("the copy drops the internal-factory framing and the em dash", () => {
-    const framing = /nội bộ|nhà máy|bàn giao|factory|handover|DOTB|90\/10|—/i;
+  // Verifier round 1 (#64): isolation is "a convention plus tests" (ADR 0005), so no "safe by construction"; no
+  // unmeasured number.
+  it("the copy drops the internal-factory framing, claims nothing the README does not, and has no em dash", () => {
+    const framing = /nội bộ|nhà máy|bàn giao|factory|handover|DOTB|90\/10|—|by construction|theo cấu tạo|2[.,]000/i;
     const values = landingKeys.flatMap((k) => [viCatalog[k], en[k]]);
     expect(values.filter((v) => framing.test(v))).toEqual([]);
   });

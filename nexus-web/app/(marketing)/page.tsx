@@ -17,7 +17,7 @@ const OG_IMAGE = {
   url: "/landing/og.png",
   width: 1200,
   height: 630,
-  alt: "Giao diện Nexus — ứng dụng CRM với danh sách cơ hội bán hàng",
+  alt: "Giao diện Nexus: ứng dụng CRM với danh sách cơ hội bán hàng",
 };
 
 export const metadata: Metadata = {
