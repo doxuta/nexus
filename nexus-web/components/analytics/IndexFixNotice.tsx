@@ -2,16 +2,15 @@
 
 // IndexFixNotice — "this group-by / sort field has no index yet → Bật index ngay", right under the
 // picker (specs/070 #265). The builder used to have to leave the report / widget for Data Model,
-// flip "Đánh index", and come back; now the fix is where the need is. It sends EXACTLY the Studio
-// edit (PUT /admin/fields/:id with the stored options + indexed:true — withIndexed keeps every other
-// key, since options replace wholesale) and refetches the entity's fields: the picker then sees the
-// field as indexed and this notice disappears. Renders nothing for a field that is indexed already
-// or cannot take an index (the picker keeps those disabled). Admin-only surfaces (report config
+// flip "Đánh index", and come back; now the fix is where the need is. It sends ONLY the flag
+// (PUT /admin/fields/:id {indexed:true}: the server keeps every other option and any pending field
+// draft, #56 — this page's own read of the options may be the live one) and refetches the entity's
+// fields: the picker then sees the field as indexed and this notice disappears. Renders nothing for a
+// field that is indexed already or cannot take an index (the picker keeps those disabled). Admin-only surfaces (report config
 // panel, widget form); the server still gates the write (builderGated).
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { updateField, type FieldMeta } from "@/lib/api";
-import { withIndexed } from "@/lib/fieldOptions";
 import { t, tf } from "@/lib/i18n";
 import { qk } from "@/lib/query/keys";
 import { isIndexFixable } from "@/lib/widgetAuthoring";
@@ -23,18 +22,15 @@ export function IndexFixNotice({ entity, field }: { entity: string; field?: Fiel
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (!field?.id || !isIndexFixable(field)) return null;
-  const { id, options } = field;
+  const { id } = field;
   const label = field.label ?? field.name;
 
   async function enable() {
     setBusy(true); setErr(null);
     try {
-      await updateField(id, { options: withIndexed(options, true, true) });
-      // options.indexed applies live and never enters the field draft (DraftFieldRepo.SaveEdit), but `options` go out
-      // wholesale. Inside /studio the field was read over the draft overlay, so a pending field draft is written back as it
-      // was. Outside /studio (report / dashboard viewer) the read is live: the server reads options that differ from live
-      // in `indexed` alone as "set indexed" and keeps the draft (FieldService.EditField, #56). Either way the pending
-      // count holds: no emitDraftsChanged (#46).
+      await updateField(id, { indexed: true });
+      // options.indexed applies live and never enters the field draft (DraftFieldRepo.SaveEdit); a pending field draft is
+      // written back as it was, so the pending count holds: no emitDraftsChanged (#46).
       await qc.invalidateQueries({ queryKey: qk.fields(entity) });
     } catch (e) {
       setErr(e instanceof Error ? e.message : t("page.reports.config.indexError"));

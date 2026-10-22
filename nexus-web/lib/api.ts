@@ -2641,7 +2641,9 @@ export async function addField(entityName: string, field: NewFieldInput): Promis
 }
 // PUT /admin/fields/:id — update label, isRequired, defaultValue, options, description, fieldOrder.
 // Apply-when-non-nil semantics: omitted keys keep their stored value (api-conventions §10.1).
-export async function updateField(id: string, payload: { label?: string; isRequired?: boolean; defaultValue?: unknown; options?: Record<string, unknown>; description?: string; fieldOrder?: number }): Promise<FieldMeta> {
+// `indexed` (#56) sets options.indexed only: the server keeps the other options and any pending field
+// draft. Never together with `options` (422 FIELD_INDEXED_WITH_OPTIONS).
+export async function updateField(id: string, payload: { label?: string; isRequired?: boolean; defaultValue?: unknown; options?: Record<string, unknown>; description?: string; fieldOrder?: number; indexed?: boolean }): Promise<FieldMeta> {
   const r = await req<{ data: { field: FieldMeta } }>("PUT", `/admin/fields/${id}`, payload);
   return r.data.field;
 }
