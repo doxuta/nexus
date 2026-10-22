@@ -145,8 +145,9 @@
         "PASS go vet ./...",
         "PASS go build ./...",
         "PASS check-orphan-endpoints.py --strict (the script from BASE)",
-        "PASS nexus-web/lib/api.ts exports a function that GETs /notes/newest (comments ignored)",
-        "PASS go test ./internal/handlers/ ./internal/notes/ (hidden: null with no notes, else the newest)"
+        "PASS nexus-web/lib/api.ts: an exported function GETs /${…}/${…}/notes/newest (comments ignored)",
+        "PASS go test ./internal/handlers/ ./internal/notes/",
+        "PASS hidden tests ran and passed: null, the tenant's newest, 404 on a record the caller cannot see"
       ],
       "toolCalls": {
         "Bash": 21,
@@ -177,8 +178,9 @@
         "PASS go vet ./...",
         "PASS go build ./...",
         "PASS check-orphan-endpoints.py --strict (the script from BASE)",
-        "PASS nexus-web/lib/api.ts exports a function that GETs /notes/newest (comments ignored)",
-        "PASS go test ./internal/handlers/ ./internal/notes/ (hidden: null with no notes, else the newest)"
+        "PASS nexus-web/lib/api.ts: an exported function GETs /${…}/${…}/notes/newest (comments ignored)",
+        "PASS go test ./internal/handlers/ ./internal/notes/",
+        "PASS hidden tests ran and passed: null, the tenant's newest, 404 on a record the caller cannot see"
       ],
       "toolCalls": {
         "Bash": 23
@@ -208,8 +210,9 @@
         "PASS go vet ./...",
         "PASS go build ./...",
         "PASS check-orphan-endpoints.py --strict (the script from BASE)",
-        "PASS nexus-web/lib/api.ts exports a function that GETs /notes/newest (comments ignored)",
-        "PASS go test ./internal/handlers/ ./internal/notes/ (hidden: null with no notes, else the newest)"
+        "PASS nexus-web/lib/api.ts: an exported function GETs /${…}/${…}/notes/newest (comments ignored)",
+        "PASS go test ./internal/handlers/ ./internal/notes/",
+        "PASS hidden tests ran and passed: null, the tenant's newest, 404 on a record the caller cannot see"
       ],
       "toolCalls": {
         "Bash": 21,
@@ -241,8 +244,9 @@
         "PASS go vet ./...",
         "PASS go build ./...",
         "PASS check-orphan-endpoints.py --strict (the script from BASE)",
-        "PASS nexus-web/lib/api.ts exports a function that GETs /notes/newest (comments ignored)",
-        "PASS go test ./internal/handlers/ ./internal/notes/ (hidden: null with no notes, else the newest)"
+        "PASS nexus-web/lib/api.ts: an exported function GETs /${…}/${…}/notes/newest (comments ignored)",
+        "PASS go test ./internal/handlers/ ./internal/notes/",
+        "PASS hidden tests ran and passed: null, the tenant's newest, 404 on a record the caller cannot see"
       ],
       "toolCalls": {
         "Bash": 21,
@@ -274,8 +278,8 @@
         "PASS gofmt -l . is empty",
         "PASS go vet ./...",
         "PASS go build ./...",
-        "PASS go test ./internal/notes/ (hidden: pinned is read, pinned notes first)",
-        "PASS go test ./internal/handlers/ (hidden: the notes list returns pinned)",
+        "PASS go test ./internal/notes/ ./internal/handlers/",
+        "PASS hidden tests ran and passed: pinned is read and listed first, the notes list returns it",
         "PASS one new migration, 000100, up and down",
         "PASS up adds pinned to sys_record_notes, off by default (comments ignored)",
         "PASS down drops pinned (comments ignored)"
@@ -312,8 +316,8 @@
         "PASS gofmt -l . is empty",
         "PASS go vet ./...",
         "PASS go build ./...",
-        "PASS go test ./internal/notes/ (hidden: pinned is read, pinned notes first)",
-        "PASS go test ./internal/handlers/ (hidden: the notes list returns pinned)",
+        "PASS go test ./internal/notes/ ./internal/handlers/",
+        "PASS hidden tests ran and passed: pinned is read and listed first, the notes list returns it",
         "PASS one new migration, 000100, up and down",
         "PASS up adds pinned to sys_record_notes, off by default (comments ignored)",
         "PASS down drops pinned (comments ignored)"
@@ -348,8 +352,8 @@
         "PASS gofmt -l . is empty",
         "PASS go vet ./...",
         "PASS go build ./...",
-        "PASS go test ./internal/notes/ (hidden: pinned is read, pinned notes first)",
-        "PASS go test ./internal/handlers/ (hidden: the notes list returns pinned)",
+        "PASS go test ./internal/notes/ ./internal/handlers/",
+        "PASS hidden tests ran and passed: pinned is read and listed first, the notes list returns it",
         "PASS one new migration, 000100, up and down",
         "PASS up adds pinned to sys_record_notes, off by default (comments ignored)",
         "PASS down drops pinned (comments ignored)"
@@ -388,8 +392,8 @@
         "     internal/handlers/note_integration_test.go",
         "PASS go vet ./...",
         "PASS go build ./...",
-        "PASS go test ./internal/notes/ (hidden: pinned is read, pinned notes first)",
-        "PASS go test ./internal/handlers/ (hidden: the notes list returns pinned)",
+        "PASS go test ./internal/notes/ ./internal/handlers/",
+        "PASS hidden tests ran and passed: pinned is read and listed first, the notes list returns it",
         "PASS one new migration, 000100, up and down",
         "PASS up adds pinned to sys_record_notes, off by default (comments ignored)",
         "PASS down drops pinned (comments ignored)"
@@ -424,7 +428,8 @@
         "PASS gofmt -l . is empty",
         "PASS go vet ./...",
         "PASS go build ./...",
-        "PASS go test ./internal/notes/ (hidden: WHERE tenant_id = ? AND …, no OR, tenant bound first)"
+        "PASS go test ./internal/notes/",
+        "PASS hidden tests ran and passed: a top-level tenant_id = ? term bound to the tenant, no top-level OR"
       ],
       "toolCalls": {
         "Grep": 4,
@@ -455,7 +460,8 @@
         "PASS gofmt -l . is empty",
         "PASS go vet ./...",
         "PASS go build ./...",
-        "PASS go test ./internal/notes/ (hidden: WHERE tenant_id = ? AND …, no OR, tenant bound first)"
+        "PASS go test ./internal/notes/",
+        "PASS hidden tests ran and passed: a top-level tenant_id = ? term bound to the tenant, no top-level OR"
       ],
       "toolCalls": {
         "Grep": 3,
@@ -486,7 +492,8 @@
         "PASS gofmt -l . is empty",
         "PASS go vet ./...",
         "PASS go build ./...",
-        "PASS go test ./internal/notes/ (hidden: WHERE tenant_id = ? AND …, no OR, tenant bound first)"
+        "PASS go test ./internal/notes/",
+        "PASS hidden tests ran and passed: a top-level tenant_id = ? term bound to the tenant, no top-level OR"
       ],
       "toolCalls": {
         "Bash": 20,
@@ -515,7 +522,8 @@
         "PASS gofmt -l . is empty",
         "PASS go vet ./...",
         "PASS go build ./...",
-        "PASS go test ./internal/notes/ (hidden: WHERE tenant_id = ? AND …, no OR, tenant bound first)"
+        "PASS go test ./internal/notes/",
+        "PASS hidden tests ran and passed: a top-level tenant_id = ? term bound to the tenant, no top-level OR"
       ],
       "toolCalls": {
         "Bash": 16,
