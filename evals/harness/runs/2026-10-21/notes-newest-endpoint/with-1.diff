@@ -1,0 +1,577 @@
+--- /dev/null
++++ b/gates.txt
+@@ -0,0 +1,280 @@
++# Gates — notes/newest endpoint (cwd: nexus-platform/ unless noted), 2026-10-21T15:12:43Z
++
++$ gofmt -l .
++[exit 0]
++
++$ go vet ./...
++[exit 0]
++
++$ go build ./cmd/server/
++[exit 0]
++
++$ go test ./internal/notes/ ./internal/handlers/ -run "TestService_|TestNoteACLWiring" -v 2>&1 | grep -E "^(=== RUN|--- |ok|FAIL|PASS)"
++=== RUN   TestService_List
++=== RUN   TestService_List/guard_từ_chối_→_lỗi_truyền_nguyên_vẹn_(không_lộ_record)
++=== RUN   TestService_List/guard_cho_qua_entity_không_tồn_tại_→_ErrEntityNotFound_truyền_nguyên_vẹn
++=== RUN   TestService_List/happy_path_trả_đúng_trang_+_tổng
++=== RUN   TestService_List/limit_vượt_trần_bị_kẹp_(không_quét_không_giới_hạn)
++--- PASS: TestService_List (0.00s)
++=== RUN   TestService_Create
++=== RUN   TestService_Create/rỗng_sau_trim_→_RECORD_NOTE_EMPTY,_không_đụng_guard/repo
++=== RUN   TestService_Create/vượt_quá_độ_dài_tối_đa_→_RECORD_NOTE_TOO_LONG
++=== RUN   TestService_Create/đúng_bằng_trần_độ_dài_→_cho_qua
++=== RUN   TestService_Create/người_chỉ_thấy_hồ_sơ_qua_chia_sẻ_tạo_ghi_chú_→_403_chỉ_xem,_không_ghi
++=== RUN   TestService_Create/người_lạ_(không_thấy_cả_khi_tính_chia_sẻ)_tạo_ghi_chú_→_vẫn_404
++=== RUN   TestService_Create/guard_từ_chối_→_lỗi_truyền_nguyên_vẹn,_không_ghi
++=== RUN   TestService_Create/happy_path:_created_by_LUÔN_LÀ_scope.UserID_thật,_body_được_trim
++=== RUN   TestService_Create/người_chỉ_thấy_hồ_sơ_qua_chia_sẻ_ghi_chú_→_403_chỉ_xem,_không_ghi
++=== RUN   TestService_Create/hồ_sơ_của_mình_(view,_có_cờ_chia_sẻ_trong_scope)_→_ghi_được,_guard_thấy_scope_KHÔNG_cờ_chia_sẻ
++=== RUN   TestService_Create/hồ_sơ_không_tồn_tại_/_ngoài_phạm_vi,_không_có_chia_sẻ_→_vẫn_404_nguyên_văn
++--- PASS: TestService_Create (0.00s)
++=== RUN   TestService_Delete
++=== RUN   TestService_Delete/guard_từ_chối_→_lỗi_truyền_nguyên_vẹn,_không_đụng_note/authz
++=== RUN   TestService_Delete/note_không_tồn_tại_/_thuộc_record_khác_→_ErrNoteNotFound
++=== RUN   TestService_Delete/tác_giả_tự_xoá_ghi_chú_của_mình_→_cho_qua,_KHÔNG_cần_hỏi_authz
++=== RUN   TestService_Delete/người_khác_không_có_quyền_delete_trên_entity_→_FORBIDDEN_403,_không_xoá
++=== RUN   TestService_Delete/người_khác_có_quyền_delete_trên_entity_(vd_Quản_lý)_→_cho_qua
++=== RUN   TestService_Delete/người_chỉ_thấy_hồ_sơ_qua_chia_sẻ_xoá_ghi_chú_của_người_khác_→_403_chỉ_xem,_không_xoá
++=== RUN   TestService_Delete/người_chỉ_thấy_qua_chia_sẻ_vẫn_xoá_được_ghi_chú_CỦA_MÌNH
++=== RUN   TestService_Delete/admin_luôn_xoá_được,_không_hỏi_authz
++=== RUN   TestService_Delete/authz_chưa_wire_(nil)_+_không_phải_tác_giả_→_an_toàn_mặc_định:_từ_chối
++--- PASS: TestService_Delete (0.00s)
++=== RUN   TestService_Newest
++=== RUN   TestService_Newest/guard_từ_chối_→_lỗi_truyền_nguyên_vẹn,_không_đụng_repo
++=== RUN   TestService_Newest/không_có_ghi_chú_→_nil,_không_lỗi
++=== RUN   TestService_Newest/có_ghi_chú_→_đúng_1_dòng_mới_nhất,_tenant_+_record_được_ghim
++--- PASS: TestService_Newest (0.00s)
++PASS
++ok  	nexus/platform/internal/notes	0.240s
++=== RUN   TestNoteACLWiring_CreateRequiresViewNotCreate
++=== RUN   TestNoteACLWiring_CreateRequiresViewNotCreate/Xem_+_Sửa_(của_mình),_không_có_Tạo_⇒_ghi_chú_được
++=== RUN   TestNoteACLWiring_CreateRequiresViewNotCreate/chỉ_Xem_(của_mình)_⇒_ghi_chú_được
++=== RUN   TestNoteACLWiring_CreateRequiresViewNotCreate/chỉ_có_Tạo,_không_có_Xem_⇒_403
++=== RUN   TestNoteACLWiring_CreateRequiresViewNotCreate/không_có_grant_nào_⇒_403
++=== RUN   TestNoteACLWiring_CreateRequiresViewNotCreate/Tạo_toàn_bộ_+_Xem_của_mình_⇒_phạm_vi_là_của_Xem
++--- PASS: TestNoteACLWiring_CreateRequiresViewNotCreate (0.00s)
++=== RUN   TestNoteACLWiring_NewestRequiresView
++=== RUN   TestNoteACLWiring_NewestRequiresView/chỉ_Xem_(của_mình),_chưa_có_ghi_chú_⇒_data_null
++=== RUN   TestNoteACLWiring_NewestRequiresView/chỉ_Xem,_có_ghi_chú_⇒_đúng_ghi_chú_đó
++=== RUN   TestNoteACLWiring_NewestRequiresView/chỉ_có_Tạo,_không_có_Xem_⇒_403
++=== RUN   TestNoteACLWiring_NewestRequiresView/không_có_grant_nào_⇒_403
++--- PASS: TestNoteACLWiring_NewestRequiresView (0.00s)
++PASS
++ok  	nexus/platform/internal/handlers	0.369s
++[exit 0]
++
++$ go test ./... 2>&1 | grep -v "^ok\|no test files"; echo "(lines above = non-ok packages; ok/no-test-files lines filtered)"
++--- FAIL: TestApplyAndProbe_HappyPathAsksAllThreeQuestionsThenCleansUp (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++
++goroutine 64 [running]:
++testing.tRunner.func1.2({0x100d21560, 0x6f27aea66b20})
++	testing/testing.go:1974 +0x1a0
++testing.tRunner.func1()
++	testing/testing.go:1977 +0x318
++panic({0x100d21560?, 0x6f27aea66b20?})
++	runtime/panic.go:860 +0x12c
++net/http/httptest.newLocalListener()
++	net/http/httptest/server.go:72 +0xd4
++net/http/httptest.NewUnstartedServer(...)
++	net/http/httptest/server.go:120
++net/http/httptest.NewServer({0x100dacea0, 0x6f27aea66ae0})
++	net/http/httptest/server.go:107 +0x28
++nexus/platform/cmd/aieval.(*fakeNexus).server(...)
++	nexus/platform/cmd/aieval/probe_test.go:26
++nexus/platform/cmd/aieval.TestApplyAndProbe_HappyPathAsksAllThreeQuestionsThenCleansUp(0x6f27aea36488)
++	nexus/platform/cmd/aieval/probe_test.go:56 +0x8c
++testing.tRunner(0x6f27aea36488, 0x100da8dc0)
++	testing/testing.go:2036 +0xc4
++created by testing.(*T).Run in goroutine 1
++	testing/testing.go:2101 +0x3a8
++FAIL	nexus/platform/cmd/aieval	0.291s
++--- FAIL: TestRecord_AppendsEveryExchangeInOrder_NeverTheKey (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++
++goroutine 24 [running]:
++testing.tRunner.func1.2({0x105825a60, 0x7786d4a80610})
++	testing/testing.go:1974 +0x1a0
++testing.tRunner.func1()
++	testing/testing.go:1977 +0x318
++panic({0x105825a60?, 0x7786d4a80610?})
++	runtime/panic.go:860 +0x12c
++net/http/httptest.newLocalListener()
++	net/http/httptest/server.go:72 +0xd4
++net/http/httptest.NewUnstartedServer(...)
++	net/http/httptest/server.go:120
++net/http/httptest.NewServer({0x105944a80, 0x7786d4e00060})
++	net/http/httptest/server.go:107 +0x28
++nexus/platform/internal/ai.TestRecord_AppendsEveryExchangeInOrder_NeverTheKey(0x7786d4dd8008)
++	nexus/platform/internal/ai/cassette_test.go:127 +0x88
++testing.tRunner(0x7786d4dd8008, 0x1059385f0)
++	testing/testing.go:2036 +0xc4
++created by testing.(*T).Run in goroutine 1
++	testing/testing.go:2101 +0x3a8
++FAIL	nexus/platform/internal/ai	0.637s
++
++
++[31m2026/10/21 22:12:58 [Recovery] 2026/10/21 - 22:12:58 panic recovered:
++runtime error: invalid memory address or nil pointer dereference
++runtime/panic.go:336 (0x104885cbf)
++runtime/signal_unix.go:931 (0x104885c90)
++nexus/platform/internal/handlers/admin_vertical_handler.go:475 (0x10541a640)
++github.com/gin-gonic/gin@v1.12.0/context.go:192 (0x1050ca5e3)
++nexus/platform/internal/middleware/platform_operator.go:85 (0x1054b1df3)
++github.com/gin-gonic/gin@v1.12.0/context.go:192 (0x1050ca5e3)
++nexus/platform/internal/middleware/auth.go:374 (0x105467af7)
++github.com/gin-gonic/gin@v1.12.0/context.go:192 (0x1050ca5e3)
++nexus/platform/internal/middleware/draft_caller.go:63 (0x105467d8b)
++github.com/gin-gonic/gin@v1.12.0/context.go:192 (0x1050ca5e3)
++nexus/platform/internal/middleware/preview_readonly.go:69 (0x10546836b)
++github.com/gin-gonic/gin@v1.12.0/context.go:192 (0x1050ca5e3)
++nexus/platform/internal/middleware/auth.go:347 (0x105469067)
++github.com/gin-gonic/gin@v1.12.0/context.go:192 (0x1050ca5e3)
++nexus/platform/internal/middleware/auth.go:254 (0x1053782a7)
++github.com/gin-gonic/gin@v1.12.0/context.go:192 (0x1050ca5e3)
++github.com/gin-gonic/gin@v1.12.0/recovery.go:90 (0x1050d7897)
++github.com/gin-gonic/gin@v1.12.0/context.go:192 (0x1050ca5e3)
++github.com/gin-gonic/gin@v1.12.0/gin.go:722 (0x1050d628f)
++github.com/gin-gonic/gin@v1.12.0/gin.go:672 (0x1050d5d1b)
++nexus/platform/internal/handlers/admin_vertical_upgrade_test.go:248 (0x1054b1953)
++nexus/platform/internal/handlers/admin_vertical_upgrade_test.go:258 (0x1054b1317)
++testing/testing.go:2036 (0x10493a4f3)
++runtime/asm_arm64.s:1447 (0x10488b553)
++[0m
++--- FAIL: TestChatRoutes_ModelRefusal_200Refused (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++
++goroutine 520 [running]:
++testing.tRunner.func1.2({0x1062202c0, 0x6399cd41a6f0})
++	testing/testing.go:1974 +0x1a0
++testing.tRunner.func1()
++	testing/testing.go:1977 +0x318
++panic({0x1062202c0?, 0x6399cd41a6f0?})
++	runtime/panic.go:860 +0x12c
++net/http/httptest.newLocalListener()
++	net/http/httptest/server.go:72 +0xd4
++net/http/httptest.NewUnstartedServer(...)
++	net/http/httptest/server.go:120
++net/http/httptest.NewServer({0x1064630c0, 0x106450c70})
++	net/http/httptest/server.go:107 +0x28
++nexus/platform/internal/handlers.TestChatRoutes_ModelRefusal_200Refused(0x6399cd251d48)
++	nexus/platform/internal/handlers/ai_refusal_test.go:35 +0x38
++testing.tRunner(0x6399cd251d48, 0x1064501a0)
++	testing/testing.go:2036 +0xc4
++created by testing.(*T).Run in goroutine 1
++	testing/testing.go:2101 +0x3a8
++FAIL	nexus/platform/internal/handlers	0.624s
++--- FAIL: TestAuth_Matrix (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++
++goroutine 22 [running]:
++testing.tRunner.func1.2({0x1031e9080, 0x23e8dd6badf0})
++	testing/testing.go:1974 +0x1a0
++testing.tRunner.func1()
++	testing/testing.go:1977 +0x318
++panic({0x1031e9080?, 0x23e8dd6badf0?})
++	runtime/panic.go:860 +0x12c
++net/http/httptest.newLocalListener()
++	net/http/httptest/server.go:72 +0xd4
++net/http/httptest.NewUnstartedServer(...)
++	net/http/httptest/server.go:120
++net/http/httptest.NewServer({0x103324dc0, 0x23e8dd762360})
++	net/http/httptest/server.go:107 +0x28
++nexus/platform/internal/mcpserver.serveWith(0x23e8dd74afc8, {0x103324cc0, 0x23e8dd71ed38}, {0x103324ce0, 0x23e8dd724640}, {0x103327f88, 0x23e8dd521680}, {0x0, 0x0})
++	nexus/platform/internal/mcpserver/mcpserver_test.go:177 +0x130
++nexus/platform/internal/mcpserver.serve(0x23e8dd74afc8, {0x103324cc0, 0x23e8dd71ed38}, {0x103324ce0, 0x23e8dd724640}, {0x103327f88, 0x23e8dd521680})
++	nexus/platform/internal/mcpserver/mcpserver_test.go:172 +0x64
++nexus/platform/internal/mcpserver.TestAuth_Matrix(0x23e8dd74afc8)
++	nexus/platform/internal/mcpserver/mcpserver_test.go:197 +0x7c
++testing.tRunner(0x23e8dd74afc8, 0x103318280)
++	testing/testing.go:2036 +0xc4
++created by testing.(*T).Run in goroutine 1
++	testing/testing.go:2101 +0x3a8
++FAIL	nexus/platform/internal/mcpserver	0.217s
++--- FAIL: TestSMTPSender_RefusesPlaintextWhenNoSTARTTLS (0.00s)
++    email_test.go:64: listen tcp 127.0.0.1:0: bind: operation not permitted
++FAIL
++FAIL	nexus/platform/internal/notify	0.214s
++--- FAIL: TestDoctorC10_MigratesInlineSecretPreservingWireBytes (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++
++goroutine 1096 [running]:
++testing.tRunner.func1.2({0x103fd9360, 0x15540ffb61e0})
++	testing/testing.go:1974 +0x1a0
++testing.tRunner.func1()
++	testing/testing.go:1977 +0x318
++panic({0x103fd9360?, 0x15540ffb61e0?})
++	runtime/panic.go:860 +0x12c
++net/http/httptest.newLocalListener()
++	net/http/httptest/server.go:72 +0xd4
++net/http/httptest.NewUnstartedServer(...)
++	net/http/httptest/server.go:120
++net/http/httptest.NewServer({0x1041c13c0, 0x15540ffb61a0})
++	net/http/httptest/server.go:107 +0x28
++nexus/platform/internal/services.newCapture(0x15540ffb9688)
++	nexus/platform/internal/services/doctor_credential_checks_test.go:266 +0x80
++nexus/platform/internal/services.TestDoctorC10_MigratesInlineSecretPreservingWireBytes(0x15540ffb9688)
++	nexus/platform/internal/services/doctor_credential_checks_test.go:298 +0x3c
++testing.tRunner(0x15540ffb9688, 0x1041abcd8)
++	testing/testing.go:2036 +0xc4
++created by testing.(*T).Run in goroutine 1
++	testing/testing.go:2101 +0x3a8
++FAIL	nexus/platform/internal/services	9.474s
++--- FAIL: TestHTTPWebhookSender_PostSuccessWithHMAC (0.00s)
++panic: httptest: failed to listen on a port: listen tcp6 [::1]:0: bind: operation not permitted [recovered, repanicked]
++
++goroutine 40 [running]:
++testing.tRunner.func1.2({0x104f9ff00, 0x55943a29e4f0})
++	testing/testing.go:1974 +0x1a0
++testing.tRunner.func1()
++	testing/testing.go:1977 +0x318
++panic({0x104f9ff00?, 0x55943a29e4f0?})
++	runtime/panic.go:860 +0x12c
++net/http/httptest.newLocalListener()
++	net/http/httptest/server.go:72 +0xd4
++net/http/httptest.NewUnstartedServer(...)
++	net/http/httptest/server.go:120
++net/http/httptest.NewServer({0x105049a40, 0x55943a2b8400})
++	net/http/httptest/server.go:107 +0x28
++nexus/platform/internal/workflow.TestHTTPWebhookSender_PostSuccessWithHMAC(0x55943a2e2fc8)
++	nexus/platform/internal/workflow/actions_m2_test.go:237 +0xc0
++testing.tRunner(0x55943a2e2fc8, 0x105044588)
++	testing/testing.go:2036 +0xc4
++created by testing.(*T).Run in goroutine 1
++	testing/testing.go:2101 +0x3a8
++FAIL	nexus/platform/internal/workflow	0.181s
++FAIL
++(lines above = non-ok packages; ok/no-test-files lines filtered)
++[exit 0]
++
++$ python3 scripts/check-orphan-endpoints.py --strict
++Route đã đăng ký: 290 · có FE gọi: 289 · miễn trừ: 1 · MỒ CÔI: 0
++
++Miễn trừ (có lý do):
++  GET    /auth/sso/callback                           — IdP gọi trực tiếp qua trình duyệt, không phải fetch từ FE
++
++✅ Không có endpoint mồ côi.
++[exit 0]
++
++# Notes on the run above
++- The "[exit 0]" after the two `go test` lines is the pipe's exit status (grep), not go test's.
++- `go test ./...`: 7 packages FAIL (cmd/aieval, internal/ai, internal/handlers, internal/mcpserver,
++  internal/notify, internal/services, internal/workflow). Each one fails on the sandbox's ban on local
++  port binding ("listen tcp ...:0: bind: operation not permitted": 6 httptest.NewServer panics + 1
++  SMTP test listener). A panic stops the rest of that package's tests, so the notes + handlers tests
++  for this change were also run on their own (the -run block above), and all of them pass.
++- Prove-the-test: skipping the guard in notes.Service.Newest turned TestService_Newest red:
++    --- FAIL: TestService_Newest/guard_từ_chối_→_lỗi_truyền_nguyên_vẹn,_không_đụng_repo
++        service_unit_test.go:441: err = <nil>; want ErrRecordNotFound
++    --- FAIL: TestService_Newest/có_ghi_chú_→_đúng_1_dòng_mới_nhất,_tenant_+_record_được_ghim
++        service_unit_test.go:468: args = [tenant-a Crm_Accounts rec-1 1 0]; want [tenant-a crm_accounts rec-1 1 0]
++  restored → ok  nexus/platform/internal/notes
++  The handler wiring test was red before the route existed (404 on all 4 cases), green after.
++
++# NOT run (sandbox)
++- make test-integration: no MySQL.
++- python3 scripts/acceptance-acl.py: needs a running server + database.
++- nexus-web (npm run build, npx tsc --noEmit, npx vitest run, npx eslint .): node_modules is not
++  installed and the npm registry is blocked:
++    npm error 403 403 user denied - GET https://registry.npmjs.org/vitest
++  so lib/recordNotes.newest.test.ts and the api.ts change are unverified by tooling.
+--- a/nexus-platform/internal/handlers/note_acl_wiring_test.go
++++ b/nexus-platform/internal/handlers/note_acl_wiring_test.go
+@@ -13,6 +13,7 @@
+ 	"context"
+ 	"net/http"
+ 	"net/http/httptest"
++	"strings"
+ 	"testing"
+ 
+ 	"github.com/gin-gonic/gin"
+@@ -24,7 +25,11 @@
+ )
+ 
+ // noteSpy is a NoteService that records the row scope the handler handed Create and answers 201.
+-type noteSpy struct{ got *services.RecordScope }
++// newest is what Newest answers (nil = the record has no note).
++type noteSpy struct {
++	got    *services.RecordScope
++	newest *notes.Note
++}
+ 
+ func (s noteSpy) List(context.Context, services.RecordScope, string, string, string, int, int) ([]notes.Note, int, error) {
+ 	return nil, 0, nil
+@@ -33,6 +38,13 @@
+ func (s noteSpy) Create(_ context.Context, scope services.RecordScope, _, _, _, body string) (*notes.Note, error) {
+ 	*s.got = scope
+ 	return &notes.Note{ID: "n1", Body: body}, nil
++}
++
++func (s noteSpy) Newest(_ context.Context, scope services.RecordScope, _, _, _ string) (*notes.Note, error) {
++	if s.got != nil {
++		*s.got = scope
++	}
++	return s.newest, nil
+ }
+ 
+ func (s noteSpy) Delete(context.Context, services.RecordScope, string, string, string, string) error {
+@@ -79,3 +91,48 @@
+ 		})
+ 	}
+ }
++
++// GET /:entity/:id/notes/newest rides the same "view" floor as listing notes, and answers
++// {"data": null} — not 404 — when the record has no note.
++func TestNoteACLWiring_NewestRequiresView(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	tests := []struct {
++		name     string
++		levels   map[string]string
++		newest   *notes.Note
++		wantCode int
++		wantBody string
++	}{
++		{"chỉ Xem (của mình), chưa có ghi chú ⇒ data null", map[string]string{"view": "owner"}, nil, http.StatusOK, `{"data":null}`},
++		{"chỉ Xem, có ghi chú ⇒ đúng ghi chú đó", map[string]string{"view": "all"}, &notes.Note{ID: "n9", Body: "mới nhất", CreatedBy: "u1"}, http.StatusOK, `"id":"n9"`},
++		{"chỉ có Tạo, không có Xem ⇒ 403", map[string]string{"create": "all"}, nil, http.StatusForbidden, ""},
++		{"không có grant nào ⇒ 403", map[string]string{}, nil, http.StatusForbidden, ""},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			var got services.RecordScope
++			ver := &stubVerifier{byToken: map[string]*auth.Claims{"ktv": claimsFor("t1", "role-ktv", false)}}
++			r := gin.New()
++			r.Use(gin.Recovery())
++			RegisterAPIRoutes(r.Group("/api/v1"), ver, levelPerActionChecker{entity: "phieu_sua_chua", levels: tt.levels}, APIHandlers{
++				Record: NewDynamicRecordHandler(nil, zap.NewNop()),
++				Note:   NewNoteHandler(noteSpy{got: &got, newest: tt.newest}, zap.NewNop()),
++			}, zap.NewNop())
++
++			req := httptest.NewRequest(http.MethodGet, "/api/v1/phieu_sua_chua/r1/notes/newest", nil)
++			req.Header.Set("Authorization", "Bearer ktv")
++			rec := httptest.NewRecorder()
++			r.ServeHTTP(rec, req)
++
++			if rec.Code != tt.wantCode {
++				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, tt.wantCode, rec.Body.String())
++			}
++			if tt.wantBody != "" && !strings.Contains(rec.Body.String(), tt.wantBody) {
++				t.Errorf("body = %s, want it to contain %s", rec.Body.String(), tt.wantBody)
++			}
++			if tt.wantCode == http.StatusOK && got.AccessLevel != tt.levels["view"] {
++				t.Errorf("handler received access level %q, want the view grant's %q", got.AccessLevel, tt.levels["view"])
++			}
++		})
++	}
++}
+--- a/nexus-platform/internal/handlers/note_handler.go
++++ b/nexus-platform/internal/handlers/note_handler.go
+@@ -20,6 +20,7 @@
+ // substitute a fake, mirroring FileUploader.
+ type NoteService interface {
+ 	List(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID string, page, limit int) ([]notes.Note, int, error)
++	Newest(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID string) (*notes.Note, error)
+ 	Create(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID, body string) (*notes.Note, error)
+ 	Delete(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID, noteID string) error
+ }
+@@ -38,6 +39,7 @@
+ // entity (not a CRM-only feature):
+ //
+ //	GET    /:entity/:id/notes           list, newest first, simple offset pagination
++//	GET    /:entity/:id/notes/newest    the single newest note, or null (record header)
+ //	POST   /:entity/:id/notes           add a note (body {"body": "..."})
+ //	DELETE /:entity/:id/notes/:noteId   soft-delete (note author OR entity delete-grant)
+ //
+@@ -66,12 +68,13 @@
+ 	return h
+ }
+ 
+-// RegisterEntityRoutes mounts the list/create routes. router.go mounts them on a group pinned to
++// RegisterEntityRoutes mounts the list/newest/create routes. router.go mounts them on a group pinned to
+ // the "view" action (specs/060 #349): reading notes rides the same gate as reading the record, and
+ // adding a note needs only that the caller can read the record — NOT the "create" grant the default
+ // POST→create map of the record group would ask for (that opens a NEW record).
+ func (h *NoteHandler) RegisterEntityRoutes(rg *gin.RouterGroup) {
+ 	rg.GET("/:entity/:id/notes", h.List)
++	rg.GET("/:entity/:id/notes/newest", h.Newest)
+ 	rg.POST("/:entity/:id/notes", h.Create)
+ }
+ 
+@@ -172,6 +175,29 @@
+ 			"totalPages": (total + limit - 1) / limit,
+ 		},
+ 	})
++}
++
++// Newest handles GET /:entity/:id/notes/newest — {"data": <newest note>} or {"data": null} when the
++// record has none (an empty record is not an error; a record the caller cannot view still 404s).
++func (h *NoteHandler) Newest(c *gin.Context) {
++	tenantID, ok := tenantOf(c)
++	if !ok {
++		return
++	}
++	entity := strings.TrimSpace(c.Param("entity"))
++	recordID := strings.TrimSpace(c.Param("id"))
++
++	n, err := h.svc.Newest(c.Request.Context(), scopeOf(c), tenantID, entity, recordID)
++	if err != nil {
++		h.respondError(c, err, "Newest")
++		return
++	}
++	if n == nil {
++		c.JSON(http.StatusOK, gin.H{"data": nil})
++		return
++	}
++	dtos := h.toDTOs(c.Request.Context(), tenantID, []notes.Note{*n})
++	c.JSON(http.StatusOK, gin.H{"data": dtos[0]})
+ }
+ 
+ // createNoteRequest is the POST /:entity/:id/notes body.
+--- a/nexus-platform/internal/handlers/router.go
++++ b/nexus-platform/internal/handlers/router.go
+@@ -945,7 +945,7 @@
+ 			// entity-level edit is not row-level permission.
+ 			h.Approval.RegisterSubmitRoute(editGroup)
+ 		}
+-		// RECORD-NOTES: list, create and delete ALL ride ONE group pinned to "view" — the floor is
++		// RECORD-NOTES: list, newest, create and delete ALL ride ONE group pinned to "view" — the floor is
+ 		// "whoever can read the record can comment on it" (specs/060 #349, Founder 2026-10-09), NOT
+ 		// the method-mapped recordGroup: there POST→"create" asked "may this person open a NEW
+ 		// record", so a technician with view/edit (own) and no create could not note their own work
+--- a/nexus-platform/internal/notes/service.go
++++ b/nexus-platform/internal/notes/service.go
+@@ -73,6 +73,24 @@
+ 		return nil, 0, fmt.Errorf("notes.Service.List: %w", err)
+ 	}
+ 	return rows, total, nil
++}
++
++// Newest returns the single most recent live note on (entityName, recordID), or nil when the record
++// has none — the record header's "latest note" without loading the Notes tab. Same gate as List
++// (RecordGuard first, its error returned verbatim) and the same newest-first order.
++func (s *Service) Newest(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID string) (*Note, error) {
++	canonical, _, err := s.guard.ResolveNoteTarget(ctx, scope, tenantID, entityName, recordID)
++	if err != nil {
++		return nil, err
++	}
++	rows, err := s.repo.ListByRecord(ctx, tenantID, canonical, recordID, 1, 0)
++	if err != nil {
++		return nil, fmt.Errorf("notes.Service.Newest: %w", err)
++	}
++	if len(rows) == 0 {
++		return nil, nil
++	}
++	return &rows[0], nil
+ }
+ 
+ // sharedReadOnlyOr maps a miss on the write-side gate: the POST route resolves a scope WITHOUT the
+--- a/nexus-platform/internal/notes/service_unit_test.go
++++ b/nexus-platform/internal/notes/service_unit_test.go
+@@ -429,3 +429,46 @@
+ 		t.Errorf("code = %q; want %q", ve.Code, code)
+ 	}
+ }
++
++// ---- Newest -------------------------------------------------------------------------------------
++
++func TestService_Newest(t *testing.T) {
++	t.Run("guard từ chối → lỗi truyền nguyên vẹn, không đụng repo", func(t *testing.T) {
++		guard := &fakeGuard{resolveErr: services.ErrRecordNotFound}
++		svc, rec := newTestService(t, guard, nil)
++		_, err := svc.Newest(context.Background(), testScope, "tenant-a", "crm_accounts", "rec-1")
++		if !errors.Is(err, services.ErrRecordNotFound) {
++			t.Fatalf("err = %v; want ErrRecordNotFound", err)
++		}
++		if len(rec.queryCalls) != 0 {
++			t.Errorf("repo queried %d times after a denied guard; want 0", len(rec.queryCalls))
++		}
++	})
++
++	t.Run("không có ghi chú → nil, không lỗi", func(t *testing.T) {
++		svc, rec := newTestService(t, &fakeGuard{}, nil)
++		rec.queueQuery(noteCols(), nil, nil)
++		n, err := svc.Newest(context.Background(), testScope, "tenant-a", "crm_accounts", "rec-1")
++		if err != nil || n != nil {
++			t.Fatalf("Newest = (%+v, %v); want (nil, nil)", n, err)
++		}
++	})
++
++	t.Run("có ghi chú → đúng 1 dòng mới nhất, tenant + record được ghim", func(t *testing.T) {
++		guard := &fakeGuard{entity: "crm_accounts"}
++		svc, rec := newTestService(t, guard, nil)
++		rec.queueQuery(noteCols(), [][]driver.Value{sampleNoteRow("note-9", "mới nhất")}, nil)
++		n, err := svc.Newest(context.Background(), testScope, "tenant-a", "Crm_Accounts", "rec-1")
++		if err != nil || n == nil || n.ID != "note-9" {
++			t.Fatalf("Newest = (%+v, %v); want note-9", n, err)
++		}
++		call := rec.queryCalls[0]
++		if len(call.args) < 5 || call.args[0] != "tenant-a" || call.args[1] != "crm_accounts" ||
++			call.args[2] != "rec-1" || call.args[3] != int64(1) || call.args[4] != int64(0) {
++			t.Errorf("args = %v; want [tenant-a crm_accounts rec-1 1 0]", call.args)
++		}
++		if !strings.Contains(call.query, "ORDER BY created_at DESC") {
++			t.Errorf("query not newest-first: %s", call.query)
++		}
++	})
++}
+--- a/nexus-web/lib/api.ts
++++ b/nexus-web/lib/api.ts
+@@ -2196,6 +2196,12 @@
+     },
+   };
+ }
++// GET /:entity/:id/notes/newest → {data: note | null} — the record header's latest note without
++// loading the whole tab. null means the record has no note; 404 when the caller cannot view it.
++export async function getNewestRecordNote(entity: string, recordId: string): Promise<RecordNote | null> {
++  const r = await req<{ data: RecordNote | null }>("GET", `/${entity}/${recordId}/notes/newest`);
++  return r.data ?? null;
++}
+ // POST /:entity/:id/notes {body} → 201 {data: note}. Errors: 422 RECORD_NOTE_EMPTY (blank after
+ // trim) · 422 RECORD_NOTE_TOO_LONG (>5000 rune) · 404 when the caller cannot view the record.
+ export async function createRecordNote(entity: string, recordId: string, body: string): Promise<RecordNote> {
+--- /dev/null
++++ b/nexus-web/lib/recordNotes.newest.test.ts
+@@ -0,0 +1,40 @@
++// GET /:entity/:id/notes/newest — method + path, and {data: null} (record with no note) reaches the
++// caller as null rather than undefined.
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { getNewestRecordNote } from "@/lib/api";
++
++const calls: { url: string; init?: RequestInit }[] = [];
++const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
++
++beforeEach(() => {
++  calls.length = 0;
++  window.localStorage.setItem("nexus_remember", "1");
++  window.localStorage.setItem("nexus_token", "tok-1");
++});
++afterEach(() => {
++  vi.unstubAllGlobals();
++  window.localStorage.clear();
++  window.sessionStorage.clear();
++});
++
++const stub = (body: unknown, status = 200) =>
++  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => { calls.push({ url, init }); return json(body, status); }));
++
++describe("getNewestRecordNote", () => {
++  it("GETs /:entity/:id/notes/newest and returns the note", async () => {
++    const note = { id: "n9", body: "mới nhất", createdBy: "u1", createdAt: "2026-10-21T00:00:00Z", updatedAt: "2026-10-21T00:00:00Z" };
++    stub({ data: note });
++    await expect(getNewestRecordNote("crm_accounts", "r1")).resolves.toEqual(note);
++    expect(calls.map((c) => `${c.init?.method} ${c.url.replace(/^.*\/api\/v1/, "")}`)).toEqual(["GET /crm_accounts/r1/notes/newest"]);
++  });
++
++  it("returns null when the record has no note", async () => {
++    stub({ data: null });
++    await expect(getNewestRecordNote("crm_accounts", "r1")).resolves.toBeNull();
++  });
++
++  it("surfaces a 404 when the caller cannot view the record", async () => {
++    stub({ error: "Bản ghi không tồn tại", code: "RECORD_NOT_FOUND" }, 404);
++    await expect(getNewestRecordNote("crm_accounts", "r1")).rejects.toBeTruthy();
++  });
++});

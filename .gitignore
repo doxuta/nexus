@@ -44,3 +44,7 @@ Thumbs.db
 .claude/settings.local.json
 .claude/worktrees/
 CLAUDE.local.md
+
+# harness eval (evals/harness): the warm Go caches and the per-run results
+/.cache/
+evals/harness/results/

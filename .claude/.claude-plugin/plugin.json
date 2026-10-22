@@ -1,0 +1,6 @@
+{
+  "name": "nexus-harness",
+  "version": "0.1.0",
+  "description": "The agent harness of the Nexus repo: the builder and verifier agents and the slice and verify-ui skills, loaded as a plugin so `claude plugin eval` can measure it against no harness (evals/harness).",
+  "author": { "name": "doxuta" }
+}
