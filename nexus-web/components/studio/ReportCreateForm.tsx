@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { createReport, listFields, type ReportSummary } from "@/lib/api";
+import { emitDraftsChanged } from "@/lib/draftEvents";
 import { entityOptionText, useEntityOptions } from "@/lib/entityOptions";
 import { errorMessage } from "@/lib/errorMessages";
 import { t } from "@/lib/i18n";
@@ -52,6 +53,7 @@ export function ReportCreateForm({
         config: buildReportConfig({ type: "tabular", columns: [], metric: "count", fields: flds, fallbackColumn: flds[0]?.name ?? "id" }),
         isActive: true,
       });
+      emitDraftsChanged("report"); // a report draft on a delivered project: the header recounts
       await Promise.all([
         qc.invalidateQueries({ queryKey: qk.adminReports() }),
         qc.invalidateQueries({ queryKey: qk.reports() }),

@@ -9,6 +9,7 @@ import { mkChange, WithPreview } from "@/test/previewProbe";
 import { EmbeddedSurface } from "@/components/slds/EmbeddedSurface";
 import { toast } from "@/components/ui/Toaster";
 import { ensureAuth, getTenantBrandingDoc, updateTenantBrandingDoc, ApiError } from "@/lib/api";
+import { onDraftsChanged } from "@/lib/draftEvents";
 
 vi.mock("next/navigation", async (orig) => ({ ...(await orig<typeof import("next/navigation")>()), useRouter: () => ({ push: vi.fn() }), usePathname: () => "/studio/du-an/demo/dung/bao-cao" }));
 vi.mock("@/components/ui/Toaster", () => ({ toast: { info: vi.fn(), success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
@@ -110,6 +111,34 @@ describe("BrandingScreen", () => {
     await waitFor(() =>
       expect(screen.getByText(/accentColor phải là mã hex/)).toBeInTheDocument(),
     );
+  });
+
+  // #53: on a delivered project the save is a branding draft, so the header's pending count must recount. The bus hears it
+  // only once the PUT has answered (a recount sent earlier reads the old count), and never on a refusal.
+  it("announces on the drafts bus once the save has answered, never before, never on a refusal", async () => {
+    const heard: string[] = [];
+    const off = onDraftsChanged((s) => heard.push(s));
+    try {
+      let answer!: () => void;
+      vi.mocked(updateTenantBrandingDoc).mockReturnValueOnce(new Promise((r) => { answer = () => r({ branding: { appName: "XYZ" }, draftState: "edited" }); }));
+      renderScreen();
+      await loaded();
+      fireEvent.change(nameInput(), { target: { value: "XYZ" } });
+      fireEvent.click(screen.getByText("Lưu thương hiệu"));
+      await waitFor(() => expect(updateTenantBrandingDoc).toHaveBeenCalledTimes(1));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(heard).toEqual([]);
+      answer();
+      await waitFor(() => expect(heard).toEqual(["branding"]));
+      vi.mocked(updateTenantBrandingDoc).mockRejectedValueOnce(new ApiError(422, "BRANDING_INVALID", "Màu sai"));
+      await waitFor(() => expect(nameInput().value).toBe("XYZ"));
+      fireEvent.change(nameInput(), { target: { value: "XYZ 2" } });
+      fireEvent.click(screen.getByText("Lưu thương hiệu"));
+      expect(await screen.findByText("Màu sai")).toBeInTheDocument();
+      expect(heard).toEqual(["branding"]);
+    } finally {
+      off();
+    }
   });
 
   // specs/063 S7-3: a delivered workspace — the builder edits a DRAFT. The screen labels it, says the

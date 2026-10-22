@@ -4,7 +4,7 @@
 // model (Space grabs/drops, arrows move, Cmd/Ctrl+arrow crosses lists) and pointer drag via dnd-kit.
 // Behaviour pinned here is the old screen's: save = replace-all PUT in array order, label override
 // trimmed and omitted when blank, save disabled until something changed, delete never touches data.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -14,6 +14,7 @@ import {
   type AdminApp, type PublishState, type AdminAppDetail, type EntityMeta,
 } from "@/lib/api";
 import { toast } from "@/components/ui/Toaster";
+import { onDraftsChanged } from "@/lib/draftEvents";
 import { mkChange, WithPreview } from "@/test/previewProbe";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -554,6 +555,73 @@ describe("AppsManager — Studio split mode (specs/074 lát 24)", () => {
     await userEvent.click(screen.getAllByRole("button", { name: "Xoá app" }).at(-1)!);
     await waitFor(() => expect(deleteApp).toHaveBeenCalledWith("app-lms"));
     await waitFor(() => expect(onSelectApp).toHaveBeenCalledWith(null));
+  });
+});
+
+// #53: on a delivered project PUT /admin/apps/:id and PUT /admin/apps/:id/nav write an app draft, and DELETE drops the app's
+// draft (DraftAppStore.SoftDelete): each changes the header's pending count. The bus hears it only once the write has
+// answered (a recount sent earlier reads the old count), and never on a refusal.
+describe("AppsManager — the drafts bus (#53)", () => {
+  let heard: string[] = [];
+  let off = () => {};
+  beforeEach(() => { heard = []; off = onDraftsChanged((s) => heard.push(s)); });
+  afterEach(() => off());
+  // The write answers only when `answer()` is called.
+  function held<T>(mock: { mockReturnValueOnce: (p: Promise<T>) => unknown }, value: T) {
+    let answer!: () => void;
+    mock.mockReturnValueOnce(new Promise<T>((r) => { answer = () => r(value); }));
+    return () => answer();
+  }
+  const pending = async () => { await new Promise((r) => setTimeout(r, 20)); expect(heard).toEqual([]); };
+
+  it("Lưu menu", async () => {
+    const answer = held(vi.mocked(replaceAppNav), []);
+    const { menu, onBack } = await renderEditor();
+    await userEvent.click(within(menu).getByRole("option", { name: /Khách hàng/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Bỏ khỏi menu" }));
+    await userEvent.click(screen.getByRole("button", { name: "Lưu menu" }));
+    await waitFor(() => expect(replaceAppNav).toHaveBeenCalledTimes(1));
+    await pending();
+    answer();
+    await waitFor(() => expect(onBack).toHaveBeenCalled());
+    expect(heard).toEqual(["app"]);
+  });
+
+  it("Lưu menu refused (409): nothing is announced", async () => {
+    vi.mocked(replaceAppNav).mockRejectedValueOnce(new ApiError(409, "APP_NAV_STALE", "stale"));
+    const { menu } = await renderEditor();
+    await userEvent.click(within(menu).getByRole("option", { name: /Khách hàng/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Bỏ khỏi menu" }));
+    await userEvent.click(screen.getByRole("button", { name: "Lưu menu" }));
+    expect(await screen.findByText(/Menu đã đổi ở nơi khác/)).toBeInTheDocument();
+    expect(heard).toEqual([]);
+  });
+
+  it("Đặt làm app mặc định", async () => {
+    const answer = held(vi.mocked(updateApp), LMS);
+    wrap(<AppsManager />);
+    await screen.findByRole("link", { name: "LMS" });
+    screen.getByRole("button", { name: "Thêm thao tác cho LMS" }).focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Đặt làm app mặc định" }));
+    await waitFor(() => expect(updateApp).toHaveBeenCalledTimes(1));
+    await pending();
+    answer();
+    await waitFor(() => expect(heard).toEqual(["app"]));
+  });
+
+  it("Xoá app", async () => {
+    const answer = held(vi.mocked(deleteApp), undefined);
+    wrap(<AppsManager />);
+    await screen.findByRole("link", { name: "LMS" });
+    screen.getByRole("button", { name: "Thêm thao tác cho LMS" }).focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Xoá app" }));
+    await userEvent.click(screen.getAllByRole("button", { name: "Xoá app" }).at(-1)!);
+    await waitFor(() => expect(deleteApp).toHaveBeenCalledTimes(1));
+    await pending();
+    answer();
+    await waitFor(() => expect(heard).toEqual(["app"]));
   });
 });
 

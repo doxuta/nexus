@@ -13,6 +13,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { createApp, updateApp, listDashboards, listWorkQueuesAdmin, listRoles, ApiError, type AdminApp } from "@/lib/api";
+import { emitDraftsChanged } from "@/lib/draftEvents";
 import { qk } from "@/lib/query/keys";
 import {
   APP_ICONS, APP_TONES, appIconByName, appToneIcon, isValidAppSlug, slugifyAppName, useActiveApp,
@@ -169,10 +170,12 @@ export function CreateAppDialog({
           ...(sameIds(homeQueueIds, app.homeQueueIds) ? {} : { homeQueueIds }),
           ...(sameIds(defaultRoleIds, app.defaultRoleIds) ? {} : { defaultRoleIds }),
         });
+        emitDraftsChanged("app"); // an app draft on a delivered project: the header recounts
         await qc.invalidateQueries({ queryKey: qk.apps() });
         await qc.invalidateQueries({ queryKey: qk.adminApps() });
         toast.success(t("page.apps.dialog.toast.updated").replace("{label}", label.trim()));
       } else {
+        // No emitDraftsChanged: POST /admin/apps applies at once even on a delivered project (DraftAppStore.Create), no draft.
         const created = await createApp({
           name: slug,
           label: label.trim(),
