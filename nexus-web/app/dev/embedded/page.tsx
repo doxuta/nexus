@@ -18,7 +18,6 @@ const DoctorScreen = lazy(() => import("@/components/screens/admin/DoctorScreen"
 const TeamsList = lazy(() => import("@/components/screens/admin/TeamsList").then((m) => m.TeamsList));
 const ImportScreen = lazy(() => import("@/components/screens/ImportScreen").then((m) => m.ImportScreen));
 const EntityFieldEditor = lazy(() => import("@/components/studio/EntityFieldEditor").then((m) => m.EntityFieldEditor));
-const LayoutBuilder = lazy(() => import("@/components/studio/LayoutBuilder").then((m) => m.LayoutBuilder));
 
 const BUILDERS: Record<string, (entity: string) => ReactNode> = {
   WorkflowBuilder: () => <WorkflowBuilder />,
@@ -29,7 +28,6 @@ const BUILDERS: Record<string, (entity: string) => ReactNode> = {
   TeamsList: () => <TeamsList />,
   ImportScreen: (e) => <ImportScreen entity={e} />,
   EntityFieldEditor: (e) => <EntityFieldEditor entityName={e} />,
-  LayoutBuilder: (e) => <LayoutBuilder entityName={e} />,
 };
 
 function Probe() {

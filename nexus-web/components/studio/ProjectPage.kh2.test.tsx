@@ -11,13 +11,6 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
   useSearchParams: () => new URLSearchParams(search),
 }));
-const layoutProps = vi.fn();
-vi.mock("./LayoutBuilder", () => ({
-  LayoutBuilder: (p: { entityName?: string; initialView?: string }) => {
-    layoutProps(p);
-    return <p>trình sửa màn</p>;
-  },
-}));
 const editorProps = vi.fn();
 vi.mock("./screen/ScreenEditor", () => ({
   ScreenEditor: (p: { bang: string }) => {
@@ -53,7 +46,6 @@ import { ProjectPage } from "./ProjectPage";
 const render = (ui: ReactElement) => rtlRender(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{ui}</QueryClientProvider>);
 
 beforeEach(() => {
-  layoutProps.mockReset();
   editorProps.mockReset();
   search = "";
 });
@@ -63,7 +55,6 @@ describe("Màn hình (T202)", () => {
     render(<ProjectPage slug="northwind" />);
     expect(await screen.findByText("sửa form trên màn thật")).toBeInTheDocument();
     expect(editorProps).toHaveBeenCalledWith(expect.objectContaining({ bang: "crm_accounts" }));
-    expect(layoutProps).not.toHaveBeenCalled();
     expect(screen.getByRole("link", { name: "App và menu" })).toHaveAttribute("href", "/studio/du-an/northwind/dung/man-hinh/app");
   });
 
@@ -71,7 +62,6 @@ describe("Màn hình (T202)", () => {
     search = "bang=crm_accounts&man=danh-sach";
     render(<ProjectPage slug="northwind" />);
     await waitFor(() => expect(editorProps).toHaveBeenLastCalledWith(expect.objectContaining({ bang: "crm_accounts", man: "danh-sach" })));
-    expect(layoutProps).not.toHaveBeenCalled();
     pathname = "/studio/du-an/northwind/dung/man-hinh/crm_leads";
     search = "man=form";
     render(<ProjectPage slug="northwind" />);

@@ -84,6 +84,19 @@ describe("a screen-editor write raises the header's pending count without a relo
     expect(api.updateLayout).toHaveBeenCalledTimes(1);
   });
 
+  // #46: the header and the editor each read the publish state; the one announcement must cost one read, not one per reader.
+  it("one Lưu sends one publish-state read", async () => {
+    mount("form");
+    expect(await screen.findByText(tf("studio.publish.status.live", { n: 2 }))).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: /^Trường Email,/ }));
+    await userEvent.type(await screen.findByRole("textbox", { name: "Nhãn khách thấy" }), "X");
+    const before = api.getPublishState.mock.calls.length;
+    await userEvent.click(screen.getByRole("button", { name: "Lưu thay đổi" }));
+    expect(await screen.findByText(pendingLine(1))).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(api.getPublishState.mock.calls.length - before).toBe(1);
+  });
+
   it("Lưu on the list", async () => {
     mount("danh-sach");
     expect(await screen.findByText(tf("studio.publish.status.live", { n: 2 }))).toBeInTheDocument();

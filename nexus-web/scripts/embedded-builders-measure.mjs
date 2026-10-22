@@ -37,7 +37,6 @@ const SOURCES = {
   ImportScreen: ["components/screens/ImportScreen.tsx"],
   EntityFieldEditor: ["components/studio/EntityFieldEditor.tsx"],
   DataModelBuilder: ["components/studio/DataModelBuilder.tsx"],
-  LayoutBuilder: ["components/studio/LayoutBuilder.tsx"],
 };
 
 // Same pattern as test/studio-style-gate.test.ts (nexusBeToken).

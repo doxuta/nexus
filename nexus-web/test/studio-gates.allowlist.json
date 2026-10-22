@@ -27,15 +27,11 @@
   "strings": {
     "components/studio/assistant/useAssistantChat.ts": 3,
     "components/studio/EntityFieldEditor.tsx": 1,
-    "components/studio/LayoutBuilder.tsx": 90,
     "components/studio/WorkflowBuilder.tsx": 1
   },
   "studioValues": {},
   "style": {
-    "components/studio/CustomerPreviewFrame.tsx::hex": 1,
-    "components/studio/LayoutBuilder.tsx::nexusBeToken": 266,
-    "components/studio/LayoutBuilder.tsx::rounded": 59,
-    "components/studio/LayoutBuilder.tsx::shadow": 3
+    "components/studio/CustomerPreviewFrame.tsx::hex": 1
   },
   "tokenScoped": {
     "components/studio/build/RuleListPage.tsx": 2,

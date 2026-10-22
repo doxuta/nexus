@@ -30,6 +30,10 @@ export function IndexFixNotice({ entity, field }: { entity: string; field?: Fiel
     setBusy(true); setErr(null);
     try {
       await updateField(id, { options: withIndexed(options, true, true) });
+      // options.indexed applies live and never enters the field draft (DraftFieldRepo.SaveEdit), but `options` go out
+      // wholesale. Inside /studio the field was read over the draft overlay, so a pending field draft is written back as it
+      // was and the pending count holds: no emitDraftsChanged (#46). Outside /studio (report / dashboard viewer) the read
+      // is live, and this edit can drop a pending field draft: see the issue on IndexFixNotice draft loss.
       await qc.invalidateQueries({ queryKey: qk.fields(entity) });
     } catch (e) {
       setErr(e instanceof Error ? e.message : t("page.reports.config.indexError"));

@@ -261,7 +261,7 @@ export function errorMessage(err: unknown): string {
 
 // Screen (layout) save sentences for the Studio only (specs/075 FR-107). They are NOT in ERROR_MESSAGES on purpose:
 // errorMessage() prefers a mapped sentence over the server's own, and LAYOUT_INVALID carries ~100 distinct, specific
-// reasons that other screens (AI Builder card, old LayoutBuilder) still show as the server wrote them.
+// reasons that other screens (the AI Builder card) still show as the server wrote them.
 const STUDIO_ERRORS: Record<string, string> = {
   LAYOUT_INVALID: "Màn này chưa lưu được: còn trường bắt buộc chưa nằm trên form hoặc có thiết lập không hợp lệ.",
   LAYOUT_VISIBLE_WHEN_INVALID: "Điều kiện \"Chỉ hiện khi\" chưa hợp lệ: trường điều khiển phải nằm trên form, không là chính nó, không tạo vòng, và trường bắt buộc không được ẩn.",

@@ -87,7 +87,7 @@ describe("route table", () => {
     expect(parseStudioPath("/studio/du-an/northwind/dung/du-lieu/crm_accounts")?.params.bang).toBe("crm_accounts");
   });
 
-  it("?man= maps to the LayoutBuilder view; unknown values fall to undefined (builder default)", () => {
+  it("?man= maps to the screen-editor view; unknown values fall to undefined (the page opens the form)", () => {
     expect(viewOfMan("form")).toBe("Form");
     expect(viewOfMan("ho-so")).toBe("Detail");
     expect(viewOfMan("danh-sach")).toBe("List");

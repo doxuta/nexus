@@ -124,6 +124,8 @@ export function EntityPage({
         // options replace wholesale server-side: send them (merged) only when the choice changed.
         ...(eeNameField !== storedNameField ? { options: { ...storedOptions, labelField: eeNameField } } : {}),
       });
+      // No emitDraftsChanged: PUT /admin/entities/:name applies live even on a delivered project (a table is only ever
+      // drafted as a delete), so the pending count has not moved (#46).
       await qc.invalidateQueries({ queryKey: qk.entities() });
       await qc.invalidateQueries({ queryKey: qk.fields(entity.name) }); // isLabel moved with the choice
       await qc.invalidateQueries({ queryKey: ["studio", "count", "entities"] }); // the project's own list/route cache

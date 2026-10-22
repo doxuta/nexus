@@ -1,7 +1,7 @@
 // specs/075 T004: four api.ts functions have routes that check-orphan-endpoints.py cannot see being called (it is blind to
 // the method and to who calls the helper). Each must keep at least one caller in app/ or components/, so deleting the last
-// screen (or relation) builder that uses it cannot silently orphan a backend route. Today the callers are LayoutBuilder,
-// ScreenEditor (L1a), the old relationship designer and PropertyPanel (deleted in L6); L6 moved the relation ones to the new map.
+// screen (or relation) builder that uses it cannot silently orphan a backend route. Today the callers are the ScreenEditor
+// (L1a) and the relation map (L6); the legacy LayoutBuilder went in #46.
 import { describe, expect, it } from "vitest";
 import { listSources, read, stripComments } from "./studioGateScan";
 
