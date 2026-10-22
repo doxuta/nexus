@@ -2,13 +2,17 @@ package PKG
 
 // Held out of the eval run: regrade.sh copies this file, with its package name set, next to a case's hidden test.
 // A database/sql driver that records every statement and answers from an in-memory table of notes, so the hidden
-// tests depend on nothing in the agent's workspace but the code under test.
+// tests depend on nothing in the agent's workspace but the code under test. It honours what the query says: the
+// top-level AND conjuncts of its WHERE clause (`col = ?`, `col IS NULL`; a top-level OR filters nothing, since it
+// would let rows through anyway), its ORDER BY, its LIMIT/OFFSET. A query that forgets the tenant, the record or the
+// order gets the rows it asked for, and the tests see it.
 
 import (
 	"database/sql"
 	"database/sql/driver"
 	"io"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,7 +27,7 @@ type hiddenCall struct {
 	args  []driver.Value
 }
 
-// hiddenDB holds the rows of sys_record_notes, newest first, and every statement it was sent.
+// hiddenDB holds the rows of sys_record_notes, in the order a test stored them, and every statement it was sent.
 type hiddenDB struct {
 	mu    sync.Mutex
 	calls []hiddenCall
@@ -108,19 +112,76 @@ func (s *hiddenDB) record(q string, args []driver.Value) {
 }
 
 var (
-	hiddenSelect = regexp.MustCompile(`(?is)^\s*SELECT\s+(.*?)\s+FROM\s`)
-	hiddenLimit  = regexp.MustCompile(`(?is)\bLIMIT\s+(\?|\d+)(?:\s+OFFSET\s+(\?|\d+))?\s*$`)
+	hiddenSelect  = regexp.MustCompile(`(?is)^\s*SELECT\s+(.*?)\s+FROM\s`)
+	hiddenWhere   = regexp.MustCompile(`(?is)\bWHERE\b(.*?)(?:\bGROUP\s+BY\b|\bORDER\s+BY\b|\bLIMIT\b|$)`)
+	hiddenOrderBy = regexp.MustCompile(`(?is)\bORDER\s+BY\b(.*?)(?:\bLIMIT\b|$)`)
+	hiddenLimit   = regexp.MustCompile(`(?is)\bLIMIT\s+(\?|\d+)(?:\s+OFFSET\s+(\?|\d+))?\s*$`)
+	hiddenEq      = regexp.MustCompile(`(?is)^\(?\s*(?:\w+\.)?` + "`?" + `(\w+)` + "`?" + `\s*=\s*\?\s*\)?$`)
+	hiddenIsNull  = regexp.MustCompile(`(?is)^\(?\s*(?:\w+\.)?` + "`?" + `(\w+)` + "`?" + `\s+IS\s+NULL\s*\)?$`)
+	hiddenOrWord  = regexp.MustCompile(`(?i)^OR\b`)
+	hiddenAndWord = regexp.MustCompile(`(?i)^AND\b`)
 )
 
-// answer serves a COUNT with the number of rows, and any other SELECT with the columns it names, newest row
-// first, honoring a trailing LIMIT/OFFSET.
+// hiddenConjunct is one top-level AND term of a WHERE clause, with the index of its first placeholder among the
+// statement's arguments (-1 when it has none).
+type hiddenConjunct struct {
+	text string
+	arg  int
+}
+
+// hiddenConjuncts splits a statement's WHERE clause into its top-level AND terms; topOr reports a top-level OR.
+func hiddenConjuncts(q string) (terms []hiddenConjunct, topOr bool) {
+	loc := hiddenWhere.FindStringSubmatchIndex(q)
+	if loc == nil {
+		return nil, false
+	}
+	start, end := loc[2], loc[3]
+	depth, from := 0, start
+	cut := func(to int) {
+		text := strings.TrimSpace(q[from:to])
+		arg := -1
+		if strings.Contains(text, "?") {
+			arg = strings.Count(q[:from], "?")
+		}
+		terms = append(terms, hiddenConjunct{text, arg})
+	}
+	for i := start; i < end; i++ {
+		switch q[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+		boundary := depth == 0 && (i == start || q[i-1] == ' ' || q[i-1] == '\n' || q[i-1] == '\t' || q[i-1] == ')')
+		if !boundary {
+			continue
+		}
+		if hiddenOrWord.MatchString(q[i:end]) && (i+2 == end || !isWordByte(q[i+2])) {
+			topOr = true
+		}
+		if hiddenAndWord.MatchString(q[i:end]) && (i+3 == end || !isWordByte(q[i+3])) {
+			cut(i)
+			from = i + 3
+		}
+	}
+	cut(end)
+	return terms, topOr
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+}
+
+// answer serves a COUNT with the number of matching rows, and any other SELECT with the columns it names, filtered,
+// ordered and limited as the statement says.
 func (s *hiddenDB) answer(q string, args []driver.Value) driver.Rows {
 	m := hiddenSelect.FindStringSubmatch(q)
 	if m == nil {
 		return &hiddenRows{}
 	}
+	rows := s.filter(q, args)
 	if strings.Contains(strings.ToUpper(m[1]), "COUNT(") {
-		return &hiddenRows{cols: []string{"count"}, vals: [][]driver.Value{{int64(len(s.rows))}}}
+		return &hiddenRows{cols: []string{"count"}, vals: [][]driver.Value{{int64(len(rows))}}}
 	}
 	var cols []string
 	for _, c := range strings.Split(m[1], ",") {
@@ -133,7 +194,7 @@ func (s *hiddenDB) answer(q string, args []driver.Value) driver.Rows {
 		}
 		cols = append(cols, strings.Trim(strings.TrimSpace(c), "`"))
 	}
-	rows := s.rows
+	hiddenSort(q, rows)
 	if lm := hiddenLimit.FindStringSubmatchIndex(q); lm != nil {
 		n := strings.Count(q[:lm[0]], "?")
 		val := func(lo, hi int) int {
@@ -166,6 +227,99 @@ func (s *hiddenDB) answer(q string, args []driver.Value) driver.Rows {
 		out.vals = append(out.vals, vals)
 	}
 	return out
+}
+
+// filter keeps the rows every `col = ?` and `col IS NULL` conjunct accepts; a top-level OR keeps them all.
+func (s *hiddenDB) filter(q string, args []driver.Value) []map[string]driver.Value {
+	terms, topOr := hiddenConjuncts(q)
+	var out []map[string]driver.Value
+	for _, r := range s.rows {
+		keep := true
+		for _, t := range terms {
+			if topOr {
+				break
+			}
+			if m := hiddenEq.FindStringSubmatch(t.text); m != nil && t.arg >= 0 && t.arg < len(args) {
+				keep = keep && hiddenEqual(r[m[1]], args[t.arg])
+			} else if m := hiddenIsNull.FindStringSubmatch(t.text); m != nil {
+				keep = keep && r[m[1]] == nil
+			}
+		}
+		if keep {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func hiddenEqual(a, b driver.Value) bool {
+	if ta, ok := a.(time.Time); ok {
+		tb, ok := b.(time.Time)
+		return ok && ta.Equal(tb)
+	}
+	return a == b
+}
+
+// hiddenSort orders rows by the statement's ORDER BY (column [ASC|DESC], …); without one they stay in the order
+// the test stored them, which the tests make wrong on purpose.
+func hiddenSort(q string, rows []map[string]driver.Value) {
+	m := hiddenOrderBy.FindStringSubmatch(q)
+	if m == nil {
+		return
+	}
+	type key struct {
+		col  string
+		desc bool
+	}
+	var keys []key
+	for _, part := range strings.Split(m[1], ",") {
+		f := strings.Fields(strings.TrimSpace(part))
+		if len(f) == 0 {
+			continue
+		}
+		col := f[0]
+		if i := strings.LastIndex(col, "."); i >= 0 {
+			col = col[i+1:]
+		}
+		keys = append(keys, key{strings.Trim(col, "`"), len(f) > 1 && strings.EqualFold(f[1], "DESC")})
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		for _, k := range keys {
+			c := hiddenCompare(rows[i][k.col], rows[j][k.col])
+			if c != 0 {
+				return (c < 0) != k.desc
+			}
+		}
+		return false
+	})
+}
+
+func hiddenCompare(a, b driver.Value) int {
+	switch x := a.(type) {
+	case time.Time:
+		if y, ok := b.(time.Time); ok {
+			return x.Compare(y)
+		}
+	case string:
+		if y, ok := b.(string); ok {
+			return strings.Compare(x, y)
+		}
+	case bool:
+		if y, ok := b.(bool); ok && x != y {
+			if x {
+				return 1
+			}
+			return -1
+		}
+	case int64:
+		if y, ok := b.(int64); ok && x != y {
+			if x < y {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }
 
 type hiddenRows struct {

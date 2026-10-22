@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Re-grade a `claude plugin eval --keep-temp` run with real commands:
 python3 evals/harness/regrade.py <aggregate-result.json> [--archive DIR] [--clean]
+python3 evals/harness/regrade.py --from-archive DIR
 
 `claude plugin eval` has no custom-code graders, so its own score reads files and the gates.txt the agent wrote.
 This script checks the same runs the hard way. For every run in the result (both arms), it copies the workspace the
@@ -15,6 +16,9 @@ produced, or run it in a container.
 cost, tool calls, which plugin agents and skills were invoked, how often it ran each gate, the regrade checks),
 <case>/<arm>-<n>.diff (the workspace against its scaffold) and regrade.txt. --clean removes each kept run directory
 once it is graded.
+
+--from-archive DIR re-grades an archive instead, with no model and no kept directory: each run's workspace is rebuilt
+from its case's scaffold and its diff (patch -p1), graded again, and DIR's summary.json and regrade.txt are rewritten.
 Standard library only.
 """
 import argparse
@@ -155,6 +159,52 @@ def trace_stats(path):
             "gateCommands": dict(gates)}
 
 
+def regrade_archive(archive, env):
+    """Rebuild every archived run from its scaffold and its diff, grade it again, rewrite the archive's records."""
+    path = os.path.join(archive, "summary.json")
+    with open(path) as f:
+        summary = json.load(f)
+    log, bases = [], {}
+    try:
+        for r in summary["runs"]:
+            case_dir = os.path.join(HERE, r["case"])
+            if r["case"] not in bases:
+                bases[r["case"]] = scaffold(case_dir)
+            root, base = bases[r["case"]]
+            ws = os.path.join(root, "rebuilt")
+            shutil.copytree(base, ws, symlinks=True)
+            try:
+                p = subprocess.run(["patch", "-p1", "-s", "-i", os.path.abspath(os.path.join(archive, r["case"], f'{r["arm"]}-{r["run"]}.diff'))],
+                                   cwd=ws, capture_output=True, text=True)
+                ok, output = regrade_ws(case_dir, ws, env) if p.returncode == 0 else (False, "patch failed: " + p.stdout + p.stderr)
+            finally:
+                remove(ws)
+            r["regradePass"], r["regrade"] = ok, redact(output, root).splitlines()
+            head = f'{r["case"]} {r["arm"]} run {r["run"]}: regrade {"pass" if ok else "FAIL"} (eval score {r["evalScore"]})'
+            log += [head] + ["   " + line for line in r["regrade"]]
+            print("\n".join(log[-1 - len(r["regrade"]):]), file=sys.stderr)
+    finally:
+        for root, _ in bases.values():
+            remove(root)
+    with open(path, "w") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+    with open(os.path.join(archive, "regrade.txt"), "w") as f:
+        f.write("\n".join(log) + "\n")
+    return summary["runs"]
+
+
+def table(out):
+    print("| case | WITH | W/OUT | Δ | runs |")
+    print("|---|---|---|---|---|")
+    for name in dict.fromkeys(r["case"] for r in out):
+        w = rate([r for r in out if r["case"] == name and r["arm"] == "with"])
+        wo = rate([r for r in out if r["case"] == name and r["arm"] == "without"])
+        n = sum(r["case"] == name for r in out)
+        print(f"| {name} | {fmt(w)} | {fmt(wo)} | {'—' if w is None or wo is None else f'{w - wo:+.2f}'} | {n} |")
+    w, wo = rate([r for r in out if r["arm"] == "with"]), rate([r for r in out if r["arm"] == "without"])
+    print(f"| **all** | {fmt(w)} | {fmt(wo)} | {'—' if w is None or wo is None else f'{w - wo:+.2f}'} | {len(out)} |")
+
+
 def rate(runs):
     return sum(r["regradePass"] for r in runs) / len(runs) if runs else None
 
@@ -165,15 +215,21 @@ def fmt(x):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("result", help="aggregate-result.json (or the --json file) of a --keep-temp run")
+    ap.add_argument("result", nargs="?", help="aggregate-result.json (or the --json file) of a --keep-temp run")
+    ap.add_argument("--from-archive", help="re-grade an archive written by --archive, rebuilding each run from its diff")
     ap.add_argument("--archive", help="write summary.json, one diff per run and regrade.txt here")
     ap.add_argument("--clean", action="store_true", help="remove each kept run directory once graded")
     a = ap.parse_args()
+    if a.from_archive:
+        table(regrade_archive(a.from_archive, go_env()))
+        return
+    if not a.result:
+        ap.error("give a result file or --from-archive")
     with open(a.result) as f:
         result = json.load(f)
     root = result["suite"]["root"]
     env = go_env()
-    out, rows, log = [], [], []
+    out, log = [], []
     for case in result["cases"]:
         case_dir = os.path.join(root, case["dir"])
         base = scaffold(case_dir) if a.archive else None
@@ -205,14 +261,7 @@ def main():
                     remove(kept)
         if base:
             remove(base[0])
-        w, wo = rate(arms["with"]), rate(arms["without"])
-        rows.append((case["name"], w, wo, None if w is None or wo is None else w - wo, len(arms["with"]) + len(arms["without"])))
-    print("| case | WITH | W/OUT | Δ | runs |")
-    print("|---|---|---|---|---|")
-    for name, w, wo, d, n in rows:
-        print(f"| {name} | {fmt(w)} | {fmt(wo)} | {'—' if d is None else f'{d:+.2f}'} | {n} |")
-    w, wo = rate([r for r in out if r["arm"] == "with"]), rate([r for r in out if r["arm"] == "without"])
-    print(f"| **all** | {fmt(w)} | {fmt(wo)} | {'—' if w is None or wo is None else f'{w - wo:+.2f}'} | {len(out)} |")
+    table(out)
     with open(os.path.join(os.path.dirname(os.path.abspath(a.result)), "regrade.json"), "w") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
     if a.archive:

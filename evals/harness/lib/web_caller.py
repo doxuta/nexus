@@ -1,5 +1,6 @@
-"""python3 web_caller.py <api.ts> <path-fragment>: exit 0 when an exported function of the file, with its comments
-removed, sends a GET whose path contains the fragment. Used by regrade.sh, which runs it outside the sandbox."""
+"""python3 web_caller.py <api.ts> <path-regex>: exit 0 when an exported function of the file, with its comments
+removed, sends a GET built from a template literal whose path is <path-regex> (then the end of the literal or a
+query string). Used by regrade.sh, which runs it outside the sandbox."""
 import re
 import sys
 
@@ -31,15 +32,15 @@ def strip_comments(src):
 
 
 def main():
-    path, fragment = sys.argv[1], sys.argv[2]
+    path, template = sys.argv[1], sys.argv[2]
     code = strip_comments(open(path, encoding="utf-8").read())
     starts = [m.start() for m in re.finditer(r"(?m)^export\s+(?:async\s+function|function|const)\s+\w+", code)]
     for a, b in zip(starts, starts[1:] + [len(code)]):
         body = code[a:b]
-        if re.search(r"""["']GET["']""", body) and re.search(r"[`'\"][^`'\"]*" + re.escape(fragment), body):
+        if re.search(r"""["']GET["']""", body) and re.search("`" + template + r"(?:`|\?)", body):
             print(body.splitlines()[0])
             return 0
-    print(f"no exported function in {path} sends GET …{fragment} (comments ignored)")
+    print(f"no exported function in {path} sends GET `{template}` (comments ignored)")
     return 1
 
 

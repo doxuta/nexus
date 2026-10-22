@@ -1,7 +1,8 @@
 package notes
 
 // Held out of the run; regrade.sh adds it to the finished workspace. Listing and counting a record's notes must
-// open their WHERE clause with the caller's tenant, ANDed (an OR leaks), and bind it first.
+// filter on the caller's tenant: one top-level AND term `tenant_id = ?` whose placeholder binds the tenant, and no
+// top-level OR (which would let other tenants' rows through). Where the term sits in the clause does not matter.
 
 import (
 	"context"
@@ -9,11 +10,7 @@ import (
 	"testing"
 )
 
-var (
-	hiddenTenantFirst = regexp.MustCompile(`(?i)\bWHERE\s+tenant_id\s*=\s*\?\s+AND\s+entity_name\s*=\s*\?`)
-	hiddenWhere       = regexp.MustCompile(`(?is)\bWHERE\b(.*?)(\bORDER\s+BY\b|\bLIMIT\b|$)`)
-	hiddenOr          = regexp.MustCompile(`(?i)\bOR\b`)
-)
+var hiddenTenantTerm = regexp.MustCompile(`(?i)^\(?\s*(?:\w+\.)?` + "`?" + `tenant_id` + "`?" + `\s*=\s*\?\s*\)?$`)
 
 func TestHidden_ListAndCountFilterTheTenant(t *testing.T) {
 	db, s := newHiddenDB(t)
@@ -30,13 +27,14 @@ func TestHidden_ListAndCountFilterTheTenant(t *testing.T) {
 
 func hiddenFiltersTenant(t *testing.T, name string, c hiddenCall) {
 	t.Helper()
-	if !hiddenTenantFirst.MatchString(c.query) {
-		t.Errorf("%s: want `WHERE tenant_id = ? AND entity_name = ?`, got %q", name, c.query)
+	terms, topOr := hiddenConjuncts(c.query)
+	if topOr {
+		t.Errorf("%s: a top-level OR in the WHERE clause lets other tenants' rows through: %q", name, c.query)
 	}
-	if w := hiddenWhere.FindStringSubmatch(c.query); w != nil && hiddenOr.MatchString(w[1]) {
-		t.Errorf("%s: an OR in the WHERE clause lets other tenants' rows through: %q", name, c.query)
+	for _, term := range terms {
+		if hiddenTenantTerm.MatchString(term.text) && term.arg >= 0 && term.arg < len(c.args) && c.args[term.arg] == "tenant-a" {
+			return
+		}
 	}
-	if len(c.args) == 0 || c.args[0] != "tenant-a" {
-		t.Errorf("%s: the tenant must be the first bound value, got %v", name, c.args)
-	}
+	t.Errorf("%s: no top-level `tenant_id = ?` term bound to the tenant in %q (args %v)", name, c.query, c.args)
 }

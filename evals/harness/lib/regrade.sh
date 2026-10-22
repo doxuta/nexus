@@ -35,6 +35,23 @@ hidden() { # hidden <package>: add the case's hidden tests for internal/<package
 	if [ "$1" = handlers ]; then cp "$lib/hidden/handlers_wiring_test.go" "$dst/zz_hidden_wiring_test.go"; fi
 }
 
+hidden_pass() { # hidden_pass <package>...: each hidden test reports `--- PASS` (a TestMain that skips tests fails)
+	local p n out names=() pkgs=() missing=()
+	for p in "$@"; do
+		pkgs+=("./internal/$p/")
+		names+=($(grep -ho '^func TestHidden_[A-Za-z0-9_]*' "$case_dir/hidden/$p/"*_test.go | sed 's/^func //'))
+	done
+	out=$(go test -count=1 -v -run '^TestHidden_' "${pkgs[@]}" 2>&1)
+	for n in "${names[@]}"; do
+		grep -qF -- "--- PASS: $n (" <<<"$out" || missing+=("$n")
+	done
+	if [ ${#missing[@]} -gt 0 ]; then
+		echo "no --- PASS line for: ${missing[*]}"
+		echo "$out" | tail -20
+		return 1
+	fi
+}
+
 go_gates() { # the AGENTS.md Go gates that run without a database
 	cd "$ws/nexus-platform"
 	check "gofmt -l . is empty" bash -c 'out=$(gofmt -l .); [ -z "$out" ] || { echo "$out"; exit 1; }'

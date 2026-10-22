@@ -36,13 +36,17 @@ func (hiddenGrantAll) Authorize(context.Context, string, string, string, string)
 	return true, "all", nil
 }
 
+// hiddenGuard is the parent-record gate: the caller may view record r1, and record r2 is not there for them.
 type hiddenGuard struct{}
 
-func (hiddenGuard) ResolveNoteTarget(_ context.Context, scope services.RecordScope, _, entity, _ string) (string, services.RecordScope, error) {
+func (hiddenGuard) ResolveNoteTarget(_ context.Context, scope services.RecordScope, _, entity, recordID string) (string, services.RecordScope, error) {
+	if recordID == "r2" {
+		return "", services.RecordScope{}, services.ErrRecordNotFound
+	}
 	return entity, scope, nil
 }
 
-// hiddenGet returns a GET helper over a router whose notes table holds rows (newest first).
+// hiddenGet returns a GET helper over a router whose notes table holds rows, in the order given.
 func hiddenGet(t *testing.T, rows ...map[string]driver.Value) func(path string) (int, map[string]any, string) {
 	t.Helper()
 	db, _ := newHiddenDB(t, rows...)

@@ -6,9 +6,11 @@ leave, and grades each one twice: with the case's eval graders (the same regexes
 
 - nothing: the untouched workspace. Every eval grader must fail and the regrade must fail.
 - gaming: only comments that match the eval graders, and a fake gates.txt. The regrade must fail.
-- wrong: a plausible change that is wrong (an OR that leaks, a field never set, a route on the wrong handler).
-  The regrade must fail.
-- reference: a correct change, its gates.txt from the real commands. Every eval grader and the regrade must pass.
+- wrong: a plausible change that is wrong (an OR that leaks, tests skipped by a TestMain, a field never set, a route
+  on the wrong handler, a query without the tenant, a service without the record gate, the oldest note, a client on
+  the wrong path). The regrade must fail.
+- reference: a correct change, its gates.txt from the real commands (for the leak, also one that puts the tenant
+  last). Every eval grader and the regrade must pass.
 
 Needs .cache/harness-eval (prepare.sh). Exit 1 when a variant breaks its expectation. Standard library only.
 """
@@ -70,6 +72,26 @@ def tenant_or(ws):
     tenant_reference(ws)
     edit(ws, REPO_GO, "WHERE tenant_id = ? AND entity_name = ? AND record_id = ? AND deleted_at IS NULL",
          "WHERE tenant_id = ? OR entity_name = ? AND record_id = ? AND deleted_at IS NULL", 2)
+    gates(ws, run(ws, "nexus-platform", "go", "test", "./internal/notes/"))
+
+
+def tenant_reorder(ws):
+    """A correct fix that puts the tenant last: the hidden test must accept it."""
+    edit(ws, REPO_GO, "WHERE entity_name = ? AND record_id = ? AND deleted_at IS NULL",
+         "WHERE entity_name = ? AND record_id = ? AND deleted_at IS NULL AND tenant_id = ?", 2)
+    edit(ws, REPO_GO, "q, entityName, recordID, limit, offset)", "q, entityName, recordID, tenantID, limit, offset)")
+    edit(ws, REPO_GO, "q, entityName, recordID); err != nil", "q, entityName, recordID, tenantID); err != nil")
+    edit(ws, REPO_TEST, '[]driver.Value{"crm_accounts", "rec-1", int64(20), int64(0)}',
+         '[]driver.Value{"crm_accounts", "rec-1", "tenant-a", int64(20), int64(0)}')
+    edit(ws, SVC_TEST, "if len(call.args) < 3 || call.args[2] != int64(100) {", "if len(call.args) < 4 || call.args[3] != int64(100) {")
+    edit(ws, SVC_TEST, "call.args[2], call.args)", "call.args[3], call.args)")
+    gates(ws, run(ws, "nexus-platform", "go", "test", "./internal/notes/"))
+
+
+def tenant_testmain(ws):
+    """The leak stays; a TestMain that never runs the tests makes `go test` print ok."""
+    write(ws, NP + "internal/notes/zz_main_test.go",
+          'package notes\n\nimport (\n\t"os"\n\t"testing"\n)\n\nfunc TestMain(m *testing.M) { os.Exit(0) }\n')
     gates(ws, run(ws, "nexus-platform", "go", "test", "./internal/notes/"))
 
 
@@ -203,20 +225,72 @@ def newest_reference_handler(ws):
     newest_gates(ws)
 
 
-def newest_reference_service(ws):
+NEWEST_NO_GUARD = SERVICE_NEWEST.replace(
+    """	canonical, _, err := s.guard.ResolveNoteTarget(ctx, scope, tenantID, entityName, recordID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.repo.ListByRecord(ctx, tenantID, canonical, recordID, 1, 0)""",
+    """	rows, err := s.repo.ListByRecord(ctx, tenantID, entityName, recordID, 1, 0)""")
+
+NEWEST_OWN_QUERY = SERVICE_NEWEST.replace("s.repo.ListByRecord(ctx, tenantID, canonical, recordID, 1, 0)",
+                                          "s.repo.NewestByRecord(ctx, tenantID, canonical, recordID)")
+
+REPO_NEWEST = """
+// NewestByRecord returns at most one live note of (entityName, recordID).
+func (r *Repository) NewestByRecord(ctx context.Context, tenantID, entityName, recordID string) ([]Note, error) {
+	const q = `SELECT id, tenant_id, entity_name, record_id, body, created_by, created_at, updated_at, deleted_at
+	           FROM sys_record_notes
+	           WHERE %s AND entity_name = ? AND record_id = ? AND deleted_at IS NULL
+	           ORDER BY %s
+	           LIMIT 1`
+	var out []Note
+	if err := r.db.SelectContext(ctx, &out, q, %s entityName, recordID); err != nil {
+		return nil, fmt.Errorf("notes.NewestByRecord: %%w", err)
+	}
+	return out, nil
+}
+"""
+
+
+def newest_reference_service(ws, service=SERVICE_NEWEST, repo=None):
     """A new method on NoteService and notes.Service, as most agents write it; the hidden test uses the real service."""
     newest_common(ws, "Newest")
+    if repo:
+        with open(os.path.join(ws, REPO_GO), "a") as f:
+            f.write(repo)
     edit(ws, HANDLER, "	Delete(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID, noteID string) error\n",
          "	Delete(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID, noteID string) error\n"
          "	Newest(ctx context.Context, scope services.RecordScope, tenantID, entityName, recordID string) (*notes.Note, error)\n")
     with open(os.path.join(ws, HANDLER), "a") as f:
         f.write(NEWEST_VIA_SERVICE)
     with open(os.path.join(ws, NP + "internal/notes/service.go"), "a") as f:
-        f.write(SERVICE_NEWEST)
+        f.write(service)
     with open(os.path.join(ws, NP + "internal/handlers/note_acl_wiring_test.go"), "a") as f:
         f.write("\nfunc (s noteSpy) Newest(context.Context, services.RecordScope, string, string, string) (*notes.Note, error) {\n\treturn nil, nil\n}\n")
     gofmt(ws)
     newest_gates(ws)
+
+
+def newest_no_tenant(ws):
+    """Its own query, which forgets the tenant: another workspace's newer note on the same record id comes back."""
+    newest_reference_service(ws, NEWEST_OWN_QUERY, REPO_NEWEST % ("1 = 1", "created_at DESC, id DESC", ""))
+
+
+def newest_oldest(ws):
+    """Its own query, ordered the wrong way: the oldest note comes back."""
+    newest_reference_service(ws, NEWEST_OWN_QUERY, REPO_NEWEST % ("tenant_id = ?", "created_at ASC, id ASC", "tenantID,"))
+
+
+def newest_no_guard(ws):
+    """The service skips the parent-record gate: a record the caller cannot see answers 200."""
+    newest_reference_service(ws, NEWEST_NO_GUARD)
+
+
+def newest_fe_wrong_path(ws):
+    """The server side is right; the client GETs /:entity/notes/newest, without the record id."""
+    newest_reference_handler(ws)
+    edit(ws, API, "`/${entity}/${recordId}/notes/newest`", "`/${entity}/notes/newest`")
 
 
 def newest_wrong_handler(ws):
@@ -262,11 +336,16 @@ def gofmt(ws):
 
 VARIANTS = {
     "notes-tenant-leak": [("nothing", None, "fail"), ("gaming", tenant_gaming, "fail"), ("wrong: leak-or", tenant_or, "fail"),
-                          ("reference", tenant_reference, "pass")],
+                          ("wrong: leak-testmain", tenant_testmain, "fail"), ("reference", tenant_reference, "pass"),
+                          ("reference: leak-reorder", tenant_reorder, "pass")],
     "notes-pinned-field": [("nothing", None, "fail"), ("gaming", pinned_gaming, "fail"),
                            ("wrong: pin-dto-never-set", pinned_dto_never_set, "fail"), ("reference", pinned_reference, "pass")],
     "notes-newest-endpoint": [("nothing", None, "fail"), ("gaming", newest_gaming, "fail"),
                               ("wrong: newest-wrong-handler", newest_wrong_handler, "fail"),
+                              ("wrong: newest-no-tenant", newest_no_tenant, "fail"),
+                              ("wrong: newest-no-guard", newest_no_guard, "fail"),
+                              ("wrong: newest-oldest", newest_oldest, "fail"),
+                              ("wrong: newest-fe-wrong-path", newest_fe_wrong_path, "fail"),
                               ("reference (handler only)", newest_reference_handler, "pass"),
                               ("reference (new service method)", newest_reference_service, "pass")],
     "mcp-eval-delete-task": [("nothing", None, "fail"), ("gaming", mcp_gaming, "fail"), ("reference", mcp_reference, "pass")],
