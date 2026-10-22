@@ -13,6 +13,7 @@ import {
   getTenantPayment, updateTenantPayment, type PaymentConfig,
 } from "@/lib/api";
 import { applyBranding } from "@/lib/branding";
+import { emitDraftsChanged } from "@/lib/draftEvents";
 import { contrastOnWhite, CONTRAST_MIN } from "@/lib/contrast";
 import { t, tf } from "@/lib/i18n";
 import { toast } from "@/components/ui/Toaster";
@@ -80,6 +81,7 @@ function BrandingForm({ initial, tabs, after }: { initial: Branding; tabs: strin
       // other tab (and the next login page) would paint a colour the customer has not been given.
       applyBranding(b, draft ? { persist: false } : undefined); // brand this session immediately — no reload needed
       qc.setQueryData(["tenant-branding"], { branding: b, draftState } satisfies BrandingDoc);
+      emitDraftsChanged("branding"); // a branding draft on a delivered project: the header recounts
     },
     onError: (e) => setErr(e instanceof ApiError ? e.message : t("page.branding.saveFailed")),
   });

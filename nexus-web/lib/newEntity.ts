@@ -51,6 +51,7 @@ export async function createEntityInApp(input: { name: string; label: string; ap
     if (!app || !entityId) return;
     const cur = await adminApp(app.id);
     await replaceAppNav(app.id, cur.items.filter((i) => !(i.itemType === "entity" && i.refId === entityId)).map(navRow));
+    emitDraftsChanged("app"); // the menu PUT is an app draft on a delivered workspace: the header recounts
   };
   return { entity, aclSeed: created.aclSeed, addedToNav, navError, undo };
 }

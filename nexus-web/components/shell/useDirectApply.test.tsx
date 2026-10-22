@@ -9,9 +9,9 @@ vi.mock("@/lib/api", () => ({
     }
   },
 }));
-import { getPublishState } from "@/lib/api";
+import { ApiError, getPublishState } from "@/lib/api";
 import { emitDraftsChanged } from "@/lib/draftEvents";
-import { useDirectApply } from "./useDirectApply";
+import { FramePublishState, useDirectApply } from "./useDirectApply";
 
 const run = vi.fn();
 
@@ -97,5 +97,45 @@ describe("useDirectApply (specs/063 S7-5)", () => {
     fireEvent.click(screen.getByText("cell"));
     expect(await screen.findByText("Áp ngay")).toBeTruthy();
     expect(run).not.toHaveBeenCalled();
+  });
+
+  // #53: inside a Studio project frame the hook answers from the frame's one read, never from one of its own.
+  describe("in a project frame", () => {
+    const framed = (value: { data?: { delivered: boolean }; error: unknown }) => (
+      <FramePublishState value={value}><InlineProbe /></FramePublishState>
+    );
+
+    it("delivered: asks in place, with no read on mount, on an announcement or at the click", async () => {
+      render(framed({ data: { delivered: true }, error: null }));
+      emitDraftsChanged();
+      fireEvent.click(screen.getByText("cell"));
+      expect(await screen.findByText("Áp ngay")).toBeTruthy();
+      expect(run).not.toHaveBeenCalled();
+      expect(getPublishState).not.toHaveBeenCalled();
+    });
+
+    it("not delivered: runs at once, with no read", async () => {
+      render(framed({ data: { delivered: false }, error: null }));
+      fireEvent.click(screen.getByText("cell"));
+      await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+      expect(getPublishState).not.toHaveBeenCalled();
+    });
+
+    it("a 403 on the frame's read (legacy customer admin) is 'not delivered': runs at once, no read", async () => {
+      render(framed({ error: new ApiError(403, "FORBIDDEN", "x") }));
+      fireEvent.click(screen.getByText("cell"));
+      await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+      expect(screen.queryByText("Áp ngay")).toBeNull();
+      expect(getPublishState).not.toHaveBeenCalled();
+    });
+
+    it("any other failure is unknown: the click reads afresh instead of trusting 'not delivered'", async () => {
+      vi.mocked(getPublishState).mockResolvedValue({ delivered: true } as never);
+      render(framed({ error: new Error("500") }));
+      fireEvent.click(screen.getByText("cell"));
+      expect(await screen.findByText("Áp ngay")).toBeTruthy();
+      expect(getPublishState).toHaveBeenCalledTimes(1);
+      expect(run).not.toHaveBeenCalled();
+    });
   });
 });

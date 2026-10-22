@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppHomePanel } from "./AppHomePanel";
 import { ApiError, listDashboards, listRoles, listWorkQueuesAdmin, saveAppHome, type AdminApp } from "@/lib/api";
+import { onDraftsChanged } from "@/lib/draftEvents";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -61,5 +62,33 @@ describe("AppHomePanel", () => {
     vi.mocked(saveAppHome).mockRejectedValueOnce(new ApiError(409, "CONFLICT", "x"));
     await user.click(screen.getByRole("button", { name: "Lưu trang chủ" }));
     expect(await screen.findByText(/vừa được người khác sửa/)).toBeInTheDocument();
+  });
+
+  // #53 (verifier): on a delivered project the save is PUT /admin/apps/:id, an app draft (DraftAppStore.Update), so the header
+  // recounts: once the PUT has answered, never before, never on a refusal.
+  it("announces on the drafts bus once the save has answered, never before, never on a refusal", async () => {
+    const heard: string[] = [];
+    const off = onDraftsChanged((s) => heard.push(s));
+    try {
+      const user = userEvent.setup();
+      let answer!: () => void;
+      vi.mocked(saveAppHome).mockReturnValueOnce(new Promise((r) => { answer = () => r(APP); }));
+      mount();
+      await screen.findByLabelText("Lễ tân");
+      await user.click(screen.getByRole("button", { name: "Lưu trang chủ" }));
+      await waitFor(() => expect(saveAppHome).toHaveBeenCalledTimes(1));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(heard).toEqual([]);
+      answer();
+      await waitFor(() => expect(heard).toEqual(["app"]));
+      vi.mocked(saveAppHome).mockRejectedValueOnce(new ApiError(409, "CONFLICT", "x"));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Lưu trang chủ" })).toBeEnabled());
+      await user.click(screen.getByRole("button", { name: "Lưu trang chủ" }));
+      await waitFor(() => expect(saveAppHome).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(heard).toEqual(["app"]);
+    } finally {
+      off();
+    }
   });
 });

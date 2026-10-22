@@ -22,6 +22,7 @@ import { PageHeader } from "@/components/slds/PageHeader";
 import { Path } from "@/components/slds/Path";
 import { Spinner } from "@/components/slds/Spinner";
 import { useFacePaths } from "@/components/shell/ModeSwitch";
+import { FramePublishState } from "@/components/shell/useDirectApply";
 import { buildSteps, STEP_ROUTE, stepOfRoute } from "@/lib/buildSteps";
 import { t, tf } from "@/lib/i18n";
 import {
@@ -72,7 +73,9 @@ export function ProjectFrame({ slug, children }: { slug: string; children: React
   const W = identity.me?.workspace ?? null;
   const home = open && !W;
   const name = !open ? slug : home ? t("studio.project.home") : W?.tenantName || W?.tenantSlug || slug;
-  const publishState = usePublishState(slug).data;
+  const { data: publishState, error: publishError } = usePublishState(slug);
+  // useDirectApply on the page answers from this read instead of one of its own per announcement (#53).
+  const framePublish = useMemo(() => ({ data: publishState, error: publishError }), [publishState, publishError]);
   const step = stepOfRoute(route);
   const zone = zoneOfRoute(route);
 
@@ -94,11 +97,11 @@ export function ProjectFrame({ slug, children }: { slug: string; children: React
   );
 
   const surface = (
-    <>
+    <FramePublishState value={framePublish}>
       <ZoneTabs slug={slug} route={route} />
       {step && <FrameStepHeader step={step} home={home} />}
       <EmbeddedSurface>{children}</EmbeddedSurface>
-    </>
+    </FramePublishState>
   );
 
   return (

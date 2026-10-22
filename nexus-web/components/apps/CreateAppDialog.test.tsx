@@ -7,6 +7,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CreateAppDialog } from "./CreateAppDialog";
 import { ApiError, createApp, updateApp, type AdminApp } from "@/lib/api";
+import { onDraftsChanged } from "@/lib/draftEvents";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -174,5 +175,54 @@ describe("CreateAppDialog inside a Studio project (kh2)", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith("kho"));
     expect(hrefSet).not.toHaveBeenCalled();
     Object.defineProperty(window, "location", { configurable: true, value: original });
+  });
+});
+
+// #53: on a delivered project an edit (PUT /admin/apps/:id) is an app draft, so the header's pending count must recount once
+// the PUT has answered, never before and never on a refusal. A new app applies at once (POST, no draft): nothing to announce.
+describe("CreateAppDialog — the drafts bus (#53)", () => {
+  it("edit announces once the save has answered, never before, never on a refusal", async () => {
+    const heard: string[] = [];
+    const off = onDraftsChanged((s) => heard.push(s));
+    try {
+      let answer!: () => void;
+      vi.mocked(updateApp).mockReturnValueOnce(new Promise((r) => { answer = () => r(APP); }));
+      const { dialog, onOpenChange } = renderDialog(APP);
+      await userEvent.click(within(dialog).getByRole("button", { name: "Lưu thay đổi" }));
+      await waitFor(() => expect(updateApp).toHaveBeenCalledTimes(1));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(heard).toEqual([]);
+      answer();
+      await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+      expect(heard).toEqual(["app"]);
+
+      vi.mocked(updateApp).mockRejectedValueOnce(new ApiError(422, "APP_LABEL_REQUIRED", "x"));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Lưu thay đổi" }));
+      await waitFor(() => expect(updateApp).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(heard).toEqual(["app"]);
+    } finally {
+      off();
+    }
+  });
+
+  it("a create announces nothing (it applies at once)", async () => {
+    const heard: string[] = [];
+    const off = onDraftsChanged((s) => heard.push(s));
+    try {
+      vi.mocked(createApp).mockResolvedValue({ ...APP, name: "kho", label: "Kho" });
+      const onCreated = vi.fn();
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          <CreateAppDialog open onOpenChange={vi.fn()} onCreated={onCreated} />
+        </QueryClientProvider>,
+      );
+      await userEvent.type(within(screen.getByRole("dialog")).getByLabelText(/Tên app/), "Kho");
+      await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Tạo app" }));
+      await waitFor(() => expect(onCreated).toHaveBeenCalledWith("kho"));
+      expect(heard).toEqual([]);
+    } finally {
+      off();
+    }
   });
 });

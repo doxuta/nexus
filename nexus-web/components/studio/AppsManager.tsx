@@ -34,6 +34,7 @@ import {
   APP_HOME_BACKEND, ApiError, adminApp, adminApps, createApp, deleteApp, hasDraftChange, listDashboards, replaceAppNav, updateApp,
   type AdminApp, type AdminAppDetail, type AppNavReplaceItem,
 } from "@/lib/api";
+import { emitDraftsChanged } from "@/lib/draftEvents";
 import { qk } from "@/lib/query/keys";
 import { appIconByName, appToneIcon, isValidAppSlug, slugifyAppName } from "@/lib/apps";
 import { t } from "@/lib/i18n";
@@ -151,6 +152,7 @@ export function AppsManager({ app: selectedCode, onSelectApp }: { app?: string |
     setDeleteBusy(true);
     try {
       await deleteApp(deleting.id);
+      emitDraftsChanged("app"); // applies at once, but drops the app's draft (DraftAppStore.SoftDelete): the header recounts
       await invalidateAll();
       toast.success(t("page.apps.toast.deleted").replace("{label}", deleting.label));
       setDeleting(null);
@@ -174,6 +176,7 @@ export function AppsManager({ app: selectedCode, onSelectApp }: { app?: string |
         isDefault: true,
         sortOrder: app.sortOrder,
       });
+      emitDraftsChanged("app"); // an app draft on a delivered project: the header recounts
       await invalidateAll();
       toast.success(t("page.apps.toast.defaultSet").replace("{label}", app.label));
     } catch {
@@ -573,6 +576,7 @@ export function NavEditor({
         ...(i.label.trim() !== "" ? { label: i.label.trim() } : {}),
       }));
       await replaceAppNav(app.id, payload);
+      emitDraftsChanged("app"); // an app draft on a delivered project: the header recounts
       await onSaved();
       toast.success(fill(t("page.appMenu.toast.saved"), { label: app.label }));
       setStale(false);
