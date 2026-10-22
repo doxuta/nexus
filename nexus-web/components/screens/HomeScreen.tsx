@@ -30,7 +30,7 @@ import { pruneRecentRecords, onRecentsChanged, type RecentRecord } from "@/lib/r
 import { ALL_ITEMS, useActiveApp } from "@/lib/apps";
 import { selectAppHome, scopeToAppEntities, pickAppQueues } from "@/lib/appHome";
 import { AppHomeDashboard } from "@/components/screens/AppHomeDashboard";
-import { t, tf } from "@/lib/i18n";
+import { getLocale, t, tf } from "@/lib/i18n";
 import { PageHeader } from "@/components/slds/PageHeader";
 import { Card, RelatedListCard } from "@/components/slds/Card";
 import { Badge } from "@/components/slds/Badge";
@@ -269,7 +269,7 @@ export function HomeScreen() {
   const greetHour = now.getHours();
   const greetWord = t(greetHour < 12 ? "page.home.greet.morning" : greetHour < 18 ? "page.home.greet.afternoon" : "page.home.greet.evening");
   const firstName = user?.fullName?.split(" ").pop() ?? user?.email?.split("@")[0] ?? t("page.home.fallbackName");
-  const todayRaw = now.toLocaleDateString("vi-VN", {
+  const todayRaw = now.toLocaleDateString(getLocale() === "en" ? "en-US" : "vi-VN", {
     weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Ho_Chi_Minh",
   });
   const today = todayRaw.charAt(0).toLocaleUpperCase("vi") + todayRaw.slice(1);

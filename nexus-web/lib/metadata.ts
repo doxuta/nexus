@@ -1,6 +1,8 @@
 // Metadata type-system — khớp contract backend (sys_entities / sys_fields / api-conventions.md).
 // Đây là nguồn-sự-thật cho Layout Engine: mọi widget/grid/form render theo các type này.
 
+import { t } from "@/lib/i18n";
+
 export type FieldType =
   | "text"
   | "rich_text"
@@ -104,28 +106,35 @@ export interface RecordData {
 // `pending` = backend chưa hỗ trợ đầy đủ (gắn nhãn "đang phát triển").
 // `group: "advanced"` = xếp vào nhóm "Nâng cao / Tính toán" trong dropdown loại dữ liệu — 4 kiểu
 // computed/server-managed (formula/lookup/rollup/auto_number), tách khỏi nhóm cơ bản cho gọn.
-export const FIELD_TYPE_META: Record<FieldType, { label: string; pending?: boolean; group?: "advanced" }> = {
-  text: { label: "Văn bản" },
-  rich_text: { label: "Văn bản định dạng" },
-  number: { label: "Số" },
-  boolean: { label: "Đúng/Sai" },
-  date: { label: "Ngày" },
-  datetime: { label: "Ngày giờ" },
-  email: { label: "Email" },
-  currency: { label: "Tiền tệ" },
-  picklist: { label: "Chọn một" },
-  multi_select: { label: "Chọn nhiều" },
-  relation: { label: "Quan hệ" },
-  polymorphic_relation: { label: "Quan hệ đa hình" },
-  user: { label: "Người dùng" },
-  rating: { label: "Đánh giá" },
-  composite: { label: "Trường ghép" },
-  file: { label: "Tệp", pending: true },
-  image: { label: "Hình ảnh", pending: true },
-  formula: { label: "Công thức", group: "advanced" },
-  lookup: { label: "Tra cứu (lookup)", group: "advanced" },
-  rollup: { label: "Tổng hợp (rollup)", group: "advanced" },
-  auto_number: { label: "Số tự sinh", group: "advanced" },
+// The label is read from lib/i18n (fieldType.<type>) each time it is used, so it follows the UI language.
+const typeMeta = (type: FieldType, more: { pending?: boolean; group?: "advanced" } = {}) => ({
+  ...more,
+  get label() {
+    return t(`fieldType.${type}`);
+  },
+});
+export const FIELD_TYPE_META: Record<FieldType, { readonly label: string; pending?: boolean; group?: "advanced" }> = {
+  text: typeMeta("text"),
+  rich_text: typeMeta("rich_text"),
+  number: typeMeta("number"),
+  boolean: typeMeta("boolean"),
+  date: typeMeta("date"),
+  datetime: typeMeta("datetime"),
+  email: typeMeta("email"),
+  currency: typeMeta("currency"),
+  picklist: typeMeta("picklist"),
+  multi_select: typeMeta("multi_select"),
+  relation: typeMeta("relation"),
+  polymorphic_relation: typeMeta("polymorphic_relation"),
+  user: typeMeta("user"),
+  rating: typeMeta("rating"),
+  composite: typeMeta("composite"),
+  file: typeMeta("file", { pending: true }),
+  image: typeMeta("image", { pending: true }),
+  formula: typeMeta("formula", { group: "advanced" }),
+  lookup: typeMeta("lookup", { group: "advanced" }),
+  rollup: typeMeta("rollup", { group: "advanced" }),
+  auto_number: typeMeta("auto_number", { group: "advanced" }),
 };
 
 /**

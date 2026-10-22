@@ -104,7 +104,7 @@ describe("proposalView", () => {
 
 describe("proposalDone / proposalWarnLink", () => {
   it("routes each applied kind to the builder that owns it", () => {
-    expect(proposalDone(ITEMS.layout, undefined, link)).toMatchObject({ href: "/studio/dung/man-hinh", text: "Đã lưu bố cục." });
+    expect(proposalDone(ITEMS.layout, undefined, link)).toMatchObject({ href: "/studio/dung/man-hinh", text: "Đã lưu màn hình." });
     expect(proposalDone(ITEMS.dashboard, "d1", link).href).toBe("/dashboards/d1");
     expect(proposalDone(ITEMS.dashboard, undefined, link).href).toBe("/dashboards");
     expect(proposalDone(ITEMS.records, undefined, link).href).toBe("/benh_nhan");

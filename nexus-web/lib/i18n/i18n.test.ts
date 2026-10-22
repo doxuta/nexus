@@ -2,6 +2,8 @@
 
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { getLocale, t } from "@/lib/i18n";
+import viCatalog from "@/lib/i18n/vi";
+import enCatalog from "@/lib/i18n/en";
 import { loadPrefs } from "@/lib/prefs";
 
 describe("t() — Vietnamese (default locale)", () => {
@@ -121,5 +123,17 @@ describe("getLocale()", () => {
   it("the Preferences screen starts from the language the UI is in, not a fixed Vietnamese", () => {
     browser(["en-US"]);
     expect(loadPrefs().locale).toBe("en");
+  });
+});
+
+describe("en.ts", () => {
+  // tf() fills {name} placeholders: an English value that drops or renames one prints the raw "{name}" (issue #6).
+  it("every English value has its Vietnamese key and the same {placeholders}", () => {
+    const vi = viCatalog as Record<string, string>;
+    const holes = (v: string) => (v.match(/\{\w+\}/g) ?? []).sort().join(" ");
+    const bad = Object.entries(enCatalog as Record<string, string>)
+      .filter(([k, v]) => !(k in vi) || holes(v) !== holes(vi[k]))
+      .map(([k, v]) => `${k}: "${v}"`);
+    expect(bad).toEqual([]);
   });
 });
