@@ -106,7 +106,14 @@ docker compose down -v          # a replayed stack answers one run
 ```
 
 It prints one `ok` line per step and saves one screenshot per step; the first failing step exits 1. Set `CHROME_PATH`
-if Chrome is not found, and `NEXUS_PORT` for both commands if 8080 is taken.
+if Chrome is not found, and `NEXUS_PORT` for both commands if 8080 is taken. For the English run, replay
+`/cassettes/demo-loop-en.jsonl` instead and run the loop with `NEXUS_LANG=en`: the prompt, the UI and the recorded
+answers are English. CI runs both.
+
+Headless Chrome lists only English, and the UI follows a browser that lists English and no Vietnamese. The browser
+scripts (`demo-loop.mjs`, `ui-shots.mjs`, the others in `nexus-web/scripts/`) save the language for each page they
+open: `NEXUS_LANG=vi` by default, `NEXUS_LANG=en` on request. A new puppeteer script gets the English UI unless it
+does the same (`signIn` in `studio-driver.mjs`).
 
 ### Connect Claude Code over MCP
 
@@ -206,11 +213,11 @@ on this repository's Security tab.
   backup (`internal/tenantbackup`) and the Doctor (`internal/doctor`) are in the tree and tested in CI, but no open
   issue extends them.
 - **Vietnamese first, English on the demo path.** `?lang=en`, or a browser that lists English and no Vietnamese,
-  picks English. The English catalog holds 724 of the 6,762 keys in `nexus-web/lib/i18n`: the 421 the demo loop
-  renders ([#6](https://github.com/doxuta/nexus/issues/6) measured them), the shell's menus and a few neighbours;
-  other screens fall back to Vietnamese. Some text still comes from the server or the data in Vietnamese: the
-  seeded CRM, the default record layout's section titles, draft names in the publish list, and the replayed
-  assistant, whose cassette was recorded when the builder still answered only in Vietnamese.
+  picks English. The English catalog holds 959 of the 6,823 keys in `nexus-web/lib/i18n`: the 421 the demo loop
+  renders ([#6](https://github.com/doxuta/nexus/issues/6) measured them), the sign-in page, the whole assistant
+  panel and its cards, the shell's menus and a few neighbours; other screens fall back to Vietnamese. Some text still comes from the server or the data in Vietnamese: the
+  seeded CRM, the default record layout's section titles and draft names in the publish list. The builder answers
+  and labels in the language it is asked in; `cassettes/demo-loop-en.jsonl` is that answer in English.
 - **Rollback re-hides; it does not delete** ([ADR 0002](docs/adr/0002-schema-cutoff-drafts-and-rollback.md)).
   Schema born after the target is hidden again and its rows stay; attribute edits of a field or table are not
   reverted; changes applied at once are undone one entry at a time with Revert.
