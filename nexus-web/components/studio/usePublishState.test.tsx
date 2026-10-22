@@ -105,6 +105,63 @@ describe("usePublishState", () => {
     expect(getPublishState).toHaveBeenCalledTimes(3);
   });
 
+  // #62: the project frame's read re-reads on mount, inside the staleTime, so a draft written where nothing announces
+  // shows at once. One read per mount (the page's readers join it), still one per announcement.
+  describe("the frame's rereadOnMount (#62)", () => {
+    function Frame() {
+      usePublishState("acme", { rereadOnMount: true });
+      return <Readers n={3} />;
+    }
+    const settle = async (c: ReturnType<typeof makeClient>) => {
+      await new Promise((r) => setTimeout(r, 20));
+      await waitFor(() => expect(c.isFetching()).toBe(0));
+    };
+    beforeEach(() => {
+      matches.mockReturnValue(true);
+      getPublishState.mockResolvedValue({ delivered: true, pendingCount: 0 });
+    });
+
+    it("one read on a cold mount, one on a remount inside the staleTime; a page reader mounting later adds none", async () => {
+      const c = makeClient(); // the app's 2-minute staleTime
+      const first = render(<QueryClientProvider client={c}><Frame /></QueryClientProvider>);
+      await settle(c);
+      expect(getPublishState).toHaveBeenCalledTimes(1);
+      first.unmount();
+      const second = render(<QueryClientProvider client={c}><Frame /></QueryClientProvider>);
+      await settle(c);
+      expect(getPublishState).toHaveBeenCalledTimes(2);
+      second.rerender(<QueryClientProvider client={c}><Frame /><Reader /></QueryClientProvider>); // a page navigation
+      await settle(c);
+      expect(getPublishState).toHaveBeenCalledTimes(2);
+      expect(await readsPerEmit(c)).toBe(1);
+    });
+
+    it("StrictMode: a remount inside the staleTime costs one read", async () => {
+      const c = makeClient();
+      render(<QueryClientProvider client={c}><Reader /></QueryClientProvider>).unmount();
+      await settle(c);
+      expect(getPublishState).toHaveBeenCalledTimes(1);
+      render(<StrictMode><QueryClientProvider client={c}><Frame /></QueryClientProvider></StrictMode>);
+      await settle(c);
+      expect(getPublishState).toHaveBeenCalledTimes(2);
+      expect(await readsPerEmit(c)).toBe(1);
+    });
+
+    it("a token known only after mount still re-reads the cached answer, once", async () => {
+      const c = makeClient();
+      render(<QueryClientProvider client={c}><Reader /></QueryClientProvider>).unmount();
+      await settle(c);
+      matches.mockReturnValue(false);
+      const v = render(<QueryClientProvider client={c}><Frame /></QueryClientProvider>);
+      await settle(c);
+      expect(getPublishState).toHaveBeenCalledTimes(1);
+      matches.mockReturnValue(true);
+      v.rerender(<QueryClientProvider client={c}><Frame /></QueryClientProvider>);
+      await settle(c);
+      expect(getPublishState).toHaveBeenCalledTimes(2);
+    });
+  });
+
   // The shared listener must come back after it went away: a dead entry left behind (or a live one never removed) would
   // turn the next announcement into no read, or two.
   describe("the listener is registered again once every reader has gone (#46)", () => {

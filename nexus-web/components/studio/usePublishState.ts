@@ -40,8 +40,16 @@ function shareDraftsListener(qc: QueryClient, slug: string): () => void {
   };
 }
 
-export function usePublishState(slug: string) {
+// rereadOnMount: the project frame's read only (#62). A draft written where nothing announces (a report created on the
+// customer face /reports) must show the moment the builder opens the project, inside the staleTime too. An invalidate,
+// not refetchOnMount "always": it also re-reads when the token is known only after mount (enabled flips on a fresh cached
+// answer), and cancelRefetch:false joins a read already in flight, so a mount still costs one read. Pages' readers don't
+// ask: each navigation would add a read (#52: one on mount, one per announcement).
+export function usePublishState(slug: string, { rereadOnMount = false } = {}) {
   const qc = useQueryClient();
   useEffect(() => shareDraftsListener(qc, slug), [qc, slug]);
+  useEffect(() => {
+    if (rereadOnMount) void qc.invalidateQueries({ queryKey: ["project", slug, ...PUBLISH_STATE_KEY] }, { cancelRefetch: false });
+  }, [qc, slug, rereadOnMount]);
   return useProjectQuery(slug, PUBLISH_STATE_KEY, () => withTimeout(getPublishState()), { refetchOnWindowFocus: true, retry: false });
 }
