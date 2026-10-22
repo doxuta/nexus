@@ -5,7 +5,7 @@
 // users the moment they are saved. `guard` asks for confirmation first; `delivered` lets a screen that
 // already has its own confirm Modal just add the notice. A 403 on /admin/publish/state is the legacy
 // customer admin (builder-only route): no Modal for them, their write still leaves a trace server-side.
-import { useCallback, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { ApiError, getPublishState } from "@/lib/api";
 import { onDraftsChanged } from "@/lib/draftEvents";
 import { t } from "@/lib/i18n";
@@ -15,11 +15,12 @@ import { InlineConfirm } from "@/components/studio/InlineConfirm";
 import { StatusText } from "@/components/studio/StatusText";
 
 // true/false = answer; null = the read failed (not a 403), so the caller must not cache "false".
+const answerOfError = (e: unknown) => (e instanceof ApiError && e.status === 403 ? false : null);
 async function readDelivered(): Promise<boolean | null> {
   try {
     return (await getPublishState()).delivered;
   } catch (e) {
-    return e instanceof ApiError && e.status === 403 ? false : null;
+    return answerOfError(e);
   }
 }
 async function isDelivered(): Promise<boolean> {
@@ -27,17 +28,31 @@ async function isDelivered(): Promise<boolean> {
 }
 
 /**
+ * The project frame's publish-state read (ProjectFrame → usePublishState, one per project). Inside a Studio project the hook
+ * answers from it instead of reading on mount and on every announcement itself (#53). null on the customer face: own read.
+ */
+export const FramePublishState = createContext<{ data?: { delivered: boolean }; error: unknown } | null>(null);
+
+/**
  * `inline` (Studio, specs/074 lát f2-direct-apply-access, FR-065): the same question is asked IN the page as an
  * InlineConfirm — never a dialog — and `notice` is the warn label "Áp ngay cho người dùng thật" for the screen to put
  * next to the control. The customer face keeps the Modal.
  */
 export function useDirectApply({ inline = false }: { inline?: boolean } = {}) {
-  const [delivered, setDelivered] = useState(false);
-  const [known, setKnown] = useState(false);
+  const frame = useContext(FramePublishState);
+  const framed = frame !== null;
+  const [ownDelivered, setDelivered] = useState(false);
+  const [ownKnown, setKnown] = useState(false);
   const [pending, setPending] = useState<{ what: string; run: () => void | Promise<void> } | null>(null);
+  // In a frame its last read answers, mapped as readDelivered maps ours (a failed one keeps the last known answer).
+  const answer = frame && (frame.error ? answerOfError(frame.error) : (frame.data?.delivered ?? null));
+  const delivered = frame ? (answer ?? frame.data?.delivered ?? false) : ownDelivered;
+  const known = frame ? answer !== null : ownKnown;
 
   // Read on mount and again whenever drafts change (the first publish happens in this very page via the DraftBar).
+  // In a frame its read already does both: none of our own.
   useEffect(() => {
+    if (framed) return;
     let live = true;
     const load = () =>
       void readDelivered().then((d) => {
@@ -55,7 +70,7 @@ export function useDirectApply({ inline = false }: { inline?: boolean } = {}) {
       live = false;
       off();
     };
-  }, []);
+  }, [framed]);
 
   /** Runs `run` at once on a project that is not delivered; otherwise after the "ÁP NGAY" confirmation. */
   const guard = useCallback(async (what: string, run: () => void | Promise<void>) => {
