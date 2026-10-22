@@ -216,3 +216,37 @@ func TestAdminEditField_NotFoundAndTenantIsolation(t *testing.T) {
 		t.Errorf("cross-tenant edit must NOT modify the field; label was overwritten to %q", label)
 	}
 }
+
+// #56: {"indexed": true} sets options.indexed and keeps the rest of the options; sent with options it
+// is a 422 and nothing is written.
+func TestAdminEditField_IndexedKeyKeepsTheOtherOptions(t *testing.T) {
+	r, sx := seedEditEntity(t)
+	stageID := resolveFieldID(t, sx, "stage")
+	readOpts := func() map[string]any {
+		t.Helper()
+		var raw string
+		if err := sx.Get(&raw, `SELECT CAST(options AS CHAR) FROM sys_fields WHERE id = ?`, stageID); err != nil {
+			t.Fatalf("read options: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			t.Fatalf("decode options %s: %v", raw, err)
+		}
+		return m
+	}
+
+	if w := putFieldReq(t, r, testTenant, stageID, map[string]any{"indexed": true, "options": map[string]any{"values": []any{"a"}}}); w.Code != http.StatusUnprocessableEntity ||
+		!bytes.Contains(w.Body.Bytes(), []byte("FIELD_INDEXED_WITH_OPTIONS")) {
+		t.Fatalf("indexed + options: status = %d, body = %s; want 422 FIELD_INDEXED_WITH_OPTIONS", w.Code, w.Body.String())
+	}
+	if opts := readOpts(); opts["indexed"] != nil || len(opts["values"].([]any)) != 2 {
+		t.Fatalf("a refused edit changed the options: %v", opts)
+	}
+
+	if w := putFieldReq(t, r, testTenant, stageID, map[string]any{"indexed": true}); w.Code != http.StatusOK {
+		t.Fatalf("indexed: status = %d; body = %s", w.Code, w.Body.String())
+	}
+	if opts := readOpts(); opts["indexed"] != true || len(opts["values"].([]any)) != 2 {
+		t.Fatalf("options after {indexed:true} = %v, want both values kept and indexed:true", opts)
+	}
+}

@@ -100,6 +100,10 @@ type EditFieldInput struct {
 	// the same codes as create/add: FIELD_ORDER_INVALID / FIELD_DESCRIPTION_TOO_LONG).
 	FieldOrder  *int
 	Description *string
+	// Indexed (#56) sets options.indexed and nothing else of the options: EditField lays it onto the
+	// options as the caller reads them (the builder's draft overlay included), so a pending field
+	// draft keeps its options while the flag applies live. Sent with Options it is a 422.
+	Indexed *bool
 }
 
 // ValidateEditField checks an edit payload before any DB work runs: the field id must be

@@ -157,7 +157,8 @@ describe("ReportConfigPanel — tabular", () => {
   });
 
   // …and an unindexed field that CAN take an index is fixed where the need is: pick it, press
-  // "Bật tìm nhanh ngay" (the Studio edit: stored options + indexed), Save stays blocked meanwhile.
+  // "Bật tìm nhanh ngay" (only `indexed`: the server keeps the other options and any pending draft, #56),
+  // Save stays blocked meanwhile.
   it("picking an unindexed field offers to index it in place and blocks Save until then", async () => {
     vi.mocked(updateField).mockResolvedValue({} as never);
     await renderPanel(SUMMARY);
@@ -167,7 +168,7 @@ describe("ReportConfigPanel — tabular", () => {
     expect(save).toHaveAttribute("title", "Bật tìm nhanh cho trường đang chọn trước khi lưu.");
     expect(screen.getByText(/“Tên cơ hội” chưa bật tìm nhanh/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Bật tìm nhanh ngay" }));
-    await waitFor(() => expect(updateField).toHaveBeenCalledWith("f-name", { options: { maxLength: 200, indexed: true } }));
+    await waitFor(() => expect(updateField).toHaveBeenCalledWith("f-name", { indexed: true }));
     expect(updateReport).not.toHaveBeenCalled();
   });
 

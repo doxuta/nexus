@@ -967,6 +967,23 @@ func (s *FieldService) EditField(ctx context.Context, tenantID string, in EditFi
 		}
 		beforeField = *live
 	}
+	// #56: "set indexed" is resolved against the field as resolved above, never against a copy of the
+	// options the caller read (outside /studio that read is live: taken whole, it dropped the draft).
+	if in.Indexed != nil {
+		if in.Options != nil {
+			return nil, invalid("FIELD_INDEXED_WITH_OPTIONS", "gửi indexed hoặc options, không gửi cả hai")
+		}
+		opts, oerr := optionsMap(field.Options)
+		if oerr != nil {
+			return nil, fmt.Errorf("services.EditField: %w", oerr)
+		}
+		if *in.Indexed {
+			opts["indexed"] = true
+		} else {
+			delete(opts, "indexed")
+		}
+		in.Options = opts
+	}
 
 	// ONE-body validation + apply-to-copy, shared verbatim with the AI Builder's
 	// propose_edit_field (ValidateEditFieldChanges — validator-parity extraction, see its doc):
