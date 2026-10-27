@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -96,7 +97,9 @@ func newMCPITRouter(t *testing.T, gdb *gorm.DB, sx *sqlx.DB) mcpITRouter {
 	}, zap.NewNop(),
 		WithLiveSubject(services.NewCachedUserLoader(userRepo, services.DefaultUserClaimTTL)),
 		WithOperatorTier(middleware.RequireBuilderTier(userRepo, zap.NewNop())))
-	r.Any("/mcp", gin.WrapH(mcpserver.New(mcpSvc, agent, store, nil, zap.NewNop()))) // as cmd/server/main.go
+	// as cmd/server/main.go, with the brake at its default budgets (config.go: APIKEY_PROBE_MAX_PER_MIN, DATA_RATE_LIMIT_PER_MIN)
+	brake := middleware.MCPRateLimit(middleware.MCPRateLimitConfig{ProbeMax: 30, KeyMax: 600, Window: time.Minute})
+	r.Any("/mcp", brake, gin.WrapH(mcpserver.New(mcpSvc, agent, store, nil, zap.NewNop())))
 	return mcpITRouter{r: r, keys: apiKeySvc}
 }
 
