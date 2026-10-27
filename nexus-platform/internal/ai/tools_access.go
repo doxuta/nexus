@@ -224,11 +224,18 @@ func (e *toolExecutor) proposeAccess(ctx context.Context, argsJSON string) strin
 	return toolOK(out)
 }
 
+// list_roles {grants: true} output caps (issue #67), like snapshot_model's: a safety ceiling, not a
+// working limit (the CRM pack's widest role holds about 40 grants). Worst case 40 × 60 grant rows, about
+// 160 KB with short table names; the issue's tenant (20 roles × 100 tables × 4 actions) was 550 KB in
+// one result. Grants come sorted by table and "*" sorts first, so every-table grants are the last cut.
+const (
+	maxListedRoles         = 40
+	maxListedGrantsPerRole = 60
+)
+
 // listRoleGrants is list_roles {grants: true} (issue #23): every role of the tenant with its current
 // grants, so "who can edit contacts?" gets a whole answer. A read: the tenant is the executor's,
 // nothing is buffered or written, which is why MCP offers it too.
-// ponytail: two reads per role (ListActionsForRole re-checks the role's tenant); a tenant has tens of
-// roles. One JOIN over acl_roles/acl_role_actions if that ever shows up.
 func (e *toolExecutor) listRoleGrants(ctx context.Context) string {
 	var probes *AccessProbes
 	if c, ok := e.reader.(AccessProbeCarrier); ok {
@@ -237,19 +244,33 @@ func (e *toolExecutor) listRoleGrants(ctx context.Context) string {
 	if probes == nil || probes.Roles == nil {
 		return toolErr("ROLES_GRANTS_UNAVAILABLE: server chưa nối bộ đọc vai cho AI Builder — gọi list_roles không kèm grants")
 	}
-	roles, err := probes.Roles.ListRoles(ctx, e.tenantID)
+	// One snapshot of every role with its grants: a role deleted meanwhile is absent, not a failed read.
+	roles, err := probes.Roles.ListRoleGrants(ctx, e.tenantID)
 	if err != nil {
 		return toolErr("ROLES_READ_FAILED: %v", err)
 	}
+	res := map[string]any{}
+	cut := len(roles) > maxListedRoles
+	if cut {
+		res["rolesTruncated"], res["rolesTotal"] = true, len(roles)
+		roles = roles[:maxListedRoles]
+	}
 	out := make([]map[string]any, 0, len(roles))
 	for _, r := range roles {
-		acts, err := probes.Roles.ListActionsForRole(ctx, e.tenantID, r.ID)
-		if err != nil {
-			return toolErr("ROLES_READ_FAILED: role %q: %v", r.Name, err)
+		row := map[string]any{"name": r.Role.Name, "label": r.Role.Label}
+		acts := r.Actions
+		if len(acts) > maxListedGrantsPerRole {
+			row["grantsTruncated"], row["grantsTotal"] = true, len(acts)
+			acts, cut = acts[:maxListedGrantsPerRole], true
 		}
-		out = append(out, map[string]any{"name": r.Name, "label": r.Label, "grants": grantViews(acts)})
+		row["grants"] = grantViews(acts)
+		out = append(out, row)
 	}
-	return toolOK(map[string]any{"roles": out})
+	res["roles"] = out
+	if cut {
+		res["note"] = fmt.Sprintf("đã cắt bớt: tối đa %d vai, %d quyền mỗi vai (rolesTotal / grantsTotal là số thật) — quyền của một người trên một bảng cụ thể: hỏi explain_access", maxListedRoles, maxListedGrantsPerRole)
+	}
+	return toolOK(res)
 }
 
 // grantViews is a role's grant rows as the API and the access card show them; never nil.

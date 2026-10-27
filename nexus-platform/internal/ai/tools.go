@@ -3128,6 +3128,8 @@ type accessRoleLookup interface {
 	// ListRoles + ListActionsForRole back propose_access: the role it names and that role's grants.
 	ListRoles(ctx context.Context, tenantID string) ([]auth.Role, error)
 	ListActionsForRole(ctx context.Context, tenantID, roleID string) ([]auth.RoleAction, error)
+	// ListRoleGrants backs list_roles {grants: true}: every role with its grants, one query (issue #67).
+	ListRoleGrants(ctx context.Context, tenantID string) ([]auth.RoleGrants, error)
 }
 
 // publishCutoff is when the workspace was last published (nil = never delivered). Signature of

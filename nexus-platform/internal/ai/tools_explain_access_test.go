@@ -54,6 +54,21 @@ type fakeAccessRoles struct {
 	byID     map[string]*auth.Role
 	byTenant map[string][]auth.Role       // ListRoles (propose_access)
 	actions  map[string][]auth.RoleAction // role id -> grants
+	// gone: roles deleted after ListRoles was read — ListActionsForRole no longer finds them and a
+	// later ListRoleGrants snapshot does not hold them (issue #67).
+	gone map[string]bool
+}
+
+// ListRoleGrants is the one-query snapshot (auth.RoleRepository.ListRoleGrants): this tenant's roles,
+// each with its grants (never nil), without the roles deleted meanwhile.
+func (f *fakeAccessRoles) ListRoleGrants(_ context.Context, tenantID string) ([]auth.RoleGrants, error) {
+	out := []auth.RoleGrants{}
+	for _, r := range f.byTenant[tenantID] {
+		if !f.gone[r.ID] {
+			out = append(out, auth.RoleGrants{Role: r, Actions: append([]auth.RoleAction{}, f.actions[r.ID]...)})
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeAccessRoles) GetRoleByID(_ context.Context, _, id string) (*auth.Role, error) {
@@ -69,7 +84,7 @@ func (f *fakeAccessRoles) ListRoles(_ context.Context, tenantID string) ([]auth.
 
 func (f *fakeAccessRoles) ListActionsForRole(_ context.Context, tenantID, roleID string) ([]auth.RoleAction, error) {
 	for _, r := range f.byTenant[tenantID] {
-		if r.ID == roleID {
+		if r.ID == roleID && !f.gone[roleID] {
 			return f.actions[roleID], nil
 		}
 	}
