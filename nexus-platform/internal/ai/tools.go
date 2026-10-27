@@ -538,10 +538,12 @@ func toolDefinitionsBase() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "list_roles",
-				Description: "Liệt kê TÊN các vai (role) đang có của tenant. BẮT BUỘC gọi trước khi dùng roleName trong propose_workqueue, người duyệt (approverType='role') trong propose_approval hoặc role trong propose_access — tên vai không có thật sẽ làm bước Apply thất bại. Chưa có vai phù hợp thì bỏ trống roleName (queue hiện với mọi người) hoặc dùng approverType='user'.",
+				Description: "Liệt kê TÊN các vai (role) đang có của tenant. BẮT BUỘC gọi trước khi dùng roleName trong propose_workqueue, người duyệt (approverType='role') trong propose_approval hoặc role trong propose_access — tên vai không có thật sẽ làm bước Apply thất bại. Chưa có vai phù hợp thì bỏ trống roleName (queue hiện với mọi người) hoặc dùng approverType='user'. grants: true → kèm quyền hiện có của từng vai (entityName '*' = mọi bảng, accessLevel = những bản ghi nào) để trả lời 'ai được xem / sửa bảng X'; quản trị viên bỏ qua quyền. Chỉ đọc, không ghi, không vào draft.",
 				Parameters: map[string]any{
-					"type":       "object",
-					"properties": map[string]any{},
+					"type": "object",
+					"properties": map[string]any{
+						"grants": map[string]any{"type": "boolean", "description": "true: kèm quyền hiện có của từng vai."},
+					},
 				},
 			},
 		},
@@ -803,7 +805,7 @@ func (e *toolExecutor) dispatch(ctx context.Context, name, argsJSON string) stri
 	case "get_app":
 		return e.getApp(ctx, argsJSON)
 	case "list_roles":
-		return e.listRoles(ctx)
+		return e.listRoles(ctx, argsJSON)
 	case "snapshot_model":
 		return e.snapshotModel(ctx)
 	case "propose_entity":
@@ -1313,13 +1315,25 @@ func (p proposedField) toDraftField(entity string) DraftField {
 
 func ptrDraftField(f DraftField) *DraftField { return &f }
 
-// listRoles returns the tenant's role names so the model can only NAME a role that exists.
+// listRoles returns the tenant's role names so the model can only NAME a role that exists; with
+// {grants: true}, every role with its grants (listRoleGrants, issue #23).
 //
 // propose_workqueue's roleName and propose_approval's role approver are resolved to ids at Apply,
 // and until now the model had no way to see the list — so it produced a reasonable-sounding name
 // and the Apply failed on a role nobody had created. Failing at Apply is the worst place to learn
 // it: the proposal already looked right and the person already pressed the button.
-func (e *toolExecutor) listRoles(ctx context.Context) string {
+func (e *toolExecutor) listRoles(ctx context.Context, argsJSON string) string {
+	var a struct {
+		Grants bool `json:"grants"`
+	}
+	if strings.TrimSpace(argsJSON) != "" {
+		if err := json.Unmarshal([]byte(argsJSON), &a); err != nil {
+			return toolErr("INVALID_ARGS: %v", err)
+		}
+	}
+	if a.Grants {
+		return e.listRoleGrants(ctx)
+	}
 	names, err := e.reader.ListRoleNames(ctx, e.tenantID)
 	if err != nil {
 		return toolErr("ROLES_READ_FAILED: không đọc được danh sách vai: %v", err)
@@ -3104,8 +3118,9 @@ func (e *toolExecutor) proposeWorkQueue(ctx context.Context, argsJSON string) st
 type accessUserLookup interface {
 	GetUserByEmail(ctx context.Context, tenantID, email string) (*auth.User, error)
 	GetUserByID(ctx context.Context, tenantID, id string) (*auth.User, error)
-	// ListUsers backs propose_access: never a role an admin or a platform operator holds.
-	ListUsers(ctx context.Context, tenantID string) ([]auth.User, error)
+	// PrivilegedHolders backs propose_access: the admins and platform operators holding one of
+	// roleIDs (never a role one of them holds), not every user of the tenant (issue #23).
+	PrivilegedHolders(ctx context.Context, tenantID string, roleIDs []string) ([]auth.User, error)
 }
 
 type accessRoleLookup interface {

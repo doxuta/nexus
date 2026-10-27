@@ -70,6 +70,24 @@ func (r *UserRepository) ListUsers(ctx context.Context, tenantID string) ([]User
 	return users, nil
 }
 
+// PrivilegedHolders returns the tenant's admins and platform operators who hold one of roleIDs:
+// the only users propose_access asks about (issue #23), instead of every user of the tenant.
+// Pinned to tenant_id; an empty roleIDs is (nil, nil) without a query.
+func (r *UserRepository) PrivilegedHolders(ctx context.Context, tenantID string, roleIDs []string) ([]User, error) {
+	if len(roleIDs) == 0 {
+		return nil, nil
+	}
+	var users []User
+	err := r.db.WithContext(ctx).
+		Where("tenant_id = ? AND role_id IN ? AND (is_admin = ? OR is_platform_operator = ?)", tenantID, roleIDs, true, true).
+		Order("created_at ASC, id ASC").
+		Find(&users).Error
+	if err != nil {
+		return nil, fmt.Errorf("auth.UserRepository.PrivilegedHolders: %w", err)
+	}
+	return users, nil
+}
+
 // CreateUser inserts u (which must already carry a server-derived ID and TenantID). A
 // duplicate (tenant_id, email) is reported as ErrUserAlreadyExists; any other failure is
 // wrapped. The caller is responsible for hashing the password before this runs — the repo

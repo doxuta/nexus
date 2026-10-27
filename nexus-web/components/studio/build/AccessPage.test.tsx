@@ -47,6 +47,7 @@ vi.mock("@/lib/admin", async (orig) => ({
 }));
 
 import { AccessPage } from "./AccessPage";
+import { mkChange, WithPreview } from "@/test/previewProbe";
 
 const ROLES = [
   role("r1", "Lễ tân", [{ entityName: "invoice", action: "view", accessLevel: "all" }]),
@@ -150,6 +151,24 @@ describe("app filter and related column", () => {
     await screen.findByRole("combobox", { name: /Lễ tân trên Lịch hẹn/ });
     expect(screen.queryByRole("combobox", { name: /trên Hoá đơn/ })).toBeNull();
     expect(screen.getByRole("combobox", { name: "Xem theo app" })).toHaveValue("clinic");
+  });
+
+  // issue #23: the assistant's access card names a built table the ?app= filter leaves out; the page still draws that
+  // table's column, so the card's ghost cell is there to see.
+  it("?app= that leaves out the card's table still draws its column and the ghost cell", async () => {
+    const after = { grants: [{ entityName: "invoice", action: "view", accessLevel: "all" }], labels: { invoice: "Hoá đơn" } };
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <WithPreview change={mkChange("role", "update", { docKey: "r2", target: { name: "r2", entity: "invoice" }, before: { grants: [], labels: after.labels }, after })}>
+          <AccessPage slug="acme" app="clinic" />
+        </WithPreview>
+      </QueryClientProvider>,
+    );
+    const td = (await screen.findByText("Chỉ xem · Đề xuất")).closest("td")!;
+    expect(td.className).toContain("nx-proposed");
+    expect(within(td).getByRole("combobox", { name: "Kế toán trên Hoá đơn: Không thấy" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /Lễ tân trên Lịch hẹn/ })).toBeInTheDocument();
   });
 
   it("?bang= narrows to that table and offers the way back to all", async () => {

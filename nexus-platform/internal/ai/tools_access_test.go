@@ -152,6 +152,23 @@ func TestProposeAccess_BuffersOneCardPerRoleWithTheRoleChange(t *testing.T) {
 	}
 }
 
+// Issue #23: the admin check asks for the holders of the roles this call names, in this tenant, once
+// — not for every user of the tenant.
+func TestProposeAccess_AsksOnlyAboutTheNamedRoles(t *testing.T) {
+	e := withTickets(t, accessExecutor(fakeCutoff{at: &accCutoff}))
+	users := e.reader.(AccessProbeCarrier).AccessProbes().Users.(*fakeAccessUsers)
+	mustBuffer(t, e, "propose_access", grantArgs(grant("crm_sales_rep", "tickets", "all", "view"), grant("Xem tất cả", "tickets", "owner", "edit")))
+	if len(users.asked) != 1 || !slices.Equal(users.asked[0], []string{"r-rep", "r-star"}) {
+		t.Fatalf("PrivilegedHolders asked %v; want one call for [r-rep r-star]", users.asked)
+	}
+	// A role that does not resolve is not asked about; the call is still refused for it, in order.
+	users.asked = nil
+	mustReject(t, e, "propose_access", grantArgs(grant("nobody", "tickets", "all", "view"), grant("crm_sales_manager", "tickets", "all", "view")), "ACCESS_ROLE_NOT_FOUND")
+	if len(users.asked) != 1 || !slices.Equal(users.asked[0], []string{"r-mgr"}) {
+		t.Fatalf("PrivilegedHolders asked %v; want [r-mgr]", users.asked)
+	}
+}
+
 func TestProposeAccess_RoleByLabelAndTablesNotYetPublished(t *testing.T) {
 	// The builder says the label; the table was born after the last publish (still hidden).
 	e := accessExecutor(fakeCutoff{at: &accCutoff})

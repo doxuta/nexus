@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -819,4 +820,83 @@ func TestMCP_SettledProposalsAreNotReplayed(t *testing.T) {
 		}
 		mustPropose(t, "propose_field", map[string]any{"entity": "st_visits", "name": "doctor", "label": "Doctor", "fieldType": "user"}) // doctor_id is free
 	})
+}
+
+// Issue #23: an outside agent answers "who can edit contacts?" whole. nexus_list_roles {grants: true}
+// lists this workspace's roles with their grants (the role reader main.go wires). A token of tenant A
+// never sees tenant B's roles or grants (nor B's token A's), and as a read it writes nothing: no
+// role or grant changes, and the token's thread keeps only its opening turn.
+func TestMCP_ListRolesWithGrants(t *testing.T) {
+	gdb, sx := a4SetupMigratedDB(t)
+	ctx := context.Background()
+	const tenantA, tenantB = "ten-mcp-grants", "ten-mcp-grants-b"
+	builderA := mcpBuilder(t, gdb, tenantA, "mcp-grants")
+	builderB := mcpBuilder(t, gdb, tenantB, "mcp-grants-b")
+	roleRepo := auth.NewRoleRepository(gdb)
+	roles := services.NewRoleService(roleRepo)
+	if _, err := roles.CreateRole(ctx, tenantA, services.CreateRoleInput{Name: "it_contacts_editor", Label: "Contacts editor", Actions: []services.RoleActionInput{
+		{EntityName: "it_contacts", Action: "view", AccessLevel: "all"}, {EntityName: "it_contacts", Action: "edit", AccessLevel: "owner"}}}); err != nil {
+		t.Fatalf("role A: %v", err)
+	}
+	// B's role grants on a table of the same name: a leak would show up as a role or as a grant.
+	if _, err := roles.CreateRole(ctx, tenantB, services.CreateRoleInput{Name: "it_b_contacts_admin", Label: "B", Actions: []services.RoleActionInput{
+		{EntityName: "it_contacts", Action: "delete", AccessLevel: "all"}, {EntityName: "*", Action: "edit", AccessLevel: "all"}}}); err != nil {
+		t.Fatalf("role B: %v", err)
+	}
+	store := ai.NewSessionStore(sx)
+	mcpSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(gdb), store, auth.NewUserRepository(gdb))
+	agent := ai.NewAIBuilderAgent(config.AIConfig{}, nil, ai.ReaderWithAccessProbes(metadata.NewRepository(gdb), &ai.AccessProbes{Roles: roleRepo}), nil, nil, zap.NewNop())
+	ts := httptest.NewServer(mcpserver.New(mcpSvc, agent, store, nil, zap.NewNop()))
+	defer ts.Close()
+
+	type role struct {
+		Name   string                    `json:"name"`
+		Grants []services.RoleActionView `json:"grants"`
+	}
+	count := func(q string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := sx.Get(&n, q, args...); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		return n
+	}
+	grantsBefore := count("SELECT COUNT(*) FROM acl_role_actions")
+	rolesBefore := count("SELECT COUNT(*) FROM acl_roles")
+	listAs := func(tenant, builderID string) []role {
+		t.Helper()
+		tok, secret, err := mcpSvc.Issue(ctx, auth.Subject{UserID: builderID, TenantID: tenant, IsAdmin: true}, nil)
+		if err != nil {
+			t.Fatalf("issue %s: %v", tenant, err)
+		}
+		res, err := mcpConnect(t, ts.URL, secret).CallTool(ctx, &mcp.CallToolParams{Name: "nexus_list_roles", Arguments: map[string]any{"grants": true}})
+		if err != nil || res.IsError {
+			t.Fatalf("list_roles grants as %s: %v %s", tenant, err, mcpText(res))
+		}
+		var out struct {
+			Result struct {
+				Roles []role `json:"roles"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(mcpText(res)), &out); err != nil {
+			t.Fatalf("decode %s: %v", mcpText(res), err)
+		}
+		if n := count("SELECT COUNT(*) FROM sys_ai_messages WHERE session_id = ? AND tenant_id = ?", tok.SessionID, tenant); n != 2 {
+			t.Fatalf("%s thread rows = %d; want only the 2 of the key's opening turn", tenant, n)
+		}
+		return out.Result.Roles
+	}
+
+	gotA := listAs(tenantA, builderA)
+	wantA := []role{{Name: "it_contacts_editor", Grants: []services.RoleActionView{{EntityName: "it_contacts", Action: "edit", AccessLevel: "owner"}, {EntityName: "it_contacts", Action: "view", AccessLevel: "all"}}}}
+	if !reflect.DeepEqual(gotA, wantA) {
+		t.Fatalf("tenant A's token sees %+v; want only its own role and grants %+v", gotA, wantA)
+	}
+	gotB := listAs(tenantB, builderB)
+	if len(gotB) != 1 || gotB[0].Name != "it_b_contacts_admin" || len(gotB[0].Grants) != 2 {
+		t.Fatalf("tenant B's token sees %+v; want only its own role with its 2 grants", gotB)
+	}
+	if g, r := count("SELECT COUNT(*) FROM acl_role_actions"), count("SELECT COUNT(*) FROM acl_roles"); g != grantsBefore || r != rolesBefore {
+		t.Fatalf("after two reads: %d grants, %d roles; want %d and %d (a read writes nothing)", g, r, grantsBefore, rolesBefore)
+	}
 }

@@ -41,16 +41,21 @@ const tierText = (v: unknown, table: string): string | null => {
 const accessTablesOf = (c: ProposedChange | null): string[] => Object.keys(side(c?.after).labels ?? {});
 
 /**
- * What the access card being previewed draws on the page: its role's cells (`proposed`) and, as read-only columns, the
- * tables it names that are not built yet (the table card is still to be applied).
+ * What the access card being previewed draws on the page: its role's cells (`proposed`) and the columns of the tables it
+ * names that the page does not draw (`extra`, `shown` = the drawn tables): a table not built yet is a read-only column
+ * (the table card is still to be applied); a built one that `?app=` / `?bang=` left out gets its own column, or its
+ * ghost cell would have nowhere to go (issue #23).
  */
-export function accessGhost(change: ProposedChange | null, roles: readonly RoleDetail[], built: readonly { name: string }[]) {
+export function accessGhost(change: ProposedChange | null, roles: readonly RoleDetail[], built: readonly { name: string; label?: string }[], shown: readonly { name: string }[]) {
   const tables = accessTablesOf(change);
   const role = change ? roles.find((r) => r.id === change.docKey || r.name === change.target.name) : undefined;
   const labels = side(change?.after).labels ?? {};
   return {
     proposed: role ? new Set(tables.map((n) => `${role.id}|${n}`)) : undefined,
-    pending: tables.filter((n) => !built.some((e) => e.name === n)).map((n) => ({ name: n, label: labels[n] || n, pending: true })),
+    extra: tables.filter((n) => !shown.some((e) => e.name === n)).map((n) => {
+      const table = built.find((e) => e.name === n);
+      return table ? { name: n, label: table.label || n } : { name: n, label: labels[n] || n, pending: true };
+    }),
   };
 }
 function GhostNote({ change, table }: { change: ProposedChange; table: string }) {

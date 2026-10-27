@@ -369,7 +369,8 @@ func TestRM19_RecordMutations_WriteOneAuditRowEach(t *testing.T) {
 
 // TestRM19_AdminMetaMutations_WriteAuditRows proves entity-create, field-add and role-create each
 // write one admin-meta audit row (__entity__/__field__/__role__) attributed to the caller, with
-// NULL record_id (admin-meta mutations have no obj_* record).
+// NULL record_id (admin-meta mutations have no obj_* record) — except the role's, which carries the
+// role id (issue #23), and a role update, whose diff names the role even when only grants changed.
 func TestRM19_AdminMetaMutations_WriteAuditRows(t *testing.T) {
 	gdb, sx := a4SetupMigratedDB(t)
 	auditRequireSchemaV14(t, sx)
@@ -396,11 +397,25 @@ func TestRM19_AdminMetaMutations_WriteAuditRows(t *testing.T) {
 	}
 
 	// Role create → __role__ row.
+	var role struct {
+		Data struct {
+			Role struct {
+				ID string `json:"id"`
+			} `json:"role"`
+		} `json:"data"`
+	}
 	if w := doAuthed(t, rt.engine, "POST", "/api/v1/admin/roles", token, map[string]any{
 		"name": "rm19_viewer", "label": "RM19 Viewer",
 		"actions": []map[string]any{{"entityName": entity, "action": "view", "accessLevel": "all"}},
-	}, nil); w.Code != http.StatusCreated {
+	}, nil); w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &role) != nil || role.Data.Role.ID == "" {
 		t.Fatalf("create role: HTTP %d; body=%s", w.Code, w.Body.String())
+	}
+	// Grants-only update, as the AI's access card applies it → a __role__ update row naming the role.
+	if w := doAuthed(t, rt.engine, "PUT", "/api/v1/admin/roles/"+role.Data.Role.ID, token, map[string]any{
+		"name": "rm19_viewer", "label": "RM19 Viewer",
+		"actions": []map[string]any{{"entityName": entity, "action": "view", "accessLevel": "all"}, {"entityName": entity, "action": "edit", "accessLevel": "owner"}},
+	}, nil); w.Code != http.StatusOK {
+		t.Fatalf("update role: HTTP %d; body=%s", w.Code, w.Body.String())
 	}
 
 	rt.drain(t)
@@ -427,9 +442,26 @@ func TestRM19_AdminMetaMutations_WriteAuditRows(t *testing.T) {
 		if r.TenantID != tenantID {
 			t.Errorf("%s row tenant=%q; want %q", key, r.TenantID, tenantID)
 		}
+		if key == audit.RoleMeta {
+			if r.RecordID == nil || *r.RecordID != role.Data.Role.ID {
+				t.Errorf("%s row record_id=%v; want the role id %q", key, r.RecordID, role.Data.Role.ID)
+			}
+			continue
+		}
 		if r.RecordID != nil {
 			t.Errorf("%s row record_id=%v; want NULL (admin-meta)", key, *r.RecordID)
 		}
+	}
+	var upd *auditLogRow
+	for i := range rows {
+		if rows[i].EntityName == audit.RoleMeta && rows[i].Action == audit.ActionUpdate {
+			upd = &rows[i]
+		}
+	}
+	var diff audit.Diff
+	if upd == nil || upd.RecordID == nil || *upd.RecordID != role.Data.Role.ID || json.Unmarshal(upd.Diff, &diff) != nil ||
+		diff.Before["name"] != "rm19_viewer" || diff.After["name"] != "rm19_viewer" {
+		t.Fatalf("role update row = %+v; want record_id %q and the role's name on both sides of its diff", upd, role.Data.Role.ID)
 	}
 }
 

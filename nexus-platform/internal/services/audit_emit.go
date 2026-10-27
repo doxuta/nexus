@@ -29,6 +29,12 @@ func emitMetaAudit(ctx context.Context, a audit.Auditor, tenantID, metaEntity, a
 // GET /audit-log?entityName=__user__&recordId=<id> returns the whole account history alongside
 // the W7 reset-link row (auth_password_reset.go), which already uses RecordID=userId.
 func emitMetaAuditFor(ctx context.Context, a audit.Auditor, tenantID, metaEntity, recordID, action string, before, after any) {
+	emitMetaDiff(ctx, a, tenantID, metaEntity, recordID, action, audit.ComputeDiff(audit.StructToMap(before), audit.StructToMap(after)))
+}
+
+// emitMetaDiff is emitMetaAuditFor with a diff the caller has already built (a role update adds the
+// role's name to both sides, role_service.go).
+func emitMetaDiff(ctx context.Context, a audit.Auditor, tenantID, metaEntity, recordID, action string, diff *audit.Diff) {
 	if a == nil { // a service built by struct literal in a test has no auditor; the trail is best-effort anyway
 		return
 	}
@@ -38,7 +44,7 @@ func emitMetaAuditFor(ctx context.Context, a audit.Auditor, tenantID, metaEntity
 		EntityName:  metaEntity,
 		RecordID:    recordID,
 		Action:      action,
-		Diff:        audit.ComputeDiff(audit.StructToMap(before), audit.StructToMap(after)),
+		Diff:        diff,
 		At:          time.Now().UTC(),
 	})
 }

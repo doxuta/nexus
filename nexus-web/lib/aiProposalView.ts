@@ -218,8 +218,9 @@ export function proposalView(item: AiDraftItem, ctx: Ctx = {}): ProposalView | n
   }
   const ac = item.kind === "access" ? getAccessDraft(item) : undefined;
   if (ac) {
-    // The title is the whole sentence, so it wraps instead of being cut: "Nhân viên kinh doanh được xem tất cả · tạo · sửa
-    // của mình trên Phiếu hỗ trợ" (one clause per table); the list has one short "+" line per grant.
+    // The title is the whole sentence, which the in-place question also reads ("Quyền này áp ngay cho người dùng thật: …"):
+    // "Nhân viên kinh doanh được xem tất cả · tạo · sửa của mình trên Phiếu hỗ trợ" (one clause per table); the list has
+    // one "+" line per grant.
     const role = ac.roleLabel || ac.role;
     const label = (n: string) => ac.labels?.[n] || n;
     const tables = [...new Set(ac.grants.map((g) => g.entityName))];

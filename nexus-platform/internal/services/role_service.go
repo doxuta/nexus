@@ -264,8 +264,8 @@ func (s *RoleService) CreateRole(ctx context.Context, tenantID string, in Create
 	v := roleToView(role, actions)
 	// Invalidate the new role's cached grants AFTER commit (defensive — nothing cached yet) (O3).
 	s.aclCache.Invalidate(tenantID, role.ID)
-	// RM-19: audit the committed role create (after-only diff). Async + fail-open.
-	emitMetaAudit(ctx, s.auditor, tenantID, audit.RoleMeta, audit.ActionCreate, nil, v)
+	// RM-19: audit the committed role create (after-only diff) on the role's own row. Async + fail-open.
+	emitMetaAuditFor(ctx, s.auditor, tenantID, audit.RoleMeta, role.ID, audit.ActionCreate, nil, v)
 	s.rec.RecordDirect(ctx, tenantID, "", DirectDoc{DocType: "role", DocKey: role.ID, Label: roleLabel(v), Op: "create", After: v})
 	return &v, nil
 }
@@ -349,9 +349,8 @@ func (s *RoleService) UpdateRole(ctx context.Context, tenantID, id string, in Up
 	v := roleToView(role, current)
 	// Invalidate the role's cached grants AFTER commit so changed/revoked grants take effect now (O3).
 	s.aclCache.Invalidate(tenantID, id)
-	// RM-19: audit the committed role update. We record the after-view; the diff highlights the
-	// fields present (name/label/actions). Async + fail-open.
-	emitMetaAudit(ctx, s.auditor, tenantID, audit.RoleMeta, audit.ActionUpdate, beforeView, v)
+	// RM-19: audit the committed role update on the role's own row. Async + fail-open.
+	emitMetaDiff(ctx, s.auditor, tenantID, audit.RoleMeta, id, audit.ActionUpdate, roleUpdateDiff(beforeView, v))
 	s.rec.RecordDirect(ctx, tenantID, "", DirectDoc{DocType: "role", DocKey: id, Label: roleLabel(v), Op: "update", Before: beforeView, After: v})
 	return &v, nil
 }
@@ -385,7 +384,7 @@ func (s *RoleService) Recreate(ctx context.Context, tenantID, id string, before 
 	}
 	s.aclCache.Invalidate(tenantID, id)
 	v := roleToView(role, actions)
-	emitMetaAudit(ctx, s.auditor, tenantID, audit.RoleMeta, audit.ActionCreate, nil, v)
+	emitMetaAuditFor(ctx, s.auditor, tenantID, audit.RoleMeta, id, audit.ActionCreate, nil, v)
 	s.rec.RecordDirect(ctx, tenantID, "", DirectDoc{DocType: "role", DocKey: id, Label: roleLabel(v), Op: "create", After: v,
 		Meta: map[string]any{"reassignedUserIds": userIDs, "reassigned": n}})
 	return int(n), nil
@@ -450,8 +449,8 @@ func (s *RoleService) DeleteRole(ctx context.Context, tenantID, id string) error
 	}
 	// Invalidate the deleted role's cached grants AFTER commit so it can no longer authorize (O3).
 	s.aclCache.Invalidate(tenantID, id)
-	// RM-19: audit the committed role delete (before-only diff). Async + fail-open.
-	emitMetaAudit(ctx, s.auditor, tenantID, audit.RoleMeta, audit.ActionDelete, beforeView, nil)
+	// RM-19: audit the committed role delete (before-only diff) on the role's own row. Async + fail-open.
+	emitMetaAuditFor(ctx, s.auditor, tenantID, audit.RoleMeta, id, audit.ActionDelete, beforeView, nil)
 	rec.RecordDirect(ctx, tenantID, "", DirectDoc{DocType: "role", DocKey: id, Label: roleLabelAny(beforeView), Op: "delete", Before: beforeView, Meta: meta})
 	return nil
 }
@@ -536,6 +535,29 @@ func roleToView(r *auth.Role, actions []auth.RoleAction) RoleView {
 		})
 	}
 	return v
+}
+
+// roleUpdateDiff is a role update's audit diff with the role's name on both sides (issue #23): an
+// update diff keeps only the changed keys, so a grants-only change, or a save that changes nothing,
+// would otherwise leave a row that names no role. before is the RoleView read before the update (nil
+// when there was none to read: the row then names the role by its name after).
+func roleUpdateDiff(before any, after RoleView) *audit.Diff {
+	priorName := after.Name
+	if b, ok := before.(RoleView); ok {
+		priorName = b.Name
+	}
+	d := audit.ComputeDiff(audit.StructToMap(before), audit.StructToMap(after))
+	if d == nil {
+		d = &audit.Diff{}
+	}
+	if d.Before == nil {
+		d.Before = map[string]any{}
+	}
+	if d.After == nil {
+		d.After = map[string]any{}
+	}
+	d.Before["name"], d.After["name"] = priorName, after.Name
+	return d
 }
 
 func roleLabel(v RoleView) string {
