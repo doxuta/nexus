@@ -473,7 +473,7 @@ function AuditRow({ entry, actorName, entityLabel, tableLabel, defaultOpen }: {
         </td>
         <td>
           {target
-            ? <div className="slds-truncate" title={target}>{target}</div>
+            ? <div className="slds-truncate" title={entry.recordId ? `${target} · ${entry.recordId}` : target}>{target}</div>
             : <div className="slds-truncate tabular-nums" title={entry.recordId || undefined}>{shortId(entry.recordId)}</div>}
         </td>
         <td>

@@ -294,6 +294,8 @@ describe("AuditLog", () => {
       expect(within(diff).queryByText("crm_sales_rep")).not.toBeInTheDocument();
       expect(screen.getByText("crm_sales_rep").closest("td")).not.toBeNull();
       expect(screen.queryByText("4f1c0de0")).not.toBeInTheDocument();
+      // The full record id stays on the cell's title, to cross-reference the role by id.
+      expect(screen.getByText("crm_sales_rep")).toHaveAttribute("title", `crm_sales_rep · ${ROLE.recordId}`);
     });
 
     it("a save that changed nothing has no diff to open", async () => {
