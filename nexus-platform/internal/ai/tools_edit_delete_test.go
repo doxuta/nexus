@@ -9,9 +9,14 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
+	"nexus/platform/internal/dynrepo"
 	"nexus/platform/internal/metadata"
 )
 
@@ -230,6 +235,115 @@ func TestTools_ProposeDeleteEntity_Valid_Buffered(t *testing.T) {
 	if de.Entity != "tickets" || de.Label != "Phiếu hỗ trợ" || de.FieldCount != 4 {
 		t.Fatalf("delete_entity draft wrong shape: %+v", de)
 	}
+}
+
+// fakePacks / fakeCounts are the delete card's probes; each records the tenant it was asked about.
+type fakePacks struct {
+	packs map[string][]string // entity -> slugs, tenant-A only
+	err   error
+	asked []string
+}
+
+func (f *fakePacks) PacksOf(_ context.Context, tenantID, itemType, itemKey string) ([]string, error) {
+	f.asked = append(f.asked, tenantID+"|"+itemType+"|"+itemKey)
+	if f.err != nil || tenantID != "tenant-A" {
+		return nil, f.err
+	}
+	return f.packs[itemKey], nil
+}
+
+type fakeCounts struct {
+	n     int64
+	err   error
+	asked []string
+}
+
+func (f *fakeCounts) AggregateScalar(_ context.Context, entity, tenantID string, scope dynrepo.RowScope, p dynrepo.AggregateParams) (dynrepo.AggregateScalar, error) {
+	f.asked = append(f.asked, fmt.Sprintf("%s|%s|admin=%v|%s", tenantID, entity, scope.IsAdmin, p.Metric))
+	return dynrepo.AggregateScalar{Count: f.n}, f.err
+}
+
+// Issue #30 item 4: the delete card is honest about a pack table (which pack ships it, how many records the delete
+// hides), and the result tells the agent it cannot skip the human's confirmation.
+func TestTools_ProposeDeleteEntity_NamesThePackAndCountsTheRecords(t *testing.T) {
+	packs, counts := &fakePacks{packs: map[string][]string{"tickets": {"ticketing"}}}, &fakeCounts{n: 42}
+	e := &toolExecutor{reader: ReaderWithAccessProbes(editFixtureReader(), &AccessProbes{Packs: packs, Counts: counts}), tenantID: "tenant-A"}
+	res := mustBuffer(t, e, "propose_delete_entity", `{"entity":"tickets"}`)
+	de := e.draft[0].DeleteEntity
+	if !slices.Equal(de.Packs, []string{"ticketing"}) || de.RecordCount == nil || *de.RecordCount != 42 {
+		t.Fatalf("card = %+v (count %v); want packs [ticketing] and 42 records", de, de.RecordCount)
+	}
+	// The executor's tenant, the canonical name, every record (admin scope), a COUNT.
+	if !slices.Equal(packs.asked, []string{"tenant-A|entity|tickets"}) || !slices.Equal(counts.asked, []string{"tenant-A|tickets|admin=true|count"}) {
+		t.Fatalf("probes asked %v / %v", packs.asked, counts.asked)
+	}
+	r, _ := res["result"].(map[string]any)
+	if r["recordCount"] != float64(42) || fmt.Sprint(r["packs"]) != "[ticketing]" {
+		t.Errorf("the model is not told the facts: %v", r)
+	}
+	if note, _ := r["confirm"].(string); !strings.Contains(note, "không bỏ qua được bước xác nhận") || !strings.Contains(note, "gõ lại tên bảng") {
+		t.Errorf("the result does not tell the agent it cannot skip the confirmation: %q", note)
+	}
+	b, _ := json.Marshal(e.draft[0])
+	if !strings.Contains(string(b), `"packs":["ticketing"],"recordCount":42`) {
+		t.Errorf("wire shape = %s", b)
+	}
+}
+
+// A table no pack ships, a probe that fails, and a server with no probes: the proposal still lands (it deletes
+// nothing), the facts it could not read are left out rather than guessed, and the confirmation note stays.
+func TestTools_ProposeDeleteEntity_UnknownFactsAreLeftOut(t *testing.T) {
+	for name, reader := range map[string]MetadataReader{
+		"no pack ships it, an empty table": ReaderWithAccessProbes(editFixtureReader(), &AccessProbes{Packs: &fakePacks{}, Counts: &fakeCounts{}}),
+		"both reads fail":                  ReaderWithAccessProbes(editFixtureReader(), &AccessProbes{Packs: &fakePacks{err: errors.New("boom")}, Counts: &fakeCounts{err: errors.New("boom")}}),
+		"no probes wired":                  editFixtureReader(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := &toolExecutor{reader: reader, tenantID: "tenant-A"}
+			res := mustBuffer(t, e, "propose_delete_entity", `{"entity":"tickets"}`)
+			de := e.draft[0].DeleteEntity
+			if len(de.Packs) != 0 {
+				t.Errorf("packs = %v; want none", de.Packs)
+			}
+			r, _ := res["result"].(map[string]any)
+			if _, ok := r["packs"]; ok {
+				t.Errorf("the model is told packs it does not have: %v", r)
+			}
+			if name == "no pack ships it, an empty table" {
+				if de.RecordCount == nil || *de.RecordCount != 0 {
+					t.Errorf("an empty table counts 0, not unknown: %v", de.RecordCount)
+				}
+				return
+			}
+			if de.RecordCount != nil {
+				t.Errorf("an unread count must be unknown, got %d", *de.RecordCount)
+			}
+			if _, ok := r["recordCount"]; ok {
+				t.Errorf("the model is told a count nobody read: %v", r)
+			}
+			if r["confirm"] != deleteConfirmNote {
+				t.Errorf("confirm = %v", r["confirm"])
+			}
+			// A read that failed is not swallowed: the model is told what it could not read.
+			if got := fmt.Sprint(r["unread"]); (name == "both reads fail") != strings.Contains(got, "recordCount: ai.proposeDeleteEntity: boom") ||
+				(name == "both reads fail") != strings.Contains(got, "packs: ai.proposeDeleteEntity: boom") {
+				t.Errorf("unread = %v", r["unread"])
+			}
+		})
+	}
+}
+
+// The description the model reads before it calls the tool says the same thing as the result.
+func TestTools_ProposeDeleteEntity_DescriptionSaysTheConfirmationCannotBeSkipped(t *testing.T) {
+	for _, d := range ToolDefinitions() {
+		if d.Function.Name == "propose_delete_entity" {
+			if !strings.Contains(d.Function.Description, "khỏi hỏi lại") || !strings.Contains(d.Function.Description, "không bỏ qua được bước xác nhận") {
+				t.Fatalf("description: %s", d.Function.Description)
+			}
+			return
+		}
+	}
+	t.Fatal("no propose_delete_entity tool")
 }
 
 func TestTools_ProposeDeleteEntity_CrossTenant_Rejected(t *testing.T) {

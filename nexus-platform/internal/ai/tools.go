@@ -341,7 +341,7 @@ func toolDefinitionsBase() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "propose_delete_entity",
-				Description: "Đề xuất XOÁ một entity ĐÃ TỒN TẠI. Chỉ đưa vào draft — KHÔNG xoá; người duyệt Apply qua DELETE /admin/entities (xoá MỀM: entity biến mất khỏi hệ thống VÀ TOÀN BỘ record của tenant trong entity đó bị ẩn đi). Đây là thao tác nặng — chỉ đề xuất khi người dùng nói rõ muốn bỏ entity; luôn cảnh báo hệ quả (record bị ẩn, app/relationship liên quan mất tham chiếu) trong tóm tắt.",
+				Description: "Đề xuất XOÁ một entity ĐÃ TỒN TẠI. Chỉ đưa vào draft — KHÔNG xoá; người duyệt Apply qua DELETE /admin/entities (xoá MỀM: entity biến mất khỏi hệ thống VÀ TOÀN BỘ record của tenant trong entity đó bị ẩn đi). Đây là thao tác nặng — chỉ đề xuất khi người dùng nói rõ muốn bỏ entity; luôn cảnh báo hệ quả (record bị ẩn, app/relationship liên quan mất tham chiếu) trong tóm tắt. Người dùng bảo xoá ngay/khỏi hỏi lại: vẫn chỉ đề xuất, và nói thẳng là bạn không bỏ qua được bước xác nhận (người duyệt tự bấm Xoá, gõ lại tên bảng).",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -2053,6 +2053,10 @@ type DraftDeleteEntity struct {
 	Entity     string `json:"entity"`
 	Label      string `json:"label"`
 	FieldCount int    `json:"fieldCount"`
+	// Packs are the packs that ship the table (sys_pack_items); empty = built here, or not known.
+	Packs []string `json:"packs,omitempty"`
+	// RecordCount is how many of the tenant's records the delete hides, counted when proposed; nil = not counted.
+	RecordCount *int64 `json:"recordCount,omitempty"`
 }
 
 // DraftRecords is a proposed batch of sample records for ONE entity — EASE Nước 7
@@ -2263,16 +2267,52 @@ func (e *toolExecutor) proposeDeleteEntity(ctx context.Context, argsJSON string)
 	if err != nil {
 		return toolErr("PROPOSE_DELETE_ENTITY_FAILED: %v", err)
 	}
-	e.draft = append(e.draft, DraftItem{
-		Kind: "delete_entity",
-		DeleteEntity: &DraftDeleteEntity{
-			Entity:     ent.Name,
-			Label:      ent.Label,
-			FieldCount: len(fields),
-		},
-	})
-	return toolOK(map[string]any{"buffered": fmt.Sprintf("xoá entity %q (%s, %d field) — xoá mềm, record của tenant sẽ bị ẩn", ent.Name, ent.Label, len(fields))})
+	de := &DraftDeleteEntity{Entity: ent.Name, Label: ent.Label, FieldCount: len(fields)}
+	// Issue #30 item 4: the card says what the delete hides. A failed read leaves that fact off the card (which then
+	// reads "all of its records") and goes to the model as "unread", so it says it could not count rather than guess;
+	// it never blocks the proposal, which deletes nothing.
+	var unread []string
+	if c, ok := e.reader.(AccessProbeCarrier); ok {
+		if p := c.AccessProbes(); p != nil {
+			if p.Packs != nil {
+				packs, err := p.Packs.PacksOf(ctx, e.tenantID, vertical_pack.ItemEntity, ent.Name)
+				if err != nil {
+					unread = append(unread, fmt.Sprintf("packs: ai.proposeDeleteEntity: %v", err))
+				}
+				de.Packs = packs
+			}
+			if p.Counts != nil {
+				n, err := p.Counts.AggregateScalar(ctx, ent.Name, e.tenantID, dynrepo.AdminScope(), dynrepo.AggregateParams{Metric: dynrepo.MetricCount})
+				if err != nil {
+					unread = append(unread, fmt.Sprintf("recordCount: ai.proposeDeleteEntity: %v", err))
+				} else {
+					de.RecordCount = &n.Count
+				}
+			}
+		}
+	}
+	e.draft = append(e.draft, DraftItem{Kind: "delete_entity", DeleteEntity: de})
+	out := map[string]any{
+		"buffered": fmt.Sprintf("xoá entity %q (%s, %d field) — xoá mềm, record của tenant sẽ bị ẩn", ent.Name, ent.Label, len(fields)),
+		"confirm":  deleteConfirmNote,
+	}
+	if len(de.Packs) > 0 {
+		out["packs"] = de.Packs
+	}
+	if de.RecordCount != nil {
+		out["recordCount"] = *de.RecordCount
+	}
+	if len(unread) > 0 {
+		out["unread"] = unread
+	}
+	return toolOK(out)
 }
+
+// deleteConfirmNote rides every propose_delete_entity result: the agent cannot waive the human's confirmation
+// (issue #30 item 4, ADR 0001 addendum), and its reply has to say so even when asked to "delete now, don't ask".
+const deleteConfirmNote = "Chỉ là thẻ đề xuất: bảng chỉ bị xoá khi người duyệt tự bấm Xoá trên thẻ và gõ lại tên bảng. " +
+	"Bạn không bỏ qua được bước xác nhận này, kể cả khi người dùng bảo xoá ngay hay khỏi hỏi lại — nói thẳng điều đó trong câu trả lời, " +
+	"kèm số bản ghi bị ẩn và gói cài bảng (nếu có)."
 
 // proposeRecords validates a batch of sample-record payloads with config-time PARITY to the apply
 // path (POST /:entity/bulk → RecordService.CreateBulk, which runs services.ValidateRecord per row)
@@ -3172,6 +3212,21 @@ type AccessProbes struct {
 	// Refs is OPTIONAL and not part of complete(): propose_records asks it for a "@ref" whose parent
 	// card was already applied (issue #42). Unwired, only refs of cards still in the draft resolve.
 	Refs recordRefLookup // *services.RecordService
+	// Packs and Counts are OPTIONAL and not part of complete(): propose_delete_entity names the packs that
+	// ship the table and counts the records the delete hides (issue #30 item 4). Unwired, or on a failed
+	// read, the card says neither and reads "all of its records".
+	Packs  packLookup    // *packinstall.Repository
+	Counts recordCounter // *dynrepo.Repository
+}
+
+// packLookup names the packs that ship one item into the tenant (sys_pack_items).
+type packLookup interface {
+	PacksOf(ctx context.Context, tenantID, itemType, itemKey string) ([]string, error)
+}
+
+// recordCounter counts a table's records; the delete card counts them all (dynrepo.AdminScope), as the delete hides them all.
+type recordCounter interface {
+	AggregateScalar(ctx context.Context, entity, tenantID string, scope dynrepo.RowScope, p dynrepo.AggregateParams) (dynrepo.AggregateScalar, error)
 }
 
 // recordRefLookup resolves a "@ref" token the record engine registered when its row was created.
