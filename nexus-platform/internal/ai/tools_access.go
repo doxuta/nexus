@@ -235,7 +235,7 @@ func (e *toolExecutor) listRoleGrants(ctx context.Context) string {
 		probes = c.AccessProbes()
 	}
 	if probes == nil || probes.Roles == nil {
-		return toolErr("ROLES_GRANTS_UNAVAILABLE: the server has no role reader wired for the assistant; call list_roles without grants")
+		return toolErr("ROLES_GRANTS_UNAVAILABLE: server chưa nối bộ đọc vai cho AI Builder — gọi list_roles không kèm grants")
 	}
 	roles, err := probes.Roles.ListRoles(ctx, e.tenantID)
 	if err != nil {

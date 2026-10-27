@@ -48,7 +48,7 @@ type Threads interface {
 }
 
 // instructions is what an MCP client hands its model about this server.
-const instructions = `Nexus is a platform for business apps whose apps are metadata: tables (entities), fields, relations, layouts, automation rules, reports, apps and access. These tools read ONE workspace's model and PROPOSE changes to it. A proposal changes nothing: it is saved as a card in the builder's Studio thread, where a human reviews it, applies it to drafts and publishes it. No tool applies, publishes or writes data, so tell the user the change is waiting for review. Read before you propose (nexus_list_entities, nexus_list_fields). Names are snake_case; labels are what users see. A call refused by a validator answers {"ok":false,"error":"CODE: message"}: fix the arguments and call again. Most tool descriptions are in Vietnamese.`
+const instructions = `Nexus is a platform for business apps whose apps are metadata: tables (entities), fields, relations, layouts, automation rules, reports, apps and access. These tools read ONE workspace's model and PROPOSE changes to it. A proposal changes nothing: it is saved as a card in the builder's Studio thread, where a human reviews it, applies it to drafts and publishes it. No tool applies, publishes or writes data, so tell the user the change is waiting for review. Read before you propose (nexus_list_entities, nexus_list_fields). Names are snake_case; labels are what users see. A call refused by a validator answers {"ok":false,"error":"CODE: message"}: fix the arguments and call again. Tool descriptions are in Vietnamese.`
 
 type server struct {
 	tokens  Verifier

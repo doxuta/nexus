@@ -538,11 +538,11 @@ func toolDefinitionsBase() []Tool {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        "list_roles",
-				Description: "Lists the workspace's role names. Call it before naming a role in propose_workqueue (roleName), propose_approval (approverType 'role') or propose_access: a role that does not exist fails at Apply. No fitting role: leave roleName empty or use approverType 'user'. grants: true adds each role's current grants (entityName '*' = every table, accessLevel = which rows) to answer who can view or edit a table. Admins bypass grants. Read-only.",
+				Description: "Liệt kê TÊN các vai (role) đang có của tenant. BẮT BUỘC gọi trước khi dùng roleName trong propose_workqueue, người duyệt (approverType='role') trong propose_approval hoặc role trong propose_access — tên vai không có thật sẽ làm bước Apply thất bại. Chưa có vai phù hợp thì bỏ trống roleName (queue hiện với mọi người) hoặc dùng approverType='user'. grants: true → kèm quyền hiện có của từng vai (entityName '*' = mọi bảng, accessLevel = những bản ghi nào) để trả lời 'ai được xem / sửa bảng X'; quản trị viên bỏ qua quyền. Chỉ đọc, không ghi, không vào draft.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"grants": map[string]any{"type": "boolean", "description": "true: also list each role's current grants."},
+						"grants": map[string]any{"type": "boolean", "description": "true: kèm quyền hiện có của từng vai."},
 					},
 				},
 			},
