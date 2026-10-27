@@ -25,11 +25,11 @@ func TestGateway_Complete_ToolCallsResponse(t *testing.T) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Errorf("path = %q; want /v1/chat/completions", r.URL.Path)
 		}
-		// Assert the request never streams.
+		// The request asks for a stream; this gateway ignores it and answers one JSON body, which is read as before.
 		var req ChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		if req.Stream {
-			t.Error("request Stream = true; want false")
+		if !req.Stream {
+			t.Error("request Stream = false; want true")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
