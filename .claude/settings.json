@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-careful.sh\"",
+            "timeout": 10,
+            "statusMessage": "careful: checking for destructive command"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-careful.sh\"",
+            "timeout": 10,
+            "statusMessage": "careful: checking for an edit to a guardrail file"
+          }
+        ]
+      }
+    ]
+  }
+}
