@@ -48,7 +48,11 @@ advisory.
   - An `nxm_` key is stored only as a hash ([`internal/auth/mcp_token.go:12-28`]). It is refused when revoked or
     expired, when the workspace is retired or suspended, or when its user is no longer an active builder
     ([`internal/services/mcp_token_service.go:175-233`]). Logout-all and a password change revoke it
-    ([`internal/services/auth_service_extra.go:202-222`]).
+    ([`internal/services/auth_service_extra.go:202-222`]). Lookups of `nxm_` keys not yet seen working are throttled
+    per IP with the `nxk_` budget, and a working key has its own request budget
+    ([`internal/middleware/mcp_ratelimit.go`](nexus-platform/internal/middleware/mcp_ratelimit.go)). A key's thread
+    takes at most 200 turns and one proposal at most 256 KiB
+    ([`internal/mcpserver/mcpserver.go`](nexus-platform/internal/mcpserver/mcpserver.go)).
 - **`/mcp` and `/api/v1` are separate.** `/mcp` is mounted outside `/api/v1`, with its own bearer
   ([`cmd/server/main.go:1516-1518`]). `/api/v1` refuses an `nxm_` key ([`internal/services/api_key_service.go:496-500`]).
   `/mcp` answers an `nxk_` key with 403 and any other non-`nxm_` credential with 401
@@ -112,9 +116,6 @@ session ([`nexus-web/lib/aiApply.ts:1-5`]), and a draft-class change then needs 
 
 - **Access follow-ups ([#23]).** A hidden-new table is still reachable through N-N `Link` and `ListLinked` and through
   `?expand`, with a crafted call and an approved grant. `PUT /admin/roles/:id` is unversioned.
-- **MCP follow-ups ([#22]).** `/mcp` has no rate limit, no brake on failed key lookups, and no cap on turns per thread.
-  The MCP tool filter is a naming rule, `propose_field` judges a dependent picklist against the published model, and
-  the MCP note misdescribes an access card.
 - **404 instead of 403 ([#18]).** A record the rep can read but not edit answers `PUT` with 404. Existence is not leaked,
   but the reason is misstated.
 - **The cutoff's second.** Metadata timestamps have second precision. A version's cutoff names the newest definition
@@ -192,5 +193,4 @@ session ([`nexus-web/lib/aiApply.ts:1-5`]), and a draft-class change then needs 
 [#18]: https://github.com/doxuta/nexus/issues/18
 [#13]: https://github.com/doxuta/nexus/issues/13
 [#19]: https://github.com/doxuta/nexus/issues/19
-[#22]: https://github.com/doxuta/nexus/issues/22
 [#23]: https://github.com/doxuta/nexus/issues/23
