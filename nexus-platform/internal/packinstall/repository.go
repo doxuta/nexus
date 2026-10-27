@@ -161,6 +161,20 @@ func (r *Repository) ListItems(ctx context.Context, tenantID, slug string) ([]ve
 	return out, nil
 }
 
+// PacksOf returns the slugs of the packs that ship one item into the tenant (sorted; none = no pack
+// does). The builder agent's delete card names them (issue #30 item 4). A pack that skipped an item
+// it found already there still ships it, so it counts too.
+func (r *Repository) PacksOf(ctx context.Context, tenantID, itemType, itemKey string) ([]string, error) {
+	var slugs []string
+	if err := r.db.WithContext(ctx).Raw(
+		"SELECT pack_slug FROM sys_pack_items WHERE tenant_id = ? AND item_type = ? AND item_key = ? ORDER BY pack_slug",
+		tenantID, itemType, itemKey,
+	).Scan(&slugs).Error; err != nil {
+		return nil, fmt.Errorf("packinstall.PacksOf: %w", err)
+	}
+	return slugs, nil
+}
+
 // ListItemKeysOtherSlugs returns the (slug, type, key) of every provenance row the tenant holds
 // for packs OTHER than slug — the upgrade plan's "dùng chung với gói <mã>" lookup (FR-015).
 // Tenant-scoped: another tenant's rows are never visible.

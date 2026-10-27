@@ -253,3 +253,31 @@ func TestPackItems_ListItemsLiveIDProtectedAndOtherSlugs(t *testing.T) {
 		t.Errorf("unknown tenant sees %v (err %v), want nothing", none, err)
 	}
 }
+
+// Issue #30 item 4: PacksOf names every pack that ships one item, sorted, from the tenant's own ledger rows only.
+func TestPackItems_PacksOfIsTenantScopedAndSorted(t *testing.T) {
+	gdb := piSetup(t)
+	repo := New(gdb)
+	ctx := context.Background()
+	const tenantA = "11111111-1111-1111-1111-111111111111"
+	const tenantB = "22222222-2222-2222-2222-222222222222"
+	table := func(key string) []vertical_pack.PackItem {
+		return []vertical_pack.PackItem{{Type: vertical_pack.ItemEntity, Key: key, Content: []byte(`{}`), Wrote: true}}
+	}
+	for _, s := range []struct{ tenant, slug, key string }{
+		{tenantA, "ticketing", "contacts"}, {tenantA, "crm", "contacts"}, {tenantB, "lms", "contacts"}, {tenantA, "crm", "deals"},
+	} {
+		if err := repo.SaveItems(ctx, s.tenant, s.slug, "1.0.0", table(s.key)); err != nil {
+			t.Fatalf("SaveItems: %v", err)
+		}
+	}
+	if got, err := repo.PacksOf(ctx, tenantA, vertical_pack.ItemEntity, "contacts"); err != nil || strings.Join(got, ",") != "crm,ticketing" {
+		t.Errorf("PacksOf(A, contacts) = %v, %v; want [crm ticketing]", got, err)
+	}
+	if got, err := repo.PacksOf(ctx, tenantA, vertical_pack.ItemLayout, "contacts"); err != nil || len(got) != 0 {
+		t.Errorf("another item type = %v, %v; want none", got, err)
+	}
+	if got, err := repo.PacksOf(ctx, tenantB, vertical_pack.ItemEntity, "deals"); err != nil || len(got) != 0 {
+		t.Errorf("tenant B sees tenant A's pack: %v, %v", got, err)
+	}
+}

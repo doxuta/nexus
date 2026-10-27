@@ -189,7 +189,7 @@ func (a *AIBuilderAgent) ChatWithProgress(ctx context.Context, scope Scope, tena
 		})
 	}()
 
-	exec := &toolExecutor{reader: a.reader, docs: a.docs, tenantID: tenantID, turnTag: runID}
+	exec := &toolExecutor{reader: a.reader, docs: a.docs, tenantID: tenantID, turnTag: runID, logger: a.logger}
 
 	// Assemble the conversation: persona system prompt + tenant grounding + the client history.
 	convo := make([]ChatMessage, 0, len(messages)+2)
@@ -288,7 +288,7 @@ func (a *AIBuilderAgent) ChatWithProgress(ctx context.Context, scope Scope, tena
 // @refs of propose_records per thread, as the run id does per turn. It returns the tool's JSON
 // result and the proposals this call added, each with its change envelope.
 func (a *AIBuilderAgent) RunTool(ctx context.Context, tenantID, tag string, prior []DraftItem, name, argsJSON string) (string, []DraftItem) {
-	exec := &toolExecutor{reader: a.reader, docs: a.docs, tenantID: tenantID, turnTag: tag, draft: append([]DraftItem(nil), prior...)}
+	exec := &toolExecutor{reader: a.reader, docs: a.docs, tenantID: tenantID, turnTag: tag, draft: append([]DraftItem(nil), prior...), logger: a.logger}
 	res := exec.execute(ctx, name, argsJSON)
 	return res, exec.draft[len(prior):]
 }

@@ -14,7 +14,7 @@ import { InlineConfirm } from "@/components/studio/InlineConfirm";
 import { proposedFromItem, useProposalOverlay } from "@/components/studio/assistant/ProposalOverlay";
 import { StatusText, type StatusTone } from "@/components/studio/StatusText";
 import { getDeleteEntityDraft, getDeleteFieldDraft, needsLiveConfirm, type AiDraftItem } from "@/lib/aiBuilder";
-import { proposalDone, proposalView, proposalWarnLink, type ProposalOp } from "@/lib/aiProposalView";
+import { deleteEntityConfirmText, proposalDone, proposalView, proposalWarnLink, type ProposalOp } from "@/lib/aiProposalView";
 import { t, tf } from "@/lib/i18n";
 import type { I18nKey } from "@/lib/i18n/vi";
 import type { ApplyState } from "@/lib/aiApplyState";
@@ -302,7 +302,7 @@ export function ProposalCard({ item, state, delivered, tableHidden, asSample, on
             <InlineConfirm
               tone="error"
               message={realRows ? t("studio.assistant.sample.confirmReal") : de
-                ? tf("studio.assistant.confirm.entity", { label: de.label || de.entity, n: de.fieldCount })
+                ? deleteEntityConfirmText(de)
                 : tf("studio.assistant.confirm.field", { label: df?.label || df?.field || "", entity: df?.entity ?? "" })}
               confirmLabel={realRows ? t("studio.assistant.sample.confirmRealAction") : t(de ? "studio.assistant.confirm.entityAction" : "studio.assistant.confirm.fieldAction")}
               confirmDisabled={!retypeOk}
