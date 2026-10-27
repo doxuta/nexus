@@ -32,6 +32,8 @@ import { useAssistantChat } from "./useAssistantChat";
 // How often an open MCP thread re-reads itself, and after how long without a new card it stops (issue #22).
 const FOLLOW_POLL_MS = 5_000;
 const FOLLOW_IDLE_MS = 10 * 60_000;
+/** A turn this tab sent (a read-back turn is m_<seq>, serverMessagesToTurns). */
+const ownTurn = (x: ChatTurn) => !x.id.startsWith("m_");
 
 type Ask = (entity: string, recordId: string) => void;
 const AskCtx = createContext<Ask | null>(null);
@@ -239,7 +241,8 @@ export function AssistantProvider({ slug, projectName, route, params, panel, chi
   // Issue #22: an MCP agent adds cards to the thread its key is bound to; the open thread re-reads itself while that
   // key is live: on focus, and every FOLLOW_POLL_MS while the tab is visible until FOLLOW_IDLE_MS pass with nothing new
   // (focus wakes it). Read-back turns keep their ids (m_<seq>), so a card's apply state survives the re-read. A turn of
-  // this tab's own stops it: its cards carry ids of this tab, which the server's copy would replace.
+  // this tab's own stops it: its cards carry ids of this tab, which the server's copy would replace. That is judged
+  // again when the read lands, on the turns as they are then: the builder may have sent one while it was out.
   const turnsRef = useRef(turns);
   useEffect(() => { turnsRef.current = turns; });
   const followId = follow && follow.id === sessionId ? follow.id : null;
@@ -253,10 +256,11 @@ export function AssistantProvider({ slug, projectName, route, params, panel, chi
       if (now >= followUntil) { setFollow(null); return; } // the key expired: nothing more will land here
       if (woken) grew = now;
       if (document.hidden || now - grew > FOLLOW_IDLE_MS) return;
-      if (turnsRef.current.some((x) => !x.id.startsWith("m_"))) return;
+      if (turnsRef.current.some(ownTurn)) return;
       const s = await getAiSession(followId).catch(() => null);
       if (!alive || !s || sessionIdRef.current !== followId || s.messages.length <= turnsRef.current.length) return;
-      setTurns(serverMessagesToTurns(s.messages));
+      const next = serverMessagesToTurns(s.messages);
+      setTurns((cur) => (cur.some(ownTurn) || next.length <= cur.length ? cur : next));
       grew = Date.now();
     };
     const poll = setInterval(() => void read(false), FOLLOW_POLL_MS);

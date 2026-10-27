@@ -16,6 +16,10 @@ vi.mock("@/lib/studioContext", () => ({
 vi.mock("@/lib/previewSession", () => ({ getPreviewToken: () => null }));
 const pub = { q: {} as Record<string, unknown> };
 vi.mock("../usePublishState", () => ({ usePublishState: () => pub.q }));
+// A turn the builder sends stays in flight: what matters here is what the thread shows meanwhile.
+vi.mock("@/lib/aiBuilderStream", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/aiBuilderStream")>()), aiBuilderChatStream: vi.fn(() => new Promise(() => {})),
+}));
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
@@ -29,7 +33,7 @@ import { addField, createWorkflow, discardDraft, getAiSession, listDraftChanges,
 import { resetAssistantOpenForTests, useAssistantOpen } from "@/lib/assistantOpen";
 import { parseStudioPath } from "@/lib/studioRoutes";
 import { AssistantMount } from "./AssistantMount";
-import { AssistantProvider, useOpenThread } from "./AssistantProvider";
+import { AssistantProvider, useAssistant, useOpenThread } from "./AssistantProvider";
 
 const THREAD = {
   id: "sess-1",
@@ -53,8 +57,11 @@ const liveUntil = { at: "2999-01-01T00:00:00Z" };
 function Opener() {
   const open = useOpenThread();
   const shown = useAssistantOpen();
+  const { send } = useAssistant();
   return (
     <>
+      <button type="button" onClick={() => send("Thêm cột kho")}>gui</button>
+      <button type="button" disabled={!open} onClick={() => void open?.("sess-2")}>mo-2</button>
       <button type="button" disabled={!open} onClick={() => void open?.("sess-1")}>mo</button>
       <button type="button" disabled={!open} onClick={() => void open?.("sess-1", liveUntil.at)}>mo-key</button>
       <span data-testid="open-state">{String(shown)}</span>
@@ -188,6 +195,59 @@ describe("an open thread an agent key is bound to", () => {
     await act(async () => { window.dispatchEvent(new Event("focus")); });
     await tick(0);
     expect(screen.getByText("[MCP] Agent gọi nexus_propose_entity")).toBeInTheDocument();
+  });
+
+  // The three guards of a re-read, and the race between a read in flight and the builder's own turn.
+  const deferred = () => { let release!: (v: unknown) => void; const p = new Promise((r) => { release = r; }); return { p, release }; };
+  const TWO = { ...THREAD, id: "sess-2", messages: [{ seq: 0, role: "user", content: "Cuộc khác", draft: null, createdAt: "2026-10-17T03:00:00Z" }] };
+
+  it("a read in flight when the builder sends a message never replaces that message", async () => {
+    mount();
+    await openWith("mo-key");
+    const read = deferred();
+    vi.mocked(getAiSession).mockImplementation(() => read.p as never);
+    await tick(5_000); // the poll's read is out
+    expect(getAiSession).toHaveBeenCalledTimes(2);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "gui" })); });
+    await act(async () => { read.release(LATER); });
+    expect(screen.getByText("Thêm cột kho")).toBeInTheDocument();
+    expect(screen.queryByText("[MCP] Agent gọi nexus_propose_entity")).toBeNull();
+  });
+
+  it("a turn of the builder's own stops the re-read", async () => {
+    mount();
+    await openWith("mo-key");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "gui" })); });
+    await tick(30_000);
+    expect(getAiSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("a hidden tab does not read; showing it again does", async () => {
+    mount();
+    await openWith("mo-key");
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    await tick(30_000);
+    expect(getAiSession).toHaveBeenCalledTimes(1);
+    hidden.mockReturnValue(false);
+    vi.mocked(getAiSession).mockResolvedValue(LATER as never);
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    await tick(0);
+    expect(getAiSession).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("[MCP] Agent gọi nexus_propose_entity")).toBeInTheDocument();
+    hidden.mockRestore();
+  });
+
+  it("a late read of a thread never lands in another thread opened meanwhile", async () => {
+    mount();
+    await openWith("mo-key");
+    const read = deferred();
+    vi.mocked(getAiSession).mockImplementation(((id: string) => (id === "sess-2" ? Promise.resolve(TWO) : read.p)) as never);
+    await tick(5_000); // sess-1's read is out
+    await openWith("mo-2");
+    expect(screen.getByText("Cuộc khác")).toBeInTheDocument();
+    await act(async () => { read.release(LATER); });
+    expect(screen.getByText("Cuộc khác")).toBeInTheDocument();
+    expect(screen.queryByText("[MCP] Agent gọi nexus_propose_entity")).toBeNull();
   });
 
   it("is not followed without a live key: no key, or an expired one", async () => {
