@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"nexus/platform/internal/audit"
+	"nexus/platform/internal/auth"
 )
 
 func TestRole_AuditRowsNameTheRole(t *testing.T) {
@@ -54,5 +55,35 @@ func TestRole_AuditRowsNameTheRole(t *testing.T) {
 	}
 	if d := cap.events[1].Diff; d.After["actions"] == nil {
 		t.Errorf("grants-only update diff = %+v; want the changed actions kept", d)
+	}
+}
+
+// RecreateRole makes the in-memory repo a roleRecreator: the role and its grants come back under their id.
+func (f *fakeRoleRepo) RecreateRole(ctx context.Context, role *auth.Role, actions []auth.RoleAction, _ []auth.FieldACL, _ []string) (int64, error) {
+	return 0, f.CreateRole(ctx, role, actions)
+}
+
+// Issue #67: Recreate (the undo of a role delete, publish revert) writes its create row on the role's
+// own id too, so GET /audit-log?entityName=__role__&recordId=<id> keeps the whole life of the role.
+func TestRole_RecreateAuditRowCarriesTheRoleID(t *testing.T) {
+	ctx := context.Background()
+	svc, repo := newRoleSvc()
+	svc.WithRecreator(repo)
+	cap := &captureAuditor{}
+	svc.WithAuditor(cap)
+	before := RoleView{ID: "rid-gone", TenantID: "t1", Name: "sales", Label: "Sales",
+		Actions: []RoleActionView{{EntityName: "contacts", Action: "view", AccessLevel: "all"}}}
+	if _, err := svc.Recreate(ctx, "t1", "rid-gone", before, nil, nil); err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
+	if len(cap.events) != 1 {
+		t.Fatalf("events = %d; want the one create row", len(cap.events))
+	}
+	e := cap.events[0]
+	if e.TenantID != "t1" || e.EntityName != audit.RoleMeta || e.Action != audit.ActionCreate || e.RecordID != "rid-gone" {
+		t.Fatalf("event = %s %s/%q in %q; want create __role__ with record_id = the role's id \"rid-gone\" in t1", e.Action, e.EntityName, e.RecordID, e.TenantID)
+	}
+	if e.Diff == nil || e.Diff.After["name"] != "sales" {
+		t.Errorf("diff = %+v; want the recreated role's name", e.Diff)
 	}
 }

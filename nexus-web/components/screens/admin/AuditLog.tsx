@@ -79,13 +79,21 @@ function renderValue(v: unknown): string {
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
 }
-function buildDiffRows(diff: { before?: Record<string, unknown>; after?: Record<string, unknown> }) {
-  const keys = Array.from(new Set([...Object.keys(diff.before ?? {}), ...Object.keys(diff.after ?? {})]));
-  return keys.map((k) => ({ field: k, before: renderValue(diff.before?.[k]), after: renderValue(diff.after?.[k]) }));
+// A role update carries the role's name on both sides so the row names the role (#66); drawn, an unchanged name
+// read as a rename, so that one key is dropped (issue #67). Only that one: elsewhere the same value on both
+// sides IS a change, e.g. a sensitive field is written "[redacted]" on both sides on purpose (audit_redact.go).
+function buildDiffRows(entry: AuditEntry) {
+  const before = entry.diff?.before ?? {};
+  const after = entry.diff?.after ?? {};
+  const paddedName = entry.entityName === ROLE_META && before.name === after.name;
+  return Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+    .filter((k) => !(paddedName && k === "name"))
+    .map((k) => ({ field: k, before: renderValue(before[k]), after: renderValue(after[k]) }));
 }
 
 const SESSION_META = "__workspace_session__";
 const LAYOUT_META = "__layout__";
+const ROLE_META = "__role__";
 
 /** The action word of a row: a workspace session is "Mở"/"Đóng" (D-9 reuses create/delete), the rest by action. */
 function rowVerb(entry: AuditEntry): string {
@@ -109,6 +117,14 @@ function layoutTarget(entry: AuditEntry, tableLabel: (entityName: string) => str
   if (!entity) return undefined;
   const viewKey = `audit.layout.view.${view}` as I18nKey;
   return [tableLabel(entity), view ? t(viewKey) : ""].filter(Boolean).join(" · ");
+}
+
+/** A role row's record cell names the role (issue #67): its name is in the diff, on both sides of an update, but an
+ * unchanged name is no longer drawn there. */
+function roleTarget(entry: AuditEntry): string | undefined {
+  if (entry.entityName !== ROLE_META) return undefined;
+  const name = entry.diff?.after?.name ?? entry.diff?.before?.name;
+  return typeof name === "string" && name ? name : undefined;
 }
 
 /** The loaded list for one request key (filter + refresh tick). */
@@ -406,7 +422,7 @@ function AuditRow({ entry, actorName, entityLabel, tableLabel, defaultOpen }: {
 }) {
   const [open, setOpen] = useState(!!defaultOpen);
   const diffId = useId();
-  const diffRows = entry.diff ? buildDiffRows(entry.diff) : [];
+  const diffRows = buildDiffRows(entry);
   const hasDiff = diffRows.length > 0;
   // Who acted, in order of trust: a user of THIS customer (resolved by the caller, which also maps the
   // engine's synthetic ids); else the label the SERVER computed for a Nexus builder who worked in this
@@ -416,7 +432,7 @@ function AuditRow({ entry, actorName, entityLabel, tableLabel, defaultOpen }: {
   const actorDisplay = actorName ?? entry.actorLabel ?? SYSTEM_ACTORS[entry.actorUserId] ?? shortId(entry.actorUserId);
   const verb = rowVerb(entry);
   const until = sessionUntil(entry);
-  const target = layoutTarget(entry, tableLabel);
+  const target = layoutTarget(entry, tableLabel) ?? roleTarget(entry);
   const at = fmtAt(entry.at);
   const toggleLabel = tf("page.audit.toggleDiff", { actor: actorDisplay, entity: entityLabel, at });
 
@@ -457,7 +473,7 @@ function AuditRow({ entry, actorName, entityLabel, tableLabel, defaultOpen }: {
         </td>
         <td>
           {target
-            ? <div className="slds-truncate" title={target}>{target}</div>
+            ? <div className="slds-truncate" title={entry.recordId ? `${target} · ${entry.recordId}` : target}>{target}</div>
             : <div className="slds-truncate tabular-nums" title={entry.recordId || undefined}>{shortId(entry.recordId)}</div>}
         </td>
         <td>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -323,6 +324,66 @@ func (r *RoleRepository) ListActionsForRole(ctx context.Context, tenantID, roleI
 		return nil, fmt.Errorf("auth.RoleRepository.ListActionsForRole: %w", err)
 	}
 	return actions, nil
+}
+
+// RoleGrants is one role of a tenant with its grant rows (ListRoleGrants). Each grant carries its id,
+// role id, entity, action and access level; its timestamps are not read.
+type RoleGrants struct {
+	Role    Role
+	Actions []RoleAction // never nil: a role without a grant has an empty list
+}
+
+// ListRoleGrants returns every role of the tenant with its grants in ONE query (issue #67): acl_roles
+// LEFT JOIN acl_role_actions, pinned to tenant_id. One statement reads one snapshot, so a role deleted
+// meanwhile is simply absent (list_roles used to read the role list and then each role's grants, and a
+// role deleted in between failed the whole read). Roles by name, grants by entity then action, the
+// order ListRoles and ListActionsForRole give.
+func (r *RoleRepository) ListRoleGrants(ctx context.Context, tenantID string) ([]RoleGrants, error) {
+	var rows []struct {
+		RoleID      string
+		TenantID    string
+		Name        string
+		Label       string
+		CreatedAt   time.Time
+		UpdatedAt   time.Time
+		GrantID     *string
+		EntityName  *string
+		Action      *string
+		AccessLevel *string
+	}
+	err := r.db.WithContext(ctx).
+		Table("acl_roles").
+		Select("acl_roles.id AS role_id, acl_roles.tenant_id, acl_roles.name, acl_roles.label, acl_roles.created_at, acl_roles.updated_at, "+
+			"acl_role_actions.id AS grant_id, acl_role_actions.entity_name, acl_role_actions.action, acl_role_actions.access_level").
+		Joins("LEFT JOIN acl_role_actions ON acl_role_actions.role_id = acl_roles.id").
+		Where("acl_roles.tenant_id = ?", tenantID).
+		Order("acl_roles.name ASC, acl_roles.id ASC, acl_role_actions.entity_name ASC, acl_role_actions.action ASC").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("auth.RoleRepository.ListRoleGrants: %w", err)
+	}
+	out := []RoleGrants{}
+	for _, row := range rows {
+		if n := len(out); n == 0 || out[n-1].Role.ID != row.RoleID {
+			out = append(out, RoleGrants{
+				Role:    Role{ID: row.RoleID, TenantID: row.TenantID, Name: row.Name, Label: row.Label, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt},
+				Actions: []RoleAction{},
+			})
+		}
+		if row.GrantID == nil { // LEFT JOIN: a role without a grant
+			continue
+		}
+		g := &out[len(out)-1]
+		g.Actions = append(g.Actions, RoleAction{ID: *row.GrantID, RoleID: row.RoleID, EntityName: deref(row.EntityName), Action: deref(row.Action), AccessLevel: deref(row.AccessLevel)})
+	}
+	return out, nil
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // LoadActionsForACL loads a role's grants for the per-request ACL decision. It is the HOT PATH
