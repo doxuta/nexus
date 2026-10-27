@@ -16,6 +16,7 @@
 import { ApiError } from "@/lib/api";
 import { aiLimitMessage } from "@/lib/aiBuilder";
 import { errorMessage } from "@/lib/errorMessages";
+import { t } from "@/lib/i18n";
 
 // kind steers rendering: "disabled" = feature off (disable the composer, wrench-honest),
 // "limit" = transient 429 (warning tone, composer stays usable — resend is always safe),
@@ -129,6 +130,7 @@ export interface AssistantServerMessage {
   content: string;
   drafts: AssistantDraft[] | null;
   createdAt: string;
+  outcome?: string; // how an assistant turn ended ("ok" | "max_steps" | "refused"); absent when none was stored
 }
 
 export interface AssistantSessionDetail {
@@ -147,13 +149,25 @@ export interface AssistantTurn {
   drafts?: AssistantDraft[] | null;
 }
 
+/**
+ * What the ask panel says for an answered turn, live or reopened (#30 item 5): the declined line when the model
+ * refused; the "ask narrower" hint when the tool loop ran out of steps (a partial text included) or the model
+ * answered nothing, instead of a blank bubble; else the reply.
+ */
+export function askReplyText(reply: string | null | undefined, outcome: string | null | undefined): string {
+  if (outcome === "refused") return t("studio.assistant.refused");
+  const text = reply?.trim();
+  return text && outcome !== "max_steps" ? text : t("studio.assistant.tooBroad");
+}
+
 // Rebuild the ask-panel turns from a session's persisted rows (mirror of aiBuilder's
 // serverMessagesToTurns). Keys derive from the monotonic seq → stable across resumes; drafts stay
-// attached so a resumed confirm card is still actionable.
+// attached so a resumed confirm card is still actionable; an assistant reply reads as it did live.
 export function assistantMessagesToTurns(messages: AssistantServerMessage[]): AssistantTurn[] {
   return (messages ?? []).map((m) => {
     const role: AssistantTurn["role"] = m.role === "assistant" ? "assistant" : "user";
-    const turn: AssistantTurn = { id: `m_${m.seq}`, role, content: m.content ?? "" };
+    const content = role === "assistant" ? askReplyText(m.content, m.outcome) : m.content ?? "";
+    const turn: AssistantTurn = { id: `m_${m.seq}`, role, content };
     if (role === "assistant" && Array.isArray(m.drafts) && m.drafts.length > 0) turn.drafts = m.drafts;
     return turn;
   });

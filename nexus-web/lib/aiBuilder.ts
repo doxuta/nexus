@@ -465,13 +465,15 @@ export interface AiSessionSummary {
 
 // One persisted message row (GET /admin/ai/builder/sessions/:id → messages[]). The backend already
 // DECODES draft_json back to a draft[] (or null) on the way out, so it renders exactly like a live
-// chat turn's draft. An assistant max_steps turn can have empty content + a non-null draft.
+// chat turn's draft. An assistant max_steps turn can have empty content + a non-null draft. outcome is
+// how an assistant turn ended, as the live turn answered it; absent when none was stored.
 export interface AiServerMessage {
   seq: number;
   role: string; // server-written "user" | "assistant"; coerced on the way in (serverMessagesToTurns)
   content: string;
   draft: AiDraftItem[] | null;
   createdAt: string;
+  outcome?: AiOutcome;
 }
 
 // Full session detail (GET /admin/ai/builder/sessions/:id).
@@ -501,8 +503,8 @@ export interface ChatTurn {
 // serverMessagesToTurns: the pure mapper that rebuilds the rendered conversation from a session's
 // PERSISTED rows on resume (spec §11 — "click a session → render its history, bubbles + draft-cards
 // from persisted drafts"). Each assistant row's decoded draft is carried onto the turn so a resumed
-// draft-card is still applicable. outcome/usage are transient (not persisted per-message) so a
-// resumed assistant turn simply omits the token badge — the draft, the thing you act on, survives.
+// draft-card is still applicable, and its stored outcome so a declined turn says so and a max_steps one keeps
+// its note (#30 item 5). usage is not stored per message, so a resumed turn omits the token badge.
 // Role is coerced to the user/assistant union (rows are always server-written as one of those). The
 // key is derived from the monotonic seq so resume keys are stable (no random churn across reloads).
 export function serverMessagesToTurns(messages: AiServerMessage[]): ChatTurn[] {
@@ -511,6 +513,7 @@ export function serverMessagesToTurns(messages: AiServerMessage[]): ChatTurn[] {
     const turn: ChatTurn = { id: `m_${m.seq}`, role, content: m.content ?? "" };
     if (role === "assistant") turn.draft = hasDrafts(m.draft) ? m.draft : null;
     if (role === "assistant") turn.reopened = true;
+    if (role === "assistant" && m.outcome) turn.outcome = m.outcome;
     return turn;
   });
 }

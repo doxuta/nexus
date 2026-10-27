@@ -286,6 +286,7 @@ const en = {
   "studio.assistant.done.app": "App created. Staff see its data only once their role has access: tell the assistant who will use this app, or tick it on Users & access.",
   "studio.assistant.done.appLink": "Open the new app",
   "studio.assistant.refused": "The language model declined this request.",
+  "studio.assistant.tooBroad": "I have not finished answering this: the question is too complex or too broad. Try a narrower one (name the records and the conditions).",
 
   // ── The demo path (issue #6): every key the replayed demo loop renders, measured, plus their time- and
   // state-dependent siblings and the shell's menus. Keep it in step with the screens the loop walks. ──

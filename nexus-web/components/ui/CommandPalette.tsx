@@ -47,7 +47,7 @@ import {
   listAssistantSessions, getAssistantSession, deleteAssistantSession, type EntityMeta,
 } from "@/lib/api";
 import {
-  assistantNotice, assistantMessagesToTurns, getRecordCreateDraft, getRecordUpdateDraft,
+  assistantNotice, assistantMessagesToTurns, askReplyText, getRecordCreateDraft, getRecordUpdateDraft,
   assistantDraftValueText,
   type AssistantNotice, type AssistantDraft, type AssistantTurn, type AssistantSessionSummary,
 } from "@/lib/assistant";
@@ -373,13 +373,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       const res = await assistantAsk(question, askSession.current ?? undefined);
       if (reqId !== askReqId.current) return; // stale (palette reset/reopened) — drop
       askSession.current = res.sessionId; // keep the thread for follow-ups in this panel
-      // A max_steps turn (or an empty reply) means the tool loop hit its bound without a final
-      // answer — show an honest "narrow it down" bubble instead of a blank one (reviewer MED-1).
-      // A refused turn (the model declined) says exactly that instead.
-      const reply = res.reply?.trim();
-      const content = res.outcome === "refused" ? t("studio.assistant.refused") : reply && res.outcome !== "max_steps"
-        ? reply
-        : "Tôi chưa trả lời xong câu này — truy vấn quá phức tạp hoặc quá rộng. Thử hỏi hẹp hơn (nêu rõ đối tượng và điều kiện).";
+      // A max_steps turn (or an empty reply) shows an honest "narrow it down" bubble instead of a blank one
+      // (reviewer MED-1); a refused turn says the model declined. The same text a reopened thread shows.
+      const content = askReplyText(res.reply, res.outcome);
       // drafts ride along even on a max_steps turn — they were validated before the loop stopped.
       setAskTurns((ts) => [...ts, { id: newTurnId(), role: "assistant", content, drafts: res.drafts ?? null }]);
     } catch (err) {
@@ -608,12 +604,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                       <Sparkles className="size-3" strokeWidth={1.8} />
                     </span>
                     <div className="min-w-0 flex-1 space-y-2">
-                      {/* Skip an empty bubble when the turn is draft-only (resumed max_steps row). */}
-                      {(t.content || !t.drafts?.length) && (
-                        <div className="rounded-card rounded-tl-[4px] border border-bd bg-panel2 px-3 py-2">
-                          <MarkdownLite text={t.content} />
-                        </div>
-                      )}
+                      {/* Never empty: askReplyText says why a turn has no answer, live or reopened. */}
+                      <div className="rounded-card rounded-tl-[4px] border border-bd bg-panel2 px-3 py-2">
+                        <MarkdownLite text={t.content} />
+                      </div>
                       {(t.drafts ?? []).map((d, i) => (
                         <AskDraftCard
                           key={`${t.id}:${i}`}

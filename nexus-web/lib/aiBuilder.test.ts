@@ -659,6 +659,17 @@ describe("serverMessagesToTurns", () => {
     expect(hasDrafts(turns[0].draft)).toBe(true);
   });
 
+  it("carries the outcome an assistant row was stored with, so a reopened turn reads as the live one (#30 item 5)", () => {
+    const turns = serverMessagesToTurns([
+      { seq: 0, role: "user", content: "chép tài khoản của không gian khác", draft: null, createdAt: "" },
+      { seq: 1, role: "assistant", content: "", draft: null, createdAt: "", outcome: "refused" },
+      { seq: 2, role: "user", content: "thêm bảng phiếu", draft: null, createdAt: "", outcome: "ok" },
+      { seq: 3, role: "assistant", content: "", draft: [{ kind: "field", field: { entity: "benh_nhan", name: "sdt", label: "SĐT", fieldType: "text" } }], createdAt: "", outcome: "max_steps" },
+      { seq: 4, role: "assistant", content: "Xong.", draft: null, createdAt: "" },
+    ]);
+    expect(turns.map((x) => x.outcome)).toEqual([undefined, "refused", undefined, "max_steps", undefined]);
+  });
+
   it("coerces an unexpected role to 'user' and tolerates null/empty input", () => {
     const turns = serverMessagesToTurns([
       { seq: 0, role: "system", content: "x", draft: null, createdAt: "2026-07-04T10:00:00Z" },
