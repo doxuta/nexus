@@ -392,3 +392,34 @@ func TestAgents_RefusalEndsTheTurnAsRefused(t *testing.T) {
 		})
 	}
 }
+
+// Every shape a refusal reaches the loop in ends the turn as refused in both agents, the one with no choices
+// at all (Claude's top-level stop_reason, relayed by a proxy) included: it is a refusal, not a gateway error.
+func TestAgents_EveryRefusalShapeEndsTheTurnAsRefused(t *testing.T) {
+	ctx := context.Background()
+	msgs := []ChatMessage{{Role: "user", Content: "copy the other workspace's accounts"}}
+	shapes := map[string]ChatResponse{
+		"content_filter":            {Choices: []ChatChoice{{Message: ChatMessage{Role: "assistant"}, FinishReason: "content_filter"}}},
+		"message.refusal":           {Choices: []ChatChoice{{Message: ChatMessage{Role: "assistant", Refusal: "I can't help with that."}, FinishReason: "stop"}}},
+		"top-level stop_reason":     {Choices: []ChatChoice{{Message: ChatMessage{Role: "assistant", Content: "Tôi sẽ"}, FinishReason: "stop"}}, StopReason: "refusal"},
+		"top-level, no choices":     {StopReason: "refusal"},
+		"stop_reason on the choice": {Choices: []ChatChoice{{Message: ChatMessage{Role: "assistant"}, StopReason: "refusal"}}},
+	}
+	for shape, resp := range shapes {
+		for agent, turn := range map[string]func(*scriptedGateway) (Result, error){
+			"builder": func(gw *scriptedGateway) (Result, error) {
+				return NewAIBuilderAgent(enabledCfg(6), gw, twoTenantReader(), nil, nil, nil).Chat(ctx, Scope{UserID: "u1"}, "tenant-A", "", msgs)
+			},
+			"assistant": func(gw *scriptedGateway) (Result, error) {
+				return NewAssistantAgent(enabledCfg(6), gw, &fakeRecordReader{}, nil, nil).Ask(ctx, callerScope(), "tenant-A", "", msgs)
+			},
+		} {
+			t.Run(agent+"/"+shape, func(t *testing.T) {
+				res, err := turn(&scriptedGateway{t: t, responses: []ChatResponse{resp}})
+				if err != nil || res.Outcome != "refused" || res.Reply != "" {
+					t.Fatalf("turn = outcome %q reply %q err %v; want outcome refused, no reply, no error", res.Outcome, res.Reply, err)
+				}
+			})
+		}
+	}
+}

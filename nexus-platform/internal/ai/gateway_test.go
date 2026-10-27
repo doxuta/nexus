@@ -273,26 +273,34 @@ func TestGateway_Complete_BadUsageNeverFailsTheAnswer(t *testing.T) {
 
 // A model that declines answers HTTP 200 with no text (issue #30 item 5): the gateway relays Claude's
 // stop_reason "refusal" as finish_reason "refusal", and a proxy may copy stop_reason onto the choice as it
-// is. Both read as a refusal; a stop_reason that is a token id (vLLM) neither fails the call nor reads as one.
+// is, or leave it at the top level as Claude's own response has it. OpenAI says the same with finish_reason
+// "content_filter" or a message.refusal string. Every one reads as a refusal; a stop_reason that is a token
+// id (vLLM) neither fails the call nor reads as one.
 func TestGateway_Complete_Refusal(t *testing.T) {
+	const usage = `"usage":{"prompt_tokens":2046,"completion_tokens":0}`
 	for _, tc := range []struct {
-		name, choice string
-		refused      bool
+		name, body string
+		refused    bool
 	}{
-		{"finish_reason refusal, no text", `{"message":{"role":"assistant","content":null},"finish_reason":"refusal"}`, true},
-		{"stop_reason refusal on the choice", `{"message":{"role":"assistant","content":""},"finish_reason":"stop","stop_reason":"refusal"}`, true},
-		{"stop_reason is a token id", `{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop","stop_reason":128001}`, false},
-		{"a plain answer", `{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}`, false},
+		{"finish_reason refusal, no text", `{"choices":[{"message":{"role":"assistant","content":null},"finish_reason":"refusal"}],` + usage + `}`, true},
+		{"stop_reason refusal on the choice", `{"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"stop","stop_reason":"refusal"}],` + usage + `}`, true},
+		{"finish_reason content_filter", `{"choices":[{"message":{"role":"assistant","content":null},"finish_reason":"content_filter"}],` + usage + `}`, true},
+		{"OpenAI message.refusal", `{"choices":[{"message":{"role":"assistant","content":null,"refusal":"I can't help with that."},"finish_reason":"stop"}],` + usage + `}`, true},
+		{"top-level stop_reason refusal", `{"choices":[{"message":{"role":"assistant","content":""},"finish_reason":"stop"}],"stop_reason":"refusal",` + usage + `}`, true},
+		{"top-level stop_reason refusal, no choices", `{"choices":[],"stop_reason":"refusal",` + usage + `}`, true},
+		{"stop_reason is a token id", `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop","stop_reason":128001}],` + usage + `}`, false},
+		{"top-level stop_reason end_turn", `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"stop_reason":"end_turn",` + usage + `}`, false},
+		{"a plain answer", `{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],` + usage + `}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g, _ := newMockGateway(t, 5*time.Second, func(w http.ResponseWriter, r *http.Request) {
-				_, _ = w.Write([]byte(`{"choices":[` + tc.choice + `],"usage":{"prompt_tokens":2046,"completion_tokens":0}}`))
+				_, _ = w.Write([]byte(tc.body))
 			})
 			resp, err := g.Complete(context.Background(), ChatRequest{Model: "m"})
 			if err != nil {
 				t.Fatalf("Complete: %v; a refusal is an answer, not a gateway error", err)
 			}
-			if got := resp.Choices[0].Refused(); got != tc.refused {
+			if got := resp.Refused(); got != tc.refused {
 				t.Fatalf("Refused() = %v; want %v", got, tc.refused)
 			}
 		})
