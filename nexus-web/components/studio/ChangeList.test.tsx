@@ -37,6 +37,17 @@ describe("ChangeList", () => {
     expect(row.className).toContain("slds-grid_vertical-align-start");
   });
 
+  // issue #67: one long token without a space (a snake_case table or grant) cannot wrap at a space. The text is
+  // a flex item, whose minimum width is its longest word unless min-w-0 lets it shrink and slds-hyphenate break
+  // the word; without it the row is wider than the card at 390 px. jsdom cannot measure, so the class is pinned
+  // here and the width in a real browser (verify-ui).
+  it("a long snake_case token may shrink and break inside the row (min-w-0)", () => {
+    const token = "crm_customer_support_ticket_escalation_history_entries.view_all";
+    render(<ChangeList items={[{ op: "change", text: token }]} />);
+    const text = within(screen.getByRole("listitem")).getByText(token);
+    expect(text.className.split(" ")).toEqual(expect.arrayContaining(["slds-col", "slds-hyphenate", "min-w-0"]));
+  });
+
   it("tone=proposed marks the list as an assistant proposal", () => {
     const { container } = render(<ChangeList items={[items[0]]} tone="proposed" />);
     expect(container.querySelector("ul")?.className).toContain("nx-proposed");
