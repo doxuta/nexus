@@ -225,9 +225,11 @@ func (e *toolExecutor) proposeAccess(ctx context.Context, argsJSON string) strin
 }
 
 // list_roles {grants: true} output caps (issue #67), like snapshot_model's: a safety ceiling, not a
-// working limit (the CRM pack's widest role holds about 40 grants). Worst case 40 × 60 grant rows, about
-// 160 KB with short table names; the issue's tenant (20 roles × 100 tables × 4 actions) was 550 KB in
-// one result. Grants come sorted by table and "*" sorts first, so every-table grants are the last cut.
+// working limit (the CRM pack's widest role holds about 40 grants). The caps count rows, not bytes: 40 × 60
+// grant rows with the longest names the schema allows is about 275 KB (pinned in list_roles_test.go); the
+// issue's tenant (20 roles × 100 tables × 4 actions) was 550 KB in one result. Grants come sorted by table,
+// and "*" sorts before every table name only because a table name starts with a letter (ddl identifierPattern;
+// in utf8mb4_unicode_ci "_" sorts before "*"), so every-table grants are the last cut.
 const (
 	maxListedRoles         = 40
 	maxListedGrantsPerRole = 60

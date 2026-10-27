@@ -2,7 +2,8 @@
 
 // RoleRepository.ListRoleGrants against a real MySQL (issue #67): list_roles {grants: true} reads every
 // role of the tenant with its grants in one query, so a role deleted meanwhile is absent instead of
-// failing the read.
+// failing the read. Here the role is deleted before the read; a delete racing the one SELECT is left to
+// InnoDB's consistent read and not exercised.
 //
 //	bash scripts/run-integration.sh -run 'TestListRoleGrants_' ./internal/auth/
 package auth
@@ -33,8 +34,10 @@ func TestListRoleGrants_EveryRoleOfTheTenantWithItsGrantsInOrder(t *testing.T) {
 		}
 		return id
 	}
-	// Inserted out of order: the read sorts roles by name and grants by entity, then action.
-	rep := role(f.tenant, "rg_rep", [3]string{"tickets", "view", "owner"}, [3]string{"contacts", "view", "all"}, [3]string{"contacts", "edit", "owner"})
+	// Inserted out of order: the read sorts roles by name and grants by entity, then action. "*" sorts before
+	// every table name (they start with a letter), so list_roles' per-role cap cuts every-table grants last.
+	rep := role(f.tenant, "rg_rep", [3]string{"tickets", "view", "owner"}, [3]string{"contacts", "view", "all"}, [3]string{"contacts", "edit", "owner"},
+		[3]string{"*", "view", "owner"}, [3]string{"a_first", "view", "all"})
 	empty := role(f.tenant, "rg_empty")
 	star := role(f.tenant, "rg_all", [3]string{"*", "view", "all"})
 	gone := role(f.tenant, "rg_gone", [3]string{"contacts", "delete", "all"})
@@ -67,7 +70,7 @@ func TestListRoleGrants_EveryRoleOfTheTenantWithItsGrantsInOrder(t *testing.T) {
 	want := []view{
 		{ID: star, Name: "rg_all", Label: "L rg_all", Grants: [][3]string{{"*", "view", "all"}}},
 		{ID: empty, Name: "rg_empty", Label: "L rg_empty", Grants: [][3]string{}},
-		{ID: rep, Name: "rg_rep", Label: "L rg_rep", Grants: [][3]string{{"contacts", "edit", "owner"}, {"contacts", "view", "all"}, {"tickets", "view", "owner"}}},
+		{ID: rep, Name: "rg_rep", Label: "L rg_rep", Grants: [][3]string{{"*", "view", "owner"}, {"a_first", "view", "all"}, {"contacts", "edit", "owner"}, {"contacts", "view", "all"}, {"tickets", "view", "owner"}}},
 	}
 	if !reflect.DeepEqual(views, want) {
 		t.Fatalf("roles = %+v\nwant  %+v (this tenant only, the deleted role absent, sorted)", views, want)

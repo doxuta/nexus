@@ -111,7 +111,10 @@ func TestListRoles_GrantsNeedTheRoleReader(t *testing.T) {
 }
 
 // Issue #67: a role deleted between the role list and its grants is skipped, not a failed read. The
-// grants come from one snapshot of every role, so a role gone meanwhile is simply not in it.
+// grants come from one snapshot of every role, so a role gone meanwhile is simply not in it. The fake
+// stands in for that snapshot: the property itself is InnoDB's consistent read of ONE SELECT
+// (ListRoleGrants). role_grants_integration_test.go checks a role deleted before the read is absent; a
+// delete racing the statement is not exercised.
 func TestListRoles_GrantsSkipARoleDeletedMeanwhile(t *testing.T) {
 	e := accessExecutor(nil)
 	e.reader.(*readerWithAccessProbes).probes.Roles.(*fakeAccessRoles).gone = map[string]bool{"r-ops": true}
@@ -195,7 +198,8 @@ func TestListRoles_GrantsAreBoundedAndSayWhatWasCut(t *testing.T) {
 		if len(big.Grants) != maxListedGrantsPerRole || !big.GrantsTruncated || big.GrantsTotal != 400 {
 			t.Fatalf("big role: %d grants, truncated %v, total %d; want %d shown of 400", len(big.Grants), big.GrantsTruncated, big.GrantsTotal, maxListedGrantsPerRole)
 		}
-		// The first grants in the stored order are the ones kept (a "*" grant sorts first).
+		// The first grants in the stored order are the ones kept (the store sorts "*" before every table
+		// name, role_grants_integration_test.go).
 		if big.Grants[0].EntityName != "crm_table_000" || big.Grants[0].Action != "create" {
 			t.Errorf("first kept grant = %+v; want the first stored one", big.Grants[0])
 		}
@@ -204,6 +208,29 @@ func TestListRoles_GrantsAreBoundedAndSayWhatWasCut(t *testing.T) {
 		}
 		if !strings.Contains(res.Note, "explain_access") {
 			t.Errorf("note = %q; want what was cut and where to ask instead", res.Note)
+		}
+	})
+
+	// The caps count rows, not bytes: the ceiling is the longest names the schema allows — a 26-char table
+	// (ddl identifierPattern), a 32-char "field:<user field>" level, a 100-char role name and 150-char label.
+	t.Run("the worst case at the caps stays under the ceiling the comment states", func(t *testing.T) {
+		fake := &fakeAccessRoles{byTenant: map[string][]auth.Role{}, actions: map[string][]auth.RoleAction{}}
+		for i := range maxListedRoles {
+			id := fmt.Sprintf("r%03d", i)
+			fake.byTenant["t1"] = append(fake.byTenant["t1"], auth.Role{ID: id, TenantID: "t1",
+				Name: fmt.Sprintf("%03d%s", i, strings.Repeat("r", 97)), Label: strings.Repeat("L", 150)})
+			for tb := range maxListedGrantsPerRole / 4 {
+				for _, a := range []string{"create", "delete", "edit", "view"} {
+					fake.actions[id] = append(fake.actions[id], auth.RoleAction{EntityName: fmt.Sprintf("%03d%s", tb, strings.Repeat("e", 23)),
+						Action: a, AccessLevel: "field:" + strings.Repeat("f", 26)})
+				}
+			}
+		}
+		e := &toolExecutor{reader: ReaderWithAccessProbes(&fakeMetaReader{}, &AccessProbes{Roles: fake}), tenantID: "t1"}
+		out := e.execute(context.Background(), "list_roles", `{"grants":true}`)
+		t.Logf("worst case at the caps: %d bytes", len(out))
+		if len(out) > 300_000 {
+			t.Fatalf("%d roles × %d grants with the longest names = %d bytes; want at most 300 KB", maxListedRoles, maxListedGrantsPerRole, len(out))
 		}
 	})
 
