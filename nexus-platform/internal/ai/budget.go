@@ -27,10 +27,11 @@
 // Accepted overshoot (spec §12): the check runs PRE-turn against a ledger that only reflects
 // COMPLETED turns, so every turn admitted while others are still in flight can independently pass
 // the same budget snapshot before any of them commits usage back. Up to MaxConcurrent turns can be
-// in that window at once, each spending up to MaxSteps × MaxTokens — so the day total may overshoot
-// the configured budget by at most MaxConcurrent × MaxSteps × MaxTokens (default
-// 2 × 12 × 4096 ≈ 98k, against a 200k default budget — MaxSteps was raised 6→12 for Discovery
-// M10, so one worst-case turn is ~49k). That is bounded and not worth a mid-turn abort.
+// in that window at once, each spending up to MaxSteps calls of whole input plus MaxTokens output — so
+// the day total may overshoot the configured budget by MaxConcurrent such turns. A builder call's input
+// is ~35-40k tokens (evals/builder-bench/report.md), so one worst-case 12-step turn (MaxSteps was raised
+// 6→12 for Discovery M10) is ~0.5M and the overshoot ~1M, against a 3M default budget. That is bounded
+// and not worth a mid-turn abort.
 package ai
 
 import (

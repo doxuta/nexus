@@ -37,7 +37,11 @@ const (
 	defaultAIRateLimitMaxTurns  = 10
 	defaultAIRateLimitWindowSec = 60
 	defaultAIMaxConcurrent      = 2
-	defaultAIDailyTokenBudget   = 200000
+	// defaultAIDailyTokenBudget is in whole-input tokens (prompt_tokens counts cache reads and writes, and the
+	// streamed calls report them: issue #30 item 8). One builder turn that makes an app measured 115,084
+	// (evals/builder-bench/report.md), so 3M admits 27 a day per tenant, the day 200,000 admitted when a turn
+	// recorded only its uncached ~8,000. Pinned by TestBudgetGuard_DefaultBudgetAdmitsADayOfBuilderTurns.
+	defaultAIDailyTokenBudget = 3000000
 	// ⌘K assistant is every-user (unlike the admin-only builder), so it gets a PER-USER BURST cap
 	// on its share of the per-tenant turn window (defaultAIRateLimitMaxTurns, SHARED by all users
 	// of the tenant + the admin builder). The default is deliberately set BELOW that tenant cap so
@@ -88,7 +92,8 @@ type AIConfig struct {
 	MaxConcurrent int
 	// DailyTokenBudget caps SUM(prompt_tokens+output_tokens) per tenant per UTC day, read from
 	// the sys_ai_runs ledger. prompt_tokens includes the prompt-cache reads and writes at full weight
-	// (issue #30 item 8), so size it for the whole input a turn sends, not the uncached remainder. 0 disables the budget check (EXPLICIT opt-out — the default is
+	// (issue #30 item 8), so size it for the whole input a turn sends, not the uncached remainder (one
+	// builder turn ≈ 115,000). 0 disables the budget check (EXPLICIT opt-out — the default is
 	// always bounded; a negative or unparsable env value degrades to the default, not to 0).
 	DailyTokenBudget int64
 

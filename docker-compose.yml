@@ -62,6 +62,8 @@ services:
       AI_GATEWAY_BASE_URL: ${AI_GATEWAY_BASE_URL:-}
       AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-claude-opus-5-5}
+      # Tokens per tenant per UTC day; empty = the default 3,000,000, ~27 builder turns (nexus-platform/.env.example).
+      AI_DAILY_TOKEN_BUDGET: ${AI_DAILY_TOKEN_BUDGET:-}
       # live | record | replay (nexus-platform/.env.example); a cassette path only with record or replay.
       AI_GATEWAY_MODE: ${AI_GATEWAY_MODE:-live}
       AI_GATEWAY_CASSETTE: ${AI_GATEWAY_CASSETTE:-}
