@@ -305,17 +305,34 @@ describe("AuditLog", () => {
       expect(toggles()[0]).toHaveAccessibleName(/Liên hệ/);
     });
 
-    it("judges the stored values, not how they render: a change that draws the same is still a row", async () => {
-      // 1 200 000 and 1 200 001 both draw "1,2 tr"; an object or an array is compared whole.
-      const MONEY: AuditEntry = { ...UPDATE, diff: {
-        before: { stage: "won", amount: { amount: 1_200_000 }, tags: ["a"], owner: { id: "u1" } },
-        after: { stage: "won", amount: { amount: 1_200_001 }, tags: ["a"], owner: { id: "u2" }, note: null },
-      } };
-      vi.mocked(listAuditFiltered).mockResolvedValue({ entries: [MONEY], limit: 50 });
+    it("a role rename still shows the name row", async () => {
+      const RENAME: AuditEntry = { ...ROLE, diff: { before: { name: "crm_sales_rep" }, after: { name: "crm_sales_agent" } } };
+      vi.mocked(listAuditFiltered).mockResolvedValue({ entries: [RENAME], limit: 50 });
       render(<AuditLog />);
       const diff = await screen.findByRole("table", { name: "Trường thay đổi" });
-      const fields = within(diff).getAllByRole("rowheader").map((th) => th.textContent);
-      expect(fields).toEqual(["amount", "owner", "note"]);
+      expect(within(diff).getAllByRole("rowheader").map((th) => th.textContent)).toEqual(["name"]);
+    });
+
+    // Only the role's padded name is hidden. A sensitive (PII) field's change is written "[redacted]" on BOTH
+    // sides on purpose (services/audit_redact.go keeps the key: who changed what field, when), so the same
+    // value on both sides of any other row is still a change to show.
+    const PII: AuditEntry = { ...UPDATE, diff: {
+      before: { cccd: "[redacted]", stage: "new" }, after: { cccd: "[redacted]", stage: "won" },
+    } };
+    it("a sensitive field redacted on both sides is still drawn as a change", async () => {
+      vi.mocked(listAuditFiltered).mockResolvedValue({ entries: [PII], limit: 50 });
+      render(<AuditLog />);
+      const diff = await screen.findByRole("table", { name: "Trường thay đổi" });
+      expect(within(diff).getAllByRole("rowheader").map((th) => th.textContent)).toEqual(["cccd", "stage"]);
+      expect(within(diff).getAllByText("[redacted]")).toHaveLength(2);
+    });
+
+    it("an update of a sensitive field only still has a diff to open", async () => {
+      const ONLY_PII: AuditEntry = { ...PII, diff: { before: { cccd: "[redacted]" }, after: { cccd: "[redacted]" } } };
+      vi.mocked(listAuditFiltered).mockResolvedValue({ entries: [ONLY_PII], limit: 50 });
+      render(<AuditLog />);
+      await screen.findAllByText("Nexus Admin");
+      expect(toggles()).toHaveLength(1);
     });
   });
 

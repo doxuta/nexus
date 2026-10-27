@@ -79,14 +79,16 @@ function renderValue(v: unknown): string {
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
 }
-// A key whose stored value is the same on both sides is not a change (issue #67): a role update carries the
-// role's name on both sides so the row names the role, and drawn it read as a rename. The stored values are
-// compared, not their rendering (two amounts can draw the same "1,2 tr"); the server's JSON has stable key order.
-function buildDiffRows(diff: { before?: Record<string, unknown>; after?: Record<string, unknown> }) {
-  const keys = Array.from(new Set([...Object.keys(diff.before ?? {}), ...Object.keys(diff.after ?? {})]));
-  return keys
-    .filter((k) => !(k in (diff.before ?? {}) && k in (diff.after ?? {}) && JSON.stringify(diff.before?.[k]) === JSON.stringify(diff.after?.[k])))
-    .map((k) => ({ field: k, before: renderValue(diff.before?.[k]), after: renderValue(diff.after?.[k]) }));
+// A role update carries the role's name on both sides so the row names the role (#66); drawn, an unchanged name
+// read as a rename, so that one key is dropped (issue #67). Only that one: elsewhere the same value on both
+// sides IS a change, e.g. a sensitive field is written "[redacted]" on both sides on purpose (audit_redact.go).
+function buildDiffRows(entry: AuditEntry) {
+  const before = entry.diff?.before ?? {};
+  const after = entry.diff?.after ?? {};
+  const paddedName = entry.entityName === ROLE_META && before.name === after.name;
+  return Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
+    .filter((k) => !(paddedName && k === "name"))
+    .map((k) => ({ field: k, before: renderValue(before[k]), after: renderValue(after[k]) }));
 }
 
 const SESSION_META = "__workspace_session__";
@@ -420,7 +422,7 @@ function AuditRow({ entry, actorName, entityLabel, tableLabel, defaultOpen }: {
 }) {
   const [open, setOpen] = useState(!!defaultOpen);
   const diffId = useId();
-  const diffRows = entry.diff ? buildDiffRows(entry.diff) : [];
+  const diffRows = buildDiffRows(entry);
   const hasDiff = diffRows.length > 0;
   // Who acted, in order of trust: a user of THIS customer (resolved by the caller, which also maps the
   // engine's synthetic ids); else the label the SERVER computed for a Nexus builder who worked in this
