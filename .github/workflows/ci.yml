@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
       # Pins the decision AND the hookSpecificOutput envelope, both directions (deny / ask / allow).
       # No network, no secrets: python3 and bash from the runner image only.
-      - run: bash tools/careful/check-careful.test.sh
+      - run: bash .claude/hooks/check-careful.test.sh
 
   integration:
     name: go integration (MySQL 8 · migrate up · -race)
