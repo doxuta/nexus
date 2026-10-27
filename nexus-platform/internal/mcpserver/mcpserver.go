@@ -48,7 +48,7 @@ type Threads interface {
 }
 
 // instructions is what an MCP client hands its model about this server.
-const instructions = `Nexus is a platform for business apps whose apps are metadata: tables (entities), fields, relations, layouts, automation rules, reports, apps and access. These tools read ONE workspace's model and PROPOSE changes to it. A proposal changes nothing: it is saved as a card in the builder's Studio thread, where a human reviews it, applies it to drafts and publishes it. No tool applies, publishes or writes data, so tell the user the change is waiting for review. Read before you propose (nexus_list_entities, nexus_list_fields). Names are snake_case; labels are what users see. A call refused by a validator answers {"ok":false,"error":"CODE: message"}: fix the arguments and call again. Tool descriptions are in Vietnamese.`
+const instructions = `Nexus is a platform for business apps whose apps are metadata: tables (entities), fields, relations, layouts, automation rules, reports, apps and access. These tools read ONE workspace's model and PROPOSE changes to it. A proposal changes nothing: it is saved as a card in the builder's Studio thread, where a human reviews and applies it. No tool applies, publishes or writes data, so tell the user the change is waiting for review. Read before you propose (nexus_list_entities, nexus_list_fields). Names are snake_case; labels are what users see. A call refused by a validator answers {"ok":false,"error":"CODE: message"}: fix the arguments and call again. Tool descriptions are in Vietnamese.`
 
 type server struct {
 	tokens  Verifier
@@ -129,8 +129,19 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg, "code": code})
 }
 
-// proposedNote follows the result of a proposal: where it went, and that nothing changed yet.
-const proposedNote = "Saved as a card in the builder's Studio thread. Nothing has changed: a human reviews the card, applies it to drafts and publishes it."
+// proposedNote follows the result of a proposal: where it went, that nothing changed yet, and what the
+// human's apply does, by the change class of what it proposes (metaversion.ClassOf, issue #22): a draft
+// type reaches users on publish once the project is delivered; any other (access, relationships,
+// approvals, work queues, records) takes effect when applied.
+func proposedNote(added []ai.DraftItem) string {
+	const saved = "Saved as a card in the builder's Studio thread. Nothing has changed: a human reviews the card and applies it"
+	for _, it := range added {
+		if it.Change == nil || metaversion.ClassOf(it.Change.DocType).Kind != metaversion.Draft {
+			return saved + ", and it takes effect as soon as it is applied: there is no draft or publish step for it."
+		}
+	}
+	return saved + "; once the project is delivered it goes to drafts and reaches users when it is published."
+}
 
 // call runs one tool as the token's builder. A propose_* call first reads the thread's earlier
 // proposals still pending (so it may build on them, as within one chat turn), and a proposal that
@@ -186,7 +197,7 @@ func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (res *mcp.C
 	if err != nil {
 		return s.threadError(p, err), nil
 	}
-	out.Content = append(out.Content, &mcp.TextContent{Text: proposedNote})
+	out.Content = append(out.Content, &mcp.TextContent{Text: proposedNote(added)})
 	return out, nil
 }
 

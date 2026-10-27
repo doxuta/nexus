@@ -31,8 +31,9 @@ func isRead(name string) bool {
 // a card) and none reaches outside the workspace. Shared and never written.
 var no = false
 
-// proposeNote ends every propose tool's description: what the outside agent must tell its user.
-const proposeNote = " MCP: the proposal is saved as a card in the builder's Studio thread; nothing changes until a human applies it to drafts and publishes it."
+// proposeNote ends every propose tool's description: what the outside agent must tell its user. It holds
+// for every change class; the result of a call says what applying that card does (proposedNote).
+const proposeNote = " MCP: the proposal is saved as a card in the builder's Studio thread; nothing changes until a human reviews and applies it."
 
 // tools turns the builder agent's tool definitions (ai.ToolDefinitions) into MCP tools: every read
 // tool and every propose_* tool, renamed nexus_<name>, with the same description and JSON schema,

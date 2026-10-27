@@ -438,3 +438,24 @@ func TestCall_AnOversizedProposalIsRefused(t *testing.T) {
 		t.Fatalf("an oversized proposal: %s (error %v), wrote %d; want PROPOSAL_TOO_LARGE and no write", text(res), res.IsError, len(th.appends))
 	}
 }
+
+// Issue #22: what the agent is told after a proposal follows the change class of that card (an access
+// card applies at once; a field goes to drafts on a delivered project), and no tool description
+// promises a draft and a publish step for every card.
+func TestCall_TheNoteFollowsTheChangeClass(t *testing.T) {
+	for _, tc := range []struct{ tool, kind, docType, want, not string }{
+		{"nexus_propose_access", "access", "role", "no draft or publish step", "goes to drafts"},
+		{"nexus_propose_field", "field", "field", "goes to drafts", "no draft or publish step"},
+	} {
+		run := &fakeRunner{res: `{"ok":true,"result":{"buffered":"x"}}`, added: []ai.DraftItem{{Kind: tc.kind, Change: &ai.DraftChange{DocType: tc.docType}}}}
+		got := text(callTool(t, serve(t, &fakeVerifier{}, run, &fakeThreads{}), tc.tool, nil))
+		if !strings.Contains(got, tc.want) || strings.Contains(got, tc.not) {
+			t.Errorf("%s (%s card): %q; want %q", tc.tool, tc.docType, got, tc.want)
+		}
+	}
+	for _, tl := range tools(ai.ToolDefinitions()) {
+		if strings.Contains(tl.Description, "publishes it") {
+			t.Errorf("%s promises a draft and a publish for its card: %q", tl.Name, tl.Description[strings.LastIndex(tl.Description, "MCP:"):])
+		}
+	}
+}
