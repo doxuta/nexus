@@ -22,6 +22,7 @@ const FIXTURES: Array<[string, AiDraftItem]> = [
   ["edit_field", { kind: "edit_field", editField: { entity: "benh_nhan", field: "sdt", before: { label: "SĐT" }, after: { label: "Số điện thoại", isRequired: true } } }],
   ["delete_field", { kind: "delete_field", deleteField: { entity: "benh_nhan", field: "fax", label: "Số fax", fieldType: "text" } }],
   ["delete_entity", { kind: "delete_entity", deleteEntity: { entity: "khuyen_mai", label: "Khuyến mãi", fieldCount: 7 } }],
+  ["delete_entity_pack", { kind: "delete_entity", deleteEntity: { entity: "crm_accounts", label: "Khách hàng", fieldCount: 12, packs: ["crm"], recordCount: 4 } }],
   ["records", { kind: "records", records: { entity: "benh_nhan", rows: [{ ten: "An", sdt: "0901" }, { ten: "Bình", sdt: "0902" }] } }],
   ["approval", { kind: "approval", approval: { name: "Duyệt giảm giá lớn", entityName: "bao_gia", steps: [{ approverType: "role", approverRef: "quan_ly", slaSeconds: 3600 }] } }],
   ["dashboard", { kind: "dashboard", dashboard: { name: "Tổng quan bán hàng", widgets: [{ title: "Doanh thu tháng", type: "kpi" }] } }],

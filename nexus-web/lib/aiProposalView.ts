@@ -11,7 +11,7 @@ import {
   dashboardWidgetLines, draftRecordsRows, editFieldDiffRows, getApprovalDraft, getDashboardDraft, getDeleteEntityDraft,
   getDeleteFieldDraft, getEditFieldDraft, getRecordsDraft, getWorkQueueDraft, layoutViewLabel, recordCellText,
   recordsPreviewModel, reportSummaryText, reportTypeLabel, summarizeLayoutDraft, workflowActionText, workflowRuleText,
-  workflowTriggerPhrase, workQueueSummaryText, getAccessDraft, type AiDraftItem,
+  workflowTriggerPhrase, workQueueSummaryText, getAccessDraft, type AiDraftDeleteEntity, type AiDraftItem,
 } from "@/lib/aiBuilder";
 import { accessText } from "@/lib/accessLevels";
 import type { EntityMeta } from "@/lib/api";
@@ -148,12 +148,16 @@ export function proposalView(item: AiDraftItem, ctx: Ctx = {}): ProposalView | n
   }
   const de = item.kind === "delete_entity" ? getDeleteEntityDraft(item) : undefined;
   if (de) {
+    const name = de.label || de.entity;
+    const packs = deletePacks(de);
+    const n = deleteRecordCount(de);
     return base({
-      title: V("deleteEntity", { name: de.label || de.entity }),
-      where: table(de.label || de.entity),
+      title: V("deleteEntity", { name }),
+      // Issue #30 item 4: a pack's table says so, and the card counts what the delete hides when the server counted it.
+      where: packs ? where(tf("studio.assistant.where.packTable", { x: name, packs })) : table(name),
       changes: [
         { op: "remove", text: V("deleteEntity.fields", { n: de.fieldCount }) },
-        { op: "remove", text: V("deleteEntity.rows") },
+        { op: "remove", text: n === undefined ? V("deleteEntity.rows") : n === 0 ? V("deleteEntity.rowsNone") : V("deleteEntity.rowsCount", { n }) },
       ],
       destructive: true,
     });
@@ -296,4 +300,18 @@ export function proposalWarnLink(item: AiDraftItem, link: Link): Omit<ProposalLi
   if (item.kind === "app" || item.kind === "entity") return { href: link("dung/man-hinh/app"), label: t("studio.assistant.done.appsLink") };
   if (item.kind === "records" && item.records) return { href: `/${item.records.entity}`, label: t("studio.assistant.done.listLink") };
   return null;
+}
+
+const deletePacks = (de: AiDraftDeleteEntity) => (Array.isArray(de.packs) ? de.packs.filter((p) => typeof p === "string").join(", ") : "");
+const deleteRecordCount = (de: AiDraftDeleteEntity) => (typeof de.recordCount === "number" ? de.recordCount : undefined);
+
+/** The delete_entity confirm question: the fields, the records it hides when counted, and the pack that installed it. */
+export function deleteEntityConfirmText(de: AiDraftDeleteEntity): string {
+  const label = de.label || de.entity;
+  const r = deleteRecordCount(de);
+  const packs = deletePacks(de);
+  const q = r === undefined
+    ? tf("studio.assistant.confirm.entity", { label, n: de.fieldCount })
+    : tf("studio.assistant.confirm.entityRecords", { label, n: de.fieldCount, r });
+  return packs ? `${q} ${tf("studio.assistant.confirm.entityPack", { packs })}` : q;
 }

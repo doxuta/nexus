@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from "vitest";
-import { accessTablesHidden, proposalView, proposalDone, proposalWarnLink } from "./aiProposalView";
+import { accessTablesHidden, deleteEntityConfirmText, proposalView, proposalDone, proposalWarnLink } from "./aiProposalView";
 import type { AiDraftItem } from "./aiBuilder";
 
 const link = (id: string) => `/studio/${id}`;
@@ -55,6 +55,22 @@ describe("proposalView", () => {
     expect(texts(v)).toEqual(["remove:Bảng cùng 7 trường", "remove:Toàn bộ bản ghi của bảng"]);
     expect(proposalView(ITEMS.delete_field)!.destructive).toBe(true);
     expect(proposalView(ITEMS.field)!.destructive).toBe(false);
+  });
+
+  // Issue #30 item 4: a pack's table says which pack installed it, and the card counts what the delete hides.
+  it("delete_entity of a pack table names the pack and counts the records", () => {
+    const pack = { kind: "delete_entity", deleteEntity: { entity: "crm_accounts", label: "Khách hàng", fieldCount: 12, packs: ["crm"], recordCount: 4 } } as AiDraftItem;
+    const v = proposalView(pack)!;
+    expect(v.where).toBe("Bảng Khách hàng · cài từ gói crm");
+    expect(texts(v)).toEqual(["remove:Bảng cùng 12 trường", "remove:Toàn bộ 4 bản ghi của bảng"]);
+    expect(proposalView(pack, { delivered: false })!.where).toBe("Bảng Khách hàng · cài từ gói crm · khách chưa thấy");
+    expect(deleteEntityConfirmText(pack.deleteEntity!)).toBe("Xoá bảng “Khách hàng” cùng 12 trường và 4 bản ghi của nó? Không hoàn tác được qua giao diện. Bảng này do gói crm cài.");
+    const empty = { ...pack, deleteEntity: { ...pack.deleteEntity!, packs: ["crm", "ticketing"], recordCount: 0 } } as AiDraftItem;
+    expect(proposalView(empty)!.where).toBe("Bảng Khách hàng · cài từ gói crm, ticketing");
+    expect(texts(proposalView(empty))).toContain("remove:Bảng chưa có bản ghi nào");
+    // Not counted (an older server, a failed read) is "all of its records", never a number nobody read.
+    expect(deleteEntityConfirmText(ITEMS.delete_entity.deleteEntity!)).toBe("Xoá bảng “Khuyến mãi” cùng 7 trường và toàn bộ bản ghi của nó? Không hoàn tác được qua giao diện.");
+    expect(proposalView(ITEMS.delete_entity)!.where).toBe("Bảng Khuyến mãi");
   });
 
   it("adds 'khách chưa thấy' only when the project is known undelivered", () => {

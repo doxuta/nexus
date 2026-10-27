@@ -159,6 +159,22 @@ describe("ProposalCard — destructive (InlineConfirm)", () => {
     expect(onApply).toHaveBeenCalledTimes(1);
   });
 
+  it("delete_entity of a pack table: the question names the pack and the records, and the retype still gates it", () => {
+    const { onApply } = setup({ kind: "delete_entity", deleteEntity: { entity: "crm_accounts", label: "Khách hàng", fieldCount: 12, packs: ["crm"], recordCount: 4 } });
+    expect(screen.getByText("Bảng Khách hàng · cài từ gói crm")).toBeInTheDocument();
+    expect(screen.getByText("Toàn bộ 4 bản ghi của bảng")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Xoá…" }));
+    expect(screen.getByText("Xoá bảng “Khách hàng” cùng 12 trường và 4 bản ghi của nó? Không hoàn tác được qua giao diện. Bảng này do gói crm cài.")).toBeInTheDocument();
+    const confirm = screen.getByRole("button", { name: "Xoá bảng" });
+    fireEvent.change(screen.getByLabelText("Gõ crm_accounts để xác nhận"), { target: { value: "Khách hàng" } });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
+    expect(onApply).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Gõ crm_accounts để xác nhận"), { target: { value: "crm_accounts" } });
+    fireEvent.click(confirm);
+    expect(onApply).toHaveBeenCalledTimes(1);
+  });
+
   it("Bỏ discards without writing", () => {
     const { onApply, onDiscard } = setup(DEL_FIELD);
     fireEvent.click(screen.getByRole("button", { name: "Bỏ" }));
