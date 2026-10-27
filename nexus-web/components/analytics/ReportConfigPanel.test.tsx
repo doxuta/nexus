@@ -648,4 +648,54 @@ describe("ReportConfigPanel — embedded in the Studio frame", () => {
     await waitFor(() => expect(updateDashboard).toHaveBeenCalled());
     expect(vi.mocked(updateDashboard).mock.calls[0][0]).toBe("d1");
   });
+
+  // Issue #62: on a delivered project a pin writes a dashboard draft (PUT/POST /admin/dashboards → DraftDashboardRepo
+  // Update/Create): the header recounts once the write has answered, never before, never on a refusal.
+  it("pin announces on the drafts bus once the write has answered, never before, never on a refusal (#62)", async () => {
+    const heard: string[] = [];
+    const off = onDraftsChanged((s) => heard.push(s));
+    try {
+      vi.mocked(listAdminDashboards).mockResolvedValue([{ id: "d1", name: "Tổng quan bán hàng", widgets: [] }] as never);
+      vi.mocked(getAdminDashboard).mockResolvedValue({ id: "d1", name: "Tổng quan bán hàng", description: "", widgets: [] } as never);
+      await renderPanel(SUMMARY, { embedded: true });
+      const openPin = () => userEvent.click(screen.getByRole("button", { name: "Ghim lên Trang tổng quan" }));
+      const held = () => {
+        let answer!: () => void;
+        return { promise: new Promise<never>((r) => { answer = () => r({} as never); }), answer: () => answer() };
+      };
+
+      // Append to an existing dashboard (updateDashboard).
+      await openPin();
+      await userEvent.click(await screen.findByLabelText(/Tổng quan bán hàng/));
+      vi.mocked(updateDashboard).mockRejectedValueOnce(new Error("refused update"));
+      await userEvent.click(screen.getByRole("button", { name: "Ghim vào bảng đã chọn" }));
+      expect(await screen.findByText("refused update")).toBeInTheDocument();
+      expect(heard).toEqual([]);
+      const upd = held();
+      vi.mocked(updateDashboard).mockReturnValueOnce(upd.promise);
+      await userEvent.click(screen.getByRole("button", { name: "Ghim vào bảng đã chọn" }));
+      await waitFor(() => expect(updateDashboard).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(heard).toEqual([]);
+      upd.answer();
+      await waitFor(() => expect(heard).toEqual(["dashboard"]));
+
+      // A new dashboard (createDashboard).
+      await openPin();
+      vi.mocked(createDashboard).mockRejectedValueOnce(new Error("refused create"));
+      await userEvent.click(await screen.findByRole("button", { name: "Tạo trang tổng quan mới" }));
+      expect(await screen.findByText("refused create")).toBeInTheDocument();
+      expect(heard).toEqual(["dashboard"]);
+      const crt = held();
+      vi.mocked(createDashboard).mockReturnValueOnce(crt.promise);
+      await userEvent.click(screen.getByRole("button", { name: "Tạo trang tổng quan mới" }));
+      await waitFor(() => expect(createDashboard).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(heard).toEqual(["dashboard"]);
+      crt.answer();
+      await waitFor(() => expect(heard).toEqual(["dashboard", "dashboard"]));
+    } finally {
+      off();
+    }
+  });
 });

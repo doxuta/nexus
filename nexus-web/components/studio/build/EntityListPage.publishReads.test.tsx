@@ -80,3 +80,39 @@ describe("a Studio page with useDirectApply in the project frame (#53)", () => {
     expect(api.getPublishState.mock.calls.length).toBe(before);
   });
 });
+
+// Issue #62: a draft written where nothing reads publish state (a report created on the customer face /reports) must
+// show the moment the builder opens the Studio project again, even inside the 2-minute staleTime: the frame's mount
+// re-reads, once — the readers on the page add none, and an announcement still costs one read.
+describe("opening the project frame (#62)", () => {
+  it("re-reads publish state once on mount, within the staleTime, and the header shows the new count", async () => {
+    const qc = makeClient(); // the app's 2-minute staleTime: the cache alone would keep the old count
+    const frame = () => (
+      <QueryClientProvider client={qc}>
+        <ProjectFrame slug="northwind"><EntityListPage slug="northwind" /></ProjectFrame>
+      </QueryClientProvider>
+    );
+    const settle = async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      await waitFor(() => expect(qc.isFetching()).toBe(0));
+    };
+    const first = render(frame());
+    await screen.findByRole("link", { name: "Khách hàng" });
+    await settle();
+    expect(api.getPublishState).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Xuất bản" })).toBeNull();
+    first.unmount(); // the builder leaves Studio for /reports and creates a report there: a draft, and no announcement reaches the frame
+
+    api.getPublishState.mockResolvedValue({ delivered: true, pendingCount: 1, draftableTypes: [], directTypes: [], headVersion: { versionNo: 2 } });
+    render(frame());
+    await screen.findByRole("link", { name: "Khách hàng" });
+    await settle();
+    expect(api.getPublishState).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText("1 thay đổi chưa xuất bản")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Xuất bản" })).toBeInTheDocument();
+
+    act(() => emitDraftsChanged("screen-save"));
+    await settle();
+    expect(api.getPublishState).toHaveBeenCalledTimes(3);
+  });
+});

@@ -22,6 +22,16 @@ Script này bắt lớp con dễ đo nhất: **route đã đăng ký mà không 
     qua, nên giữ bản chính xác-mà-hẹp và ghi giới hạn ở đây.
   • MÙ VỚI KEY TRONG RESPONSE. `POST /admin/entities` trả `aclSeed.warning` — endpoint có caller nên
     sạch, nhưng KEY đó không FE nào đọc. Loại này phải soi tay.
+  • A caller is non-comment code that spells the whole route (#54): comments are stripped first, and the path
+    must open a string or follow the one `${base}` a template opens with (a literal /api/v1 prefix is skipped),
+    then every segment in order — a leading `:param` as a `${…}` placeholder, a later one as a placeholder or
+    one literal segment. Any string counts, not only an argument of req()/fetch() — a page href equal to an API
+    path still passes. nexus-web/test/ (fetch mocks) is skipped.
+  • A literal entity name is no caller of a route that starts with a param: "/contacts/aggregate" does not call
+    `/:entity/aggregate` (a leading param needs `${…}`; as a literal, "/approvals/${a}/approve" would call
+    `/:entity/:id/approve`).
+  • A route built in pieces is followed only through a path helper of the same file whose value is one literal
+    (`const p = (id) => `/admin/x/${id}`` then `${p(id)}/y`); other compositions read as orphans.
 
 Dùng:
     python3 scripts/check-orphan-endpoints.py            # báo cáo, exit 0
@@ -45,12 +55,14 @@ WEB = os.path.join(os.path.dirname(ROOT), "nexus-web")
 ROUTE_RE = re.compile(r'\b\w+\.(GET|POST|PUT|PATCH|DELETE)\(\s*"([^"]+)"')
 
 # Endpoint được phép không có FE caller — mỗi dòng PHẢI có lý do.
+# Keyed by (method, path): an excuse covers that verb only, so a later PUT on an excused GET path is still caught.
 ALLOWED_ORPHANS = {
-    "/health": "liveness probe hạ tầng, không phải bề mặt sản phẩm",
-    "/ready": "readiness probe hạ tầng",
-    "/metrics": "Prometheus scrape, không phải FE",
-    "/auth/sso/callback": "IdP gọi trực tiếp qua trình duyệt, không phải fetch từ FE",
-    "/auth/sso/start": "điều hướng trình duyệt (href), không phải fetch",
+    ("GET", "/health"): "liveness probe hạ tầng, không phải bề mặt sản phẩm",
+    ("GET", "/ready"): "readiness probe hạ tầng",
+    ("GET", "/metrics"): "Prometheus scrape, không phải FE",
+    ("GET", "/auth/sso/callback"): "IdP gọi trực tiếp qua trình duyệt, không phải fetch từ FE",
+    ("GET", "/auth/sso/start"): "điều hướng trình duyệt (href), không phải fetch",
+    ("GET", "/admin/team-sets/:id"): "no single-set screen: TeamSetsPanel lists every set with its teams (#54)",
 }
 
 
@@ -67,46 +79,124 @@ def go_routes():
     return out
 
 
-# FE gọi API qua một helper dạng `req<T>("METHOD", `/path/${x}`, body)` (lib/api.ts, lib/admin.ts…).
-# Bắt CẢ method LẪN path cho phép phát hiện "mồ côi theo method": path có người gọi nhưng đúng động
-# từ đó thì không — chính là ca `PATCH /admin/relationships/:id` (tạo được, xoá được, SỬA thì không).
-FE_CALL_RE = re.compile(r'"(GET|POST|PUT|PATCH|DELETE)"\s*,\s*[`"\']([^`"\']*)')
+# A `/` right after one of these (or after `return`/`typeof`/`case`) opens a regex literal, not a division.
+_REGEX_AFTER = set("(,=:[!&|?{;+-*%~^")
 
 
-def web_calls():
-    """Tập (method, tiền-tố-tĩnh-của-path) mà FE thực sự gọi + toàn văn FE để dò dự phòng."""
-    calls, chunks = set(), []
+def _regex_can_start(out):
+    tail = "".join(out[-16:]).rstrip()
+    return not tail or tail[-1] in _REGEX_AFTER or re.search(r"\b(?:return|typeof|case)$", tail) is not None
+
+
+def strip_comments(src):
+    """TS/TSX source without `//` and `/* */` comments (JSX `{/* */}` included).
+
+    String, template and regex literals are copied as they are, so `"https://…"` or `` `${a}//b` `` keep their `//`;
+    `${…}` inside a template is code again, nested templates included. A quote in JSX text ("Don't") opens a
+    string that ends at the newline, as a JS string would. Agrees with the TypeScript compiler's comment ranges on
+    every non-test .ts/.tsx file of nexus-web (checked when written, #54).
+    """
+    out, i, n = [], 0, len(src)
+    depth = []  # one brace counter per open `${`
+    while i < n:
+        c = src[i]
+        if c == "`" or (c == "}" and depth and depth[-1] == 0):  # a template starts, or resumes after `${…}`
+            if c == "}":
+                depth.pop()
+            j = i + 1
+            while j < n and src[j] != "`" and not src.startswith("${", j):
+                j += 2 if src[j] == "\\" else 1
+            if src.startswith("${", j):
+                depth.append(0)
+                j += 1
+            out.append(src[i:j + 1])
+            i = j + 1
+        elif c in "\"'":
+            j = i + 1
+            while j < n and src[j] not in (c, "\n"):
+                j += 2 if src[j] == "\\" else 1
+            out.append(src[i:j + 1])
+            i = j + 1
+        elif src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+        elif src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            out.append(" ")
+        elif c == "/" and _regex_can_start(out):
+            j, in_class = i + 1, False
+            while j < n and src[j] != "\n":
+                if src[j] == "\\":
+                    j += 2
+                    continue
+                if src[j] == "[":
+                    in_class = True
+                elif src[j] == "]":
+                    in_class = False
+                elif src[j] == "/" and not in_class:
+                    break
+                j += 1
+            out.append(src[i:j + 1])
+            i = j + 1
+        else:
+            if depth and c in "{}":
+                depth[-1] += 1 if c == "{" else -1
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+# `const p = (id: string) => `/admin/x/${id}`` or `const p = "/admin/x"`: a path helper with one literal value.
+_PATH_HELPER_RE = re.compile(r"""\bconst\s+(\w+)\s*=\s*(?:\([^)]*\)\s*(?::\s*\w+\s*)?=>\s*)?([`"'])(/[^`"'\n]*)\2""")
+
+
+def inline_path_helpers(code):
+    """`${p(id)}/y` → `/admin/x/${id}/y` for every path helper `p` defined in the same file."""
+    for name, _quote, value in _PATH_HELPER_RE.findall(code):
+        code = re.sub(r"\$\{" + name + r"(?:\([^()]*\))?\}", lambda _m, v=value: v, code)
+    return code
+
+
+def web_code():
+    """Non-comment source of every non-test .ts/.tsx file in nexus-web, path helpers inlined."""
+    chunks = []
     for dirpath, dirs, files in os.walk(WEB):
-        dirs[:] = [d for d in dirs if d not in {"node_modules", ".next", "_archive"}]
+        # test/: vitest helpers whose fake fetch routes name API paths without calling them.
+        dirs[:] = [d for d in dirs if d not in {"node_modules", ".next", "_archive", "test"}]
         for f in files:
             if not f.endswith((".ts", ".tsx")) or ".test." in f:
                 continue
             with open(os.path.join(dirpath, f), encoding="utf-8", errors="ignore") as fh:
-                txt = fh.read()
-            chunks.append(txt)
-            for m in FE_CALL_RE.finditer(txt):
-                calls.add((m.group(1), m.group(2).split("${")[0].rstrip("/")))
-    return calls, "\n".join(chunks)
+                chunks.append(inline_path_helpers(strip_comments(fh.read())))
+    return "\n".join(chunks)
 
 
-def probe(path):
-    """Chuỗi FE cần chứa để coi là 'có gọi'.
+_PLACEHOLDER = r"\$\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}"  # ${id}, ${encodeURIComponent(id)}, ${q ? `?${q}` : ""}
+_SEGMENT = r"[^/\s\"'`?#{}$]+"                        # one literal segment: /admin/apps/crm/nav
+# Where a path starts: it opens a string, or follows the one `${base}` a template opens with (`${BASE}/x`,
+# `${opts.base ?? ""}/x`) — never a `${…}` in the middle of another path. A literal /api/v1 prefix is skipped.
+_START = r"(?:[\"'`]|`" + _PLACEHOLDER + r")(?:/api/v1)?"
 
-    FE nối URL bằng template literal, nên chỉ phần TĨNH mới xuất hiện nguyên văn. Hai dạng:
-      • "/admin/apps/:id/nav"  → tiền tố tĩnh "/admin/apps" (đủ đặc trưng)
-      • "/:entity/:id/aggregate" → KHÔNG có tiền tố tĩnh (bắt đầu bằng tham số) → dùng đoạn tĩnh
-        CUỐI ("aggregate"). Bỏ qua bước này là lý do bản đầu báo 3 false-positive: mọi route
-        `/:entity/...` đều "mồ côi" vì chuỗi đem đi dò còn nguyên dấu ":".
+
+def route_pattern(path):
+    """Regex for code that builds a request to `path`: the whole path, from its start to its end.
+
+    `/:entity/:id/notes/latest` needs `/${…}/${…}/notes/latest` — not `/latest` alone (#54). The path starts where
+    a string or template opens, or after the `${base}` a template opens with (`_START`), never inside a longer path:
+    `/${e}/${id}/notes` calls neither `/:entity/notes` nor `/notes` (#61 verifier, round 2). A `:param` before
+    the first static segment is a `${…}` placeholder only — as a literal segment `/:entity/:id/members` would read
+    `/admin/teams/${id}/members` as its caller (#61 verifier); a later `:param` may also be one literal segment
+    (`/admin/apps/crm/nav`). After the last segment comes no further path: `?query`, a closing quote or `${qs}`
+    may follow, `/more` may not.
     """
-    static = path.split("/:")[0]
-    if len(static) > 1:
-        return static
-    tail = [seg for seg in path.split("/") if seg and not seg.startswith(":")]
-    # Giữ dấu "/" đầu: dò "/notes" chứ không phải "notes". FALSE NEGATIVE đã cắn thật (2026-07-29,
-    # do chính agent viết lát ghi-chú phát hiện): 3 route notes gộp về chuỗi trần "notes", khớp nhầm
-    # comment "Honesty notes" và một field tên `notes` trong fixture test ⇒ cổng báo "0 mồ côi"
-    # trong khi có 3 mồ côi THẬT. Một cổng báo xanh sai còn tệ hơn không có cổng.
-    return "/" + tail[-1] if tail else path
+    body, static_seen = "", False
+    for seg in (s for s in path.split("/") if s):
+        is_param = seg.startswith(":")
+        static_seen = static_seen or not is_param
+        param = f"(?:{_PLACEHOLDER}|{_SEGMENT})" if static_seen else _PLACEHOLDER
+        body += "/" + (param if is_param else re.escape(seg))
+    return re.compile(_START + body + r"(?![\w./-])")
 
 
 def main():
@@ -119,32 +209,25 @@ def main():
         print(f"LỖI MÔI TRƯỜNG: không thấy {WEB}", file=sys.stderr)
         return 2
 
-    calls, web = web_calls()
+    code = web_code()
     routes = sorted(go_routes(), key=lambda r: (r[1], r[0]))
     orphans, excused = [], []
     for method, path in routes:
         # Lý do ghi tay thắng dò chuỗi: một route đã khai là nợ FE luôn hiện ở "Miễn trừ", kể cả khi
         # tiền tố tĩnh của nó trùng một route anh em có caller (cổng mù ⇒ nợ sẽ xanh im lặng).
-        if path in ALLOWED_ORPHANS:
+        if (method, path) in ALLOWED_ORPHANS:
             excused.append((method, path))
             continue
-        pfx = probe(path)
-        # Ưu tiên bằng chứng MẠNH: FE gọi đúng (method, path). Nếu không có, chấp nhận bằng chứng
-        # YẾU (chuỗi path xuất hiện đâu đó) — có helper gói lại nên không phải chỗ nào cũng thấy
-        # cặp method+path nguyên văn; nhưng nếu path KHÔNG xuất hiện ở đâu cả thì chắc chắn mồ côi.
-        strong = any(m == method and (p.startswith(pfx) or pfx.startswith(p)) for m, p in calls if p)
-        if strong:
-            continue
-        if pfx in web:
-            continue  # đường dẫn có người gọi — xem GIỚI HẠN ở docstring về mồ-côi-theo-method
-        orphans.append((method, path))
+        # Path only, not method: see the method-blind limit in the docstring.
+        if not route_pattern(path).search(code):
+            orphans.append((method, path))
 
     print(f"Route đã đăng ký: {len(routes)} · có FE gọi: {len(routes) - len(orphans) - len(excused)}"
           f" · miễn trừ: {len(excused)} · MỒ CÔI: {len(orphans)}")
     if excused:
         print("\nMiễn trừ (có lý do):")
         for m, p in excused:
-            print(f"  {m:6} {p:44} — {ALLOWED_ORPHANS[p]}")
+            print(f"  {m:6} {p:44} — {ALLOWED_ORPHANS[(m, p)]}")
     if orphans:
         print("\n❌ MỒ CÔI — backend có, không FE nào gọi:")
         for m, p in orphans:

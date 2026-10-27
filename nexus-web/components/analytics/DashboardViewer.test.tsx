@@ -24,6 +24,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/studio/du-an/northwind/dung/bao-cao/tong-quan/d1",
 }));
 
+import { onDraftsChanged } from "@/lib/draftEvents";
 import { DashboardViewer } from "./DashboardViewer";
 
 const run = () => ({
@@ -67,6 +68,41 @@ describe("DashboardViewer", () => {
     expect(api.deleteDashboard).toHaveBeenCalledWith("d1");
     expect(onDeleted).toHaveBeenCalled();
     expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  // Issue #62: on a delivered project DELETE /admin/dashboards/:id writes a dashboard "delete" draft (or drops a draft-only
+  // dashboard; DraftDashboardRepo.Delete): the header recounts once the DELETE has answered, never before, never on a refusal.
+  it("delete announces on the drafts bus once it has answered, never before, never on a refusal (#62)", async () => {
+    const heard: string[] = [];
+    const off = onDraftsChanged((s) => heard.push(s));
+    try {
+      const onDeleted = vi.fn();
+      await act(async () => { renderViewer({ embedded: true, onDeleted }); });
+      await screen.findByRole("heading", { level: 1, name: /CRM Overview/ });
+      const confirmDelete = async () => {
+        fireEvent.click(await screen.findByRole("button", { name: /Xoá trang tổng quan/ }));
+        const buttons = await screen.findAllByRole("button", { name: "Xoá trang tổng quan" });
+        await act(async () => { fireEvent.click(buttons[buttons.length - 1]); });
+      };
+
+      api.deleteDashboard.mockRejectedValueOnce(new Error("refused"));
+      await confirmDelete();
+      expect(api.deleteDashboard).toHaveBeenCalledTimes(1);
+      expect(onDeleted).not.toHaveBeenCalled();
+      expect(heard).toEqual([]);
+
+      let answer!: () => void;
+      api.deleteDashboard.mockReturnValueOnce(new Promise<void>((r) => { answer = r; }));
+      await confirmDelete();
+      expect(api.deleteDashboard).toHaveBeenCalledTimes(2);
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(heard).toEqual([]);
+      await act(async () => { answer(); });
+      expect(onDeleted).toHaveBeenCalled();
+      expect(heard).toEqual(["dashboard"]);
+    } finally {
+      off();
+    }
   });
 
   it("embedded rename is a form in the page (no dialog) and saves the new name", async () => {
