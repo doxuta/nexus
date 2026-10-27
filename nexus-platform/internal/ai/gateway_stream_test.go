@@ -97,6 +97,16 @@ func TestGateway_Complete_FoldsTheStream(t *testing.T) {
 				"data: " + `{"id":"chatcmpl-msg_011","object":"chat.completion.chunk","created":1793086291,"model":"claude-opus-5-5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":18836,"completion_tokens":4,"total_tokens":18840}}` + "\n\n",
 			ChatResponse{Choices: []ChatChoice{{Message: ChatMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
 				Usage: Usage{PromptTokens: 18836, CompletionTokens: 4, TotalTokens: 18840}}},
+		{"parallel tool calls streamed without an index: a new id opens a new call",
+			// Some OpenAI-compatible proxies leave the index out; every piece then reads index 0.
+			sse(`{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"a","arguments":"{\"x\":"}}]},"finish_reason":null}]}`,
+				`{"choices":[{"index":0,"delta":{"tool_calls":[{"function":{"arguments":"1}"}}]},"finish_reason":null}]}`,
+				`{"choices":[{"index":0,"delta":{"tool_calls":[{"id":"c2","type":"function","function":{"name":"b","arguments":"{\"y\":2}"}}]},"finish_reason":null}]}`,
+				`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`),
+			ChatResponse{Choices: []ChatChoice{{Message: ChatMessage{Role: "assistant", ToolCalls: []ToolCall{
+				{ID: "c1", Type: "function", Function: ToolCallFunc{Name: "a", Arguments: `{"x":1}`}},
+				{ID: "c2", Type: "function", Function: ToolCallFunc{Name: "b", Arguments: `{"y":2}`}},
+			}}, FinishReason: "tool_calls"}}}},
 		{"comments, event names and ids between the chunks are not data",
 			": keep-alive\n\nevent: message\nid: 1\ndata: " + `{"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}` + "\n\n: bye\n\ndata: [DONE]\n\n",
 			ChatResponse{Choices: []ChatChoice{{Message: ChatMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}}}},
@@ -209,6 +219,15 @@ func TestGateway_Complete_StreamFailures(t *testing.T) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("data: " + partial + "\n\n"))
 		}, ErrGateway, "ended before"},
+		{"[DONE] before the answer finished", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: " + partial + "\n\ndata: [DONE]\n\n"))
+		}, ErrGateway, "ended before"},
+		{"the stream closes after the finish, before the usage and [DONE]", func(w http.ResponseWriter, r *http.Request) {
+			// OpenAI sends the usage after the finish, then [DONE]; a stream that stops in between lost the usage.
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: " + `{"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}` + "\n\n"))
+		}, ErrGateway, "before its usage"},
 		{"a chunk that is not JSON", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("data: " + partial + "\n\ndata: {not json\n\n"))

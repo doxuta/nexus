@@ -351,10 +351,13 @@ type streamChunk struct {
 
 // foldStream folds a streamed completion into the ChatResponse a non-streamed one gives: the text and the
 // refusal text joined; each tool call's arguments joined by its index, "{}" when none came, its id, type and
-// name taken as sent (9router repeats the id on every piece); the last finish reason and stop reasons; and
-// the last usage the stream sent (OpenAI sends it once, after the finish). [DONE], a finish reason or a
-// top-level stop reason ends the answer (9router sends no [DONE]); a stream that stops before one, or that
-// sends an error event, is an error: its partial tool calls are not an answer.
+// name taken as sent (9router repeats the id on every piece; a proxy that leaves the index out gets a new
+// call for each new id); the last finish reason and stop reasons; and the last usage the stream sent (OpenAI
+// sends it once, after the finish). A finish reason or a top-level stop reason finishes the answer, and
+// [DONE] or the usage closes the stream (9router sends no [DONE], its usage rides on the finish chunk). A
+// stream that stops before the finish, or after it with neither (the usage lost), or that sends an error
+// event, is an error: a partial tool call is not an answer, and an answer without its usage escapes the
+// budget.
 //
 // ponytail: one "data:" line is one event; a gateway that splits an event over several data lines (the
 // SSE spec allows it, no OpenAI-compatible gateway does) is read as broken JSON, a 502.
@@ -363,7 +366,8 @@ func foldStream(body []byte) (ChatResponse, error) {
 		out    ChatResponse
 		choice *ChatChoice
 		slot   = map[int]int{} // a tool call's stream index → its place in the message
-		done   bool
+		done   bool            // [DONE] came
+		usage  bool            // a usage came
 	)
 	for _, line := range strings.Split(string(body), "\n") {
 		data, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "data:")
@@ -382,7 +386,7 @@ func foldStream(body []byte) (ChatResponse, error) {
 			return ChatResponse{}, fmt.Errorf("ai.foldStream: error event mid-stream: %s", c.Error)
 		}
 		if c.Usage != nil {
-			out.Usage = *c.Usage
+			out.Usage, usage = *c.Usage, true
 		}
 		if c.StopReason != nil {
 			out.StopReason = c.StopReason
@@ -401,7 +405,7 @@ func foldStream(body []byte) (ChatResponse, error) {
 			choice.Message.Refusal += ch.Delta.Refusal
 			for _, tc := range ch.Delta.ToolCalls {
 				i, seen := slot[tc.Index]
-				if !seen {
+				if !seen || tc.ID != "" && choice.Message.ToolCalls[i].ID != "" && tc.ID != choice.Message.ToolCalls[i].ID {
 					i = len(choice.Message.ToolCalls)
 					slot[tc.Index] = i
 					choice.Message.ToolCalls = append(choice.Message.ToolCalls, ToolCall{Type: "function"})
@@ -426,8 +430,11 @@ func foldStream(body []byte) (ChatResponse, error) {
 			}
 		}
 	}
-	if !done && out.StopReason == nil && (choice == nil || choice.FinishReason == "") {
+	if out.StopReason == nil && (choice == nil || choice.FinishReason == "") {
 		return ChatResponse{}, errors.New("ai.foldStream: the stream ended before the answer finished")
+	}
+	if !done && !usage {
+		return ChatResponse{}, errors.New("ai.foldStream: the stream ended after the answer, before its usage or [DONE]")
 	}
 	if choice != nil {
 		// A call without arguments streams no piece of them; a whole answer sends "{}", and the gateway
