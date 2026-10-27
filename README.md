@@ -221,9 +221,9 @@ on this repository's Security tab.
   backup (`internal/tenantbackup`) and the Doctor (`internal/doctor`) are in the tree and tested in CI, but no open
   issue extends them.
 - **Vietnamese first, English on the demo path.** `?lang=en`, or a browser that lists English and no Vietnamese,
-  picks English. The English catalog holds 974 of the 6,830 keys in `nexus-web/lib/i18n`: the 421 the demo loop
-  renders ([#6](https://github.com/doxuta/nexus/issues/6) measured them), the sign-in page, the assistant panel's
-  keys and its cards, the shell's menus and a few neighbours; other screens fall back to Vietnamese.
+  picks English. The English catalog holds 1,012 of the 6,868 keys in `nexus-web/lib/i18n`: the 421 the demo loop
+  renders ([#6](https://github.com/doxuta/nexus/issues/6) measured them), the sign-in page, the landing page, the
+  assistant panel's keys and its cards, the shell's menus and a few neighbours; other screens fall back to Vietnamese.
   Still Vietnamese in English mode:
   - in the assistant: the words of a changed path on an update card, and the approval, work-queue and sample-data
     summary lines (`lib/aiBuilder.ts`);

@@ -89,3 +89,12 @@ const noSubscription = () => () => {};
 export function useLocaleReady(): boolean {
   return useSyncExternalStore(noSubscription, () => true, () => false);
 }
+
+/**
+ * The language for a server-rendered page that must show its text before hydration (the landing page): Vietnamese
+ * on the server and while the page hydrates, so the hydrated text matches the server's (no React #418), then the
+ * reader's language (getLocale) right after. useLocaleReady instead renders nothing until hydration.
+ */
+export function useHydratedLocale(): Locale {
+  return useSyncExternalStore(noSubscription, getLocale, () => "vi");
+}
