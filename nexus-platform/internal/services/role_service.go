@@ -350,7 +350,7 @@ func (s *RoleService) UpdateRole(ctx context.Context, tenantID, id string, in Up
 	// Invalidate the role's cached grants AFTER commit so changed/revoked grants take effect now (O3).
 	s.aclCache.Invalidate(tenantID, id)
 	// RM-19: audit the committed role update on the role's own row. Async + fail-open.
-	emitMetaDiff(ctx, s.auditor, tenantID, audit.RoleMeta, id, audit.ActionUpdate, roleUpdateDiff(priorRole.Name, beforeView, v))
+	emitMetaDiff(ctx, s.auditor, tenantID, audit.RoleMeta, id, audit.ActionUpdate, roleUpdateDiff(beforeView, v))
 	s.rec.RecordDirect(ctx, tenantID, "", DirectDoc{DocType: "role", DocKey: id, Label: roleLabel(v), Op: "update", Before: beforeView, After: v})
 	return &v, nil
 }
@@ -539,8 +539,13 @@ func roleToView(r *auth.Role, actions []auth.RoleAction) RoleView {
 
 // roleUpdateDiff is a role update's audit diff with the role's name on both sides (issue #23): an
 // update diff keeps only the changed keys, so a grants-only change, or a save that changes nothing,
-// would otherwise leave a row that names no role.
-func roleUpdateDiff(priorName string, before any, after RoleView) *audit.Diff {
+// would otherwise leave a row that names no role. before is the RoleView read before the update (nil
+// when there was none to read: the row then names the role by its name after).
+func roleUpdateDiff(before any, after RoleView) *audit.Diff {
+	priorName := after.Name
+	if b, ok := before.(RoleView); ok {
+		priorName = b.Name
+	}
 	d := audit.ComputeDiff(audit.StructToMap(before), audit.StructToMap(after))
 	if d == nil {
 		d = &audit.Diff{}
