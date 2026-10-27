@@ -85,14 +85,21 @@ type ToolFunction struct {
 	Parameters  map[string]any `json:"parameters"`
 }
 
-// ChatRequest is the POST /chat/completions body. Stream is always false (the loop needs the whole
-// response before deciding whether to run tools). MaxTokens bounds a single completion.
+// ChatRequest is the POST /chat/completions body. MaxTokens bounds a single completion. Callers leave Stream
+// and StreamOptions unset: Gateway.Complete sets them on the wire (it streams to get the whole usage, then
+// folds the stream back into one ChatResponse), so a cassette records the request as the agent built it.
 type ChatRequest struct {
-	Model     string        `json:"model"`
-	Messages  []ChatMessage `json:"messages"`
-	Tools     []Tool        `json:"tools,omitempty"`
-	Stream    bool          `json:"stream"`
-	MaxTokens int           `json:"max_tokens,omitempty"`
+	Model         string         `json:"model"`
+	Messages      []ChatMessage  `json:"messages"`
+	Tools         []Tool         `json:"tools,omitempty"`
+	Stream        bool           `json:"stream"`
+	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
+	MaxTokens     int            `json:"max_tokens,omitempty"`
+}
+
+// StreamOptions asks a streamed completion to end with the call's usage (OpenAI's include_usage).
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 // ChatResponse is the subset of the OpenAI-compatible response the loop consumes. StopReason is Claude's
@@ -146,9 +153,11 @@ type Usage struct {
 //   - Both at once (an OpenAI-compatible proxy in front of Anthropic): prompt_tokens is taken to include
 //     the cache fields, as OpenAI's does, unless it is smaller than them and so cannot.
 //
-// A field that is absent counts 0. A gateway that sends no cache figures leaves both at 0 and its
-// prompt_tokens a floor: 9router's non-streaming answer for a Claude model (the dev gateway) drops
-// them. ponytail: DeepSeek's prompt_cache_hit_tokens and other vendor
+// A field that is absent counts 0, so a gateway that sends no cache figures leaves both at 0. The dev
+// gateway (9router 0.5.99, a Claude model) is one: its OpenAI-shape usage keeps only prompt_tokens,
+// completion_tokens and total_tokens, and it adds 2,000 to prompt_tokens. Streamed (what Gateway.Complete
+// asks for), prompt_tokens is the whole input plus that 2,000; not streamed, it was the uncached
+// remainder plus 2,000, a floor. ponytail: DeepSeek's prompt_cache_hit_tokens and other vendor
 // spellings are not read; add one here when a gateway sends it.
 func (u *Usage) UnmarshalJSON(b []byte) error {
 	var w struct {
@@ -235,16 +244,21 @@ func (g *Gateway) WithAPIKey(key string) *Gateway {
 	return g
 }
 
-// Complete performs one non-streaming POST {baseURL}/chat/completions and returns the parsed
-// response. It maps failure modes to typed sentinels:
-//   - deadline/timeout (context or transport)      → ErrTimeout (504)
-//   - non-2xx status, transport error, bad JSON body → ErrGateway (502)
+// Complete performs one POST {baseURL}/chat/completions and returns the whole answer as one ChatResponse.
+// The request asks for a stream that ends with the usage (stream, stream_options.include_usage): the dev
+// gateway reports a call's whole input only on that path (issue #30 item 8). The stream is read to its end
+// and folded back (foldStream), so the agents, the recorder and replay see what a non-streamed answer
+// gives; a gateway that ignores stream and answers one JSON body is read as before. It maps failure modes
+// to typed sentinels:
+//   - deadline/timeout (context or transport), mid-stream too → ErrTimeout (504)
+//   - non-2xx status, transport error, a body that is neither an answer nor a finished stream,
+//     an error event mid-stream                                → ErrGateway (502)
 //
-// The request always carries stream:false. The caller's ctx is honored; Complete additionally
-// bounds the call by g.timeout so a hung gateway cannot outlive the deadline even if the caller's
-// ctx has none.
+// The caller's ctx is honored; Complete additionally bounds the call by g.timeout so a hung gateway
+// cannot outlive the deadline even if the caller's ctx has none.
 func (g *Gateway) Complete(ctx context.Context, req ChatRequest) (ChatResponse, error) {
-	req.Stream = false
+	req.Stream = true
+	req.StreamOptions = &StreamOptions{IncludeUsage: true}
 
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -282,22 +296,155 @@ func (g *Gateway) Complete(ctx context.Context, req ChatRequest) (ChatResponse, 
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Truncate the upstream body so a large error page never bloats the wrapped error/log.
-		snippet := string(respBody)
-		// A gateway may echo the rejected credential; scrub it BEFORE truncating (a cut could
-		// otherwise leave a key prefix behind) so the error/log never carries the key.
-		if g.apiKey != "" {
-			snippet = strings.ReplaceAll(snippet, g.apiKey, "[redacted]")
-		}
-		if len(snippet) > 512 {
-			snippet = snippet[:512]
-		}
-		return ChatResponse{}, fmt.Errorf("ai.Gateway.Complete: %w: status %d: %s", ErrGateway, resp.StatusCode, snippet)
+		return ChatResponse{}, fmt.Errorf("ai.Gateway.Complete: %w: status %d: %s", ErrGateway, resp.StatusCode, g.snippet(string(respBody)))
 	}
 
+	// A gateway that ignores stream answers one JSON object; an event stream never starts with "{".
 	var out ChatResponse
-	if err := json.Unmarshal(respBody, &out); err != nil {
-		return ChatResponse{}, fmt.Errorf("ai.Gateway.Complete: %w: decode response: %v", ErrGateway, err)
+	if b := bytes.TrimSpace(respBody); len(b) > 0 && b[0] == '{' {
+		err = json.Unmarshal(b, &out)
+	} else {
+		out, err = foldStream(respBody)
+	}
+	if err != nil {
+		return ChatResponse{}, fmt.Errorf("ai.Gateway.Complete: %w: %s", ErrGateway, g.snippet(err.Error()))
+	}
+	return out, nil
+}
+
+// snippet is upstream text fit for an error and a log line. A gateway may echo the rejected credential;
+// it is scrubbed BEFORE truncating (a cut could otherwise leave a key prefix behind), then cut to 512 bytes
+// so a large error page never bloats the wrapped error.
+func (g *Gateway) snippet(s string) string {
+	if g.apiKey != "" {
+		s = strings.ReplaceAll(s, g.apiKey, "[redacted]")
+	}
+	if len(s) > 512 {
+		s = s[:512]
+	}
+	return s
+}
+
+// streamChunk is one data event of a streamed completion (OpenAI's chat.completion.chunk). Each choice
+// carries a delta: the next piece of the message, and of each tool call by its index.
+type streamChunk struct {
+	Choices []struct {
+		Index int `json:"index"`
+		Delta struct {
+			Role      string `json:"role"`
+			Content   string `json:"content"`
+			Refusal   string `json:"refusal"`
+			ToolCalls []struct {
+				Index    int          `json:"index"`
+				ID       string       `json:"id"`
+				Type     string       `json:"type"`
+				Function ToolCallFunc `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
+		StopReason   any    `json:"stop_reason"`
+	} `json:"choices"`
+	Usage      *Usage          `json:"usage"`
+	StopReason any             `json:"stop_reason"`
+	Error      json.RawMessage `json:"error"`
+}
+
+// foldStream folds a streamed completion into the ChatResponse a non-streamed one gives: the text and the
+// refusal text joined; each tool call's arguments joined by its index, "{}" when none came, its id, type and
+// name taken as sent (9router repeats the id on every piece; a proxy that leaves the index out gets a new
+// call for each new id); the last finish reason and stop reasons; and the last usage the stream sent (OpenAI
+// sends it once, after the finish). A finish reason or a top-level stop reason finishes the answer, and
+// [DONE] or the usage closes the stream (9router sends no [DONE], its usage rides on the finish chunk). A
+// stream that stops before the finish, or after it with neither (the usage lost), or that sends an error
+// event, is an error: a partial tool call is not an answer, and an answer without its usage escapes the
+// budget.
+//
+// ponytail: one "data:" line is one event; a gateway that splits an event over several data lines (the
+// SSE spec allows it, no OpenAI-compatible gateway does) is read as broken JSON, a 502.
+func foldStream(body []byte) (ChatResponse, error) {
+	var (
+		out    ChatResponse
+		choice *ChatChoice
+		slot   = map[int]int{} // a tool call's stream index → its place in the message
+		done   bool            // [DONE] came
+		usage  bool            // a usage came
+	)
+	for _, line := range strings.Split(string(body), "\n") {
+		data, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), "data:")
+		if !ok {
+			continue // a blank line, a comment, an event name or id
+		}
+		if data = strings.TrimSpace(data); data == "[DONE]" {
+			done = true
+			break
+		}
+		var c streamChunk
+		if err := json.Unmarshal([]byte(data), &c); err != nil {
+			return ChatResponse{}, fmt.Errorf("ai.foldStream: decode stream chunk: %w", err)
+		}
+		if len(c.Error) > 0 && string(c.Error) != "null" {
+			return ChatResponse{}, fmt.Errorf("ai.foldStream: error event mid-stream: %s", c.Error)
+		}
+		if c.Usage != nil {
+			out.Usage, usage = *c.Usage, true
+		}
+		if c.StopReason != nil {
+			out.StopReason = c.StopReason
+		}
+		for _, ch := range c.Choices {
+			if ch.Index != 0 {
+				continue // the loop only ever reads choices[0]
+			}
+			if choice == nil {
+				choice = &ChatChoice{Message: ChatMessage{Role: "assistant"}}
+			}
+			if ch.Delta.Role != "" {
+				choice.Message.Role = ch.Delta.Role
+			}
+			choice.Message.Content += ch.Delta.Content
+			choice.Message.Refusal += ch.Delta.Refusal
+			for _, tc := range ch.Delta.ToolCalls {
+				i, seen := slot[tc.Index]
+				if !seen || tc.ID != "" && choice.Message.ToolCalls[i].ID != "" && tc.ID != choice.Message.ToolCalls[i].ID {
+					i = len(choice.Message.ToolCalls)
+					slot[tc.Index] = i
+					choice.Message.ToolCalls = append(choice.Message.ToolCalls, ToolCall{Type: "function"})
+				}
+				call := &choice.Message.ToolCalls[i]
+				if tc.ID != "" {
+					call.ID = tc.ID
+				}
+				if tc.Type != "" {
+					call.Type = tc.Type
+				}
+				if tc.Function.Name != "" {
+					call.Function.Name = tc.Function.Name
+				}
+				call.Function.Arguments += tc.Function.Arguments
+			}
+			if ch.FinishReason != "" {
+				choice.FinishReason = ch.FinishReason
+			}
+			if ch.StopReason != nil {
+				choice.StopReason = ch.StopReason
+			}
+		}
+	}
+	if out.StopReason == nil && (choice == nil || choice.FinishReason == "") {
+		return ChatResponse{}, errors.New("ai.foldStream: the stream ended before the answer finished")
+	}
+	if !done && !usage {
+		return ChatResponse{}, errors.New("ai.foldStream: the stream ended after the answer, before its usage or [DONE]")
+	}
+	if choice != nil {
+		// A call without arguments streams no piece of them; a whole answer sends "{}", and the gateway
+		// refuses "" when the call is sent back (9router: "tool_use.input: Input should be an object").
+		for i := range choice.Message.ToolCalls {
+			if strings.TrimSpace(choice.Message.ToolCalls[i].Function.Arguments) == "" {
+				choice.Message.ToolCalls[i].Function.Arguments = "{}"
+			}
+		}
+		out.Choices = []ChatChoice{*choice}
 	}
 	return out, nil
 }

@@ -12,6 +12,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // Issue #22 item 3: MCP (internal/mcpserver) and the in-app builder run every tool through toolExecutor,
@@ -21,7 +24,7 @@ import (
 
 // readVerbs are the method names an executor dependency may have. A new method fails the pin until a
 // human reads it and adds it here: Get*/List*/Load*/Find* read; the rest are named one by one.
-var readVerbs = regexp.MustCompile(`^(Get|List|Load|Find)[A-Z]|^Get$|^(Authorize|HeadCutoff|ColumnExists|RefEntity|AccessProbes|PrivilegedHolders)$`)
+var readVerbs = regexp.MustCompile(`^(Get|List|Load|Find)[A-Z]|^Get$|^(Authorize|HeadCutoff|ColumnExists|RefEntity|AccessProbes|PrivilegedHolders|PacksOf|AggregateScalar)$`)
 
 // writeWords may not appear anywhere in a read method's name: GetOrCreate, FindOrCreate or ListAndPurge
 // start like a read and then write.
@@ -37,6 +40,12 @@ func isReadMethod(name string) bool {
 		return false
 	}
 	return !slices.ContainsFunc(camelWords.FindAllString(name, -1), func(w string) bool { return slices.Contains(writeWords, w) })
+}
+
+// sinks are types the walk does not enter, each with the reason a human read it: they write, but never to
+// tenant data, the draft or the model.
+var sinks = map[reflect.Type]string{
+	reflect.TypeOf(zap.Logger{}): "the server log: warn writes a line there when a best-effort read fails",
 }
 
 // executorRoots are the types the executor reaches: its own fields, and the probes it gets by
@@ -67,14 +76,16 @@ func TestToolExecutor_ReadOnlyPinCatchesAWriter(t *testing.T) {
 		reader MetadataReader
 		probes *struct{ Store writer }
 		hook   func()
+		log    *zap.Logger  // a sink: not entered
+		core   zapcore.Core // what the logger holds, reached another way: entered
 	}
 	got := strings.Join(readOnlyViolations([]reflect.Type{reflect.TypeOf(withWriter{})}), "\n")
-	for _, want := range []string{"CreateEntity", "GetOrCreateEntity", "FindOrCreateRole", "ListAndPurgeDrafts", "func"} {
+	for _, want := range []string{"CreateEntity", "GetOrCreateEntity", "FindOrCreateRole", "ListAndPurgeDrafts", "func", "core (zapcore.Core) has Write"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the pin let %q through: %s", want, got)
 		}
 	}
-	if strings.Contains(got, "GetEntityByName") || strings.Contains(got, "ListFieldsIncludingDeleted") {
+	if strings.Contains(got, "GetEntityByName") || strings.Contains(got, "ListFieldsIncludingDeleted") || strings.Contains(got, ".log") {
 		t.Errorf("a read method was reported: %s", got)
 	}
 }
@@ -205,6 +216,9 @@ func readOnlyViolations(roots []reflect.Type) []string {
 			return
 		}
 		seen[t] = true
+		if sinks[t] != "" {
+			return
+		}
 		switch t.Kind() {
 		case reflect.Interface:
 			for i := range t.NumMethod() {

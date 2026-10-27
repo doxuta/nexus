@@ -31,12 +31,23 @@ func (groundingOnlyRecordReader) ViewableEntities(context.Context, services.Reco
 }
 
 // An API-level refusal (HTTP 200, finish_reason "refusal", no text) reaches the panel as outcome "refused" on
-// both chat routes, through the real gateway client and the real agents (issue #30 item 5). The turn is stored
+// both chat routes, through the real gateway client and the real agents (issue #30 item 5), whether the
+// gateway answers in one body or streams (issue #30 item 8: the client asks for a stream). The turn is stored
 // like any answer, so the thread goes on.
 func TestChatRoutes_ModelRefusal_200Refused(t *testing.T) {
+	for wire, body := range map[string]string{
+		"whole": `{"choices":[{"message":{"role":"assistant","content":null},"finish_reason":"refusal"}],
+			"usage":{"prompt_tokens":2046,"completion_tokens":0,"total_tokens":2046}}`,
+		"streamed": "data: " + `{"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}` + "\n\n" +
+			"data: " + `{"choices":[{"index":0,"delta":{},"finish_reason":"refusal"}],"usage":{"prompt_tokens":2046,"completion_tokens":0,"total_tokens":2046}}` + "\n\n",
+	} {
+		t.Run(wire, func(t *testing.T) { refusedOnBothRoutes(t, body) })
+	}
+}
+
+func refusedOnBothRoutes(t *testing.T, body string) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":null},"finish_reason":"refusal"}],
-			"usage":{"prompt_tokens":2046,"completion_tokens":0,"total_tokens":2046}}`))
+		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
 	gw := ai.NewGateway(srv.URL, 5*time.Second)

@@ -91,16 +91,48 @@ turns, including a turn the panel sent on its own.
 - **The prompt side is a floor.** A model call reported 2,046 prompt tokens on average over the cheap model's 213
   calls, and 2,049 over Opus's 65, whatever its size. A one-line test request through the same gateway reported 2,042.
   A builder call sends about 70 KB (the persona, 26 tool schemas, the workspace's tables). This gateway reports an
-  uncached slice of the input; the cached bulk is not in the count.
+  uncached slice of the input; the cached bulk is not in the count. The engine now streams its calls and reads the
+  whole input (#30 item 8); one app measured that way is below.
 - **The output side is exact:** 2,666 output tokens per successful app on the cheap model, 2,039 on Opus.
 - **"KB sent" is the input actually carried:** 14,835 KB for the cheap model's 60 attempts, 4,574 KB for Opus's 20.
-- **No dollar figure.** List prices exist, but the input count they would multiply is not known here (cache reads and
-  writes are not reported), so a dollar amount would be invented.
+- **No dollar figure for these runs.** List prices exist, but the input count they would multiply is not known here
+  (cache reads and writes are not reported), so a dollar amount would be invented. One app priced from a measured
+  run is below.
 
 **Totals.** The 80 attempts recorded 734,940 tokens; stage 1 alone used 93,221, far under the 1.5M that gates stage 2.
 Before the runs, one probe of the cheap model's id through the gateway used 2,046. One attempt, aborted by a driver bug
 (fixed in `1853ae6`) and discarded, used 5,626 measured tokens; a third call was cut mid-flight and its usage is
 unknown. All in, about 742,600 tokens, under the 5M cap.
+
+## What one app really costs (measured 2026-10-27)
+
+One builder turn on the `app-helpdesk` prompt, after the engine started streaming its model calls with
+`stream_options.include_usage` (#30 item 8). Claude Opus 5.5 (`cc/claude-opus-5-5`) through the same local gateway
+(9router 0.5.99), on the one-command demo stack in `AI_GATEWAY_MODE=record`, sent as the builder through
+`POST /api/v1/admin/ai/builder/chat`. The turn ended `ok` with a draft of every expected kind (entity, app, access) in
+three model calls; it was not applied or published, so it is one app's turn, not a bench attempt.
+
+| call | prompt tokens reported | whole input | uncached | cache read | cache write | output |
+|---|---|---|---|---|---|---|
+| 1 (list_roles, list_packs) | 35,531 | 33,531 | 175 | 33,356 | 0 | 285 |
+| 2 (propose_entity, propose_app, propose_access) | 38,448 | 36,448 | 2 | 33,356 | 3,090 | 772 |
+| 3 (the reply) | 39,326 | 37,326 | 2 | 36,446 | 878 | 722 |
+| **the turn** | **113,305** (`sys_ai_runs`) | **107,305** | **179** | **103,158** | **3,968** | **1,779** |
+
+- **What the gateway reports, streamed:** the whole input plus 2,000 per call. 9router adds 2,000 to `prompt_tokens`
+  on both paths and keeps only `prompt_tokens`, `completion_tokens` and `total_tokens` in its OpenAI-shape usage, so
+  the cache split never reaches the engine and `sys_ai_runs.cache_read_tokens` / `cache_write_tokens` stay NULL
+  through it. The split above is 9router's own usage log for the same three calls. A gateway that forwards the
+  split (OpenAI's `prompt_tokens_details`, LiteLLM's Anthropic fields) fills those columns; the engine reads both.
+- **Not streamed** (every attempt in this report), the same three calls would have read 6,179 prompt tokens: the
+  uncached part plus 2,000 each. The whole input is 17 times that.
+- **In dollars,** at Claude Opus 5.5's list prices ($4 / MTok input, $20 output, $0.20 cache read, $5 cache write for
+  5 minutes, $8 for 1 hour): 179 uncached $0.0007, 103,158 read $0.0206, 3,968 written $0.0198, 1,779 output
+  $0.0356, so **about $0.08 for the app** while the cache is warm. 9router marks the conversation tail with the
+  5-minute cache, and these writes are the tail; at the 1-hour rate they would make it $0.089.
+- **Cold,** the first turn after the cache expires writes the persona and the tool schemas (33,356 tokens, marked
+  with the 1-hour cache) instead of reading them: $0.26 more, **about $0.34 for the app**. The turn before this one
+  wrote exactly that.
 
 ## The run
 

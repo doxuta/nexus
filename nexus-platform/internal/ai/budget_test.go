@@ -216,6 +216,46 @@ func TestBudgetGuard_DailyBudget(t *testing.T) {
 	}
 }
 
+// measuredBuilderTurn is the sys_ai_runs row of one real builder turn that made an app, its calls streamed
+// through the dev gateway (evals/builder-bench/report.md, "What one app really costs"): 113,305 prompt tokens
+// (the whole input of three calls, cache reads and writes included) + 1,779 output.
+const measuredBuilderTurn = 113305 + 1779
+
+// Issue #30 item 8 moved prompt_tokens from the uncached remainder to the whole input, about 17 times more on a
+// builder turn, so the default daily budget is sized in that unit. It admits the working day it admitted before
+// the stream: 26 turns at the ~8,000 tokens a turn recorded then under 200,000; 27 at the measured 115,084 now.
+// A third turn a day (what 200,000 admits now) would 429 AI_BUDGET_EXCEEDED a live demo until UTC midnight.
+func TestBudgetGuard_DefaultBudgetAdmitsADayOfBuilderTurns(t *testing.T) {
+	for _, k := range []string{"AI_DAILY_TOKEN_BUDGET", "AI_GATEWAY_MODE", "AI_GATEWAY_CASSETTE"} {
+		t.Setenv(k, "")
+	}
+	loaded, err := config.LoadAIConfig()
+	if err != nil {
+		t.Fatalf("LoadAIConfig: %v", err)
+	}
+	cfg := guardCfg() // the rate and concurrency gates out of the way: the budget alone decides
+	cfg.DailyTokenBudget = loaded.DailyTokenBudget
+	ledger := &fakeTokenLedger{}
+	g := newBudgetGuard(cfg, ledger, nil, time.Now)
+
+	turns := 0
+	for ; turns < 1000; turns++ {
+		release, err := g.Acquire(context.Background(), "tenant-a")
+		if errors.Is(err, ErrBudgetExceeded) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("turn %d: Acquire error = %v", turns+1, err)
+		}
+		release()
+		ledger.total += measuredBuilderTurn
+	}
+	if turns != 27 {
+		t.Fatalf("the default budget %d admits %d builder turns of %d tokens a day; want 27",
+			cfg.DailyTokenBudget, turns, measuredBuilderTurn)
+	}
+}
+
 // TestBudgetGuard_BudgetZero_CheckDisabled: DailyTokenBudget=0 is the explicit opt-out — the
 // ledger must never be consulted.
 func TestBudgetGuard_BudgetZero_CheckDisabled(t *testing.T) {
