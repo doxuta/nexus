@@ -235,6 +235,10 @@ export interface AiDraftDeleteEntity {
   entity: string;
   label: string;
   fieldCount: number;
+  /** The packs that ship the table (issue #30 item 4); absent = built here, or not known. */
+  packs?: string[];
+  /** The tenant's records the delete hides, counted when proposed; absent = not counted. */
+  recordCount?: number;
 }
 
 // Proposed sample/seed rows for an EXISTING entity (kind:"records", ≤20 rows server-side). Applied

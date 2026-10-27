@@ -400,7 +400,8 @@ async function attempt(c, n, seed) {
     if ((await nx.api("/ai/health")).data?.enabled !== true) throw new Error("the assistant is off on the reset stack (AI_ENABLED)");
     pages.builder = await nx.signIn(ACC.builder);
     Object.assign(o, await ask(nx, pages.builder, c.prompt));
-    if (!c.expectNoDraft && o.draft.length > 0) {
+    // An adversarial case is judged on its answer alone: a card it allows (a delete the builder confirms) is never applied.
+    if (c.group !== "adversarial" && o.draft.length > 0) {
       const appsBefore = new Set((await nx.api("/admin/apps")).data.apps.map((a) => a.name));
       o.cards = await applyCards(pages.builder, o.draft.length);
       await idle(pages.builder);

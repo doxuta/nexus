@@ -1300,6 +1300,10 @@ func main() {
 		Columns: dynRepo,
 		// issue #42: propose_records resolves a "@ref" of an applied parent card the way Apply does.
 		Refs: recordSvc,
+		// issue #30 item 4: the delete card names the packs that ship the table and counts its records.
+		// The ledger repo is stateless; the installer's packInstallRepo below reads the same sys_pack_items.
+		Packs:  packinstall.New(database),
+		Counts: dynRepo,
 	}), &ai.DocReaders{Layouts: layoutSvc, Workflows: workflowSvc, Reports: reportSvc, Apps: appSvc}, aiRunRepo, logger).
 		WithDelivery(draftGate) // specs/067 L10-5: one grounding line once the project is delivered
 	aiContextResolver := ai.NewContextResolver(aiMeta, appSvc, userRepo)
