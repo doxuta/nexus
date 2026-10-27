@@ -3,7 +3,7 @@
 // are the REAL ones; the session read and the identity seams are mocked.
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams("") }));
 vi.mock("@/lib/studioContext", () => ({
@@ -47,12 +47,16 @@ const THREAD = {
   ],
 };
 
+/** The expiry of the agent key bound to the thread, as McpConnect passes it. */
+const liveUntil = { at: "2999-01-01T00:00:00Z" };
+
 function Opener() {
   const open = useOpenThread();
   const shown = useAssistantOpen();
   return (
     <>
       <button type="button" disabled={!open} onClick={() => void open?.("sess-1")}>mo</button>
+      <button type="button" disabled={!open} onClick={() => void open?.("sess-1", liveUntil.at)}>mo-key</button>
       <span data-testid="open-state">{String(shown)}</span>
     </>
   );
@@ -139,5 +143,61 @@ describe("opening a saved conversation", () => {
   it("is not offered where the panel cannot mount", () => {
     mount("/studio/du-an/northwind/cai-dat");
     expect(screen.getByRole("button", { name: "mo" })).toBeDisabled();
+  });
+});
+
+// Issue #22: while the agent key bound to the thread is live, the open thread shows what the agent adds without a reopen:
+// it re-reads itself every 5 s while visible, stops after 10 minutes with nothing new, and a focus wakes it again.
+describe("an open thread an agent key is bound to", () => {
+  const LATER = {
+    ...THREAD,
+    messages: [
+      ...THREAD.messages,
+      { seq: 4, role: "user", content: "[MCP] Agent gọi nexus_propose_entity", draft: null, createdAt: "2026-10-17T03:06:00Z" },
+      { seq: 5, role: "assistant", content: "Agent đề xuất qua MCP: entity \"kho\".", createdAt: "2026-10-17T03:06:00Z",
+        draft: [{ kind: "entity", entity: { name: "kho", label: "Kho", fields: [] } }] },
+    ],
+  };
+  const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  const openWith = async (name: string) => { await act(async () => { fireEvent.click(screen.getByRole("button", { name })); }); };
+
+  beforeEach(() => { vi.useFakeTimers(); liveUntil.at = "2999-01-01T00:00:00Z"; });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("shows the agent's new card without a reopen, and keeps what was applied", async () => {
+    mount();
+    await openWith("mo-key");
+    fireEvent.click(screen.getByRole("button", { name: "Áp dụng" }));
+    await tick(0);
+    expect(addField).toHaveBeenCalledTimes(1);
+    vi.mocked(getAiSession).mockResolvedValue(LATER as never);
+    await tick(5_000);
+    expect(screen.getByText("[MCP] Agent gọi nexus_propose_entity")).toBeInTheDocument();
+    // the field card applied before the re-read is still applied: one Áp dụng left, the new table's
+    expect(screen.getAllByRole("button", { name: "Áp dụng" })).toHaveLength(1);
+  });
+
+  it("stops reading after ten quiet minutes; a focus reads again", async () => {
+    mount();
+    await openWith("mo-key");
+    await tick(10 * 60_000 + 5_000);
+    const reads = vi.mocked(getAiSession).mock.calls.length;
+    await tick(60_000);
+    expect(getAiSession).toHaveBeenCalledTimes(reads);
+    vi.mocked(getAiSession).mockResolvedValue(LATER as never);
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    await tick(0);
+    expect(screen.getByText("[MCP] Agent gọi nexus_propose_entity")).toBeInTheDocument();
+  });
+
+  it("is not followed without a live key: no key, or an expired one", async () => {
+    mount();
+    await openWith("mo");
+    await tick(60_000);
+    expect(getAiSession).toHaveBeenCalledTimes(1);
+    liveUntil.at = "2000-01-01T00:00:00Z";
+    await openWith("mo-key");
+    await tick(60_000);
+    expect(getAiSession).toHaveBeenCalledTimes(2);
   });
 });
