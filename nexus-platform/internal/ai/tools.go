@@ -1104,8 +1104,9 @@ func (e *toolExecutor) proposeEntity(ctx context.Context, argsJSON string) strin
 // config-time validator) before buffering — same parity guarantee as proposeEntity. A name the
 // table already has — live, drafted with the table, or proposed earlier this turn (pendingFields) —
 // is refused here with the apply path's own code (FIELD_ALREADY_EXISTS), as proposeEntity refuses a
-// taken table name (#30 item 3). A table that is neither live nor drafted is left to Apply
-// (ENTITY_NOT_FOUND), as before.
+// taken table name (#30 item 3). A table that is neither live in this tenant nor drafted (this turn,
+// or earlier in an MCP thread) is refused with Apply's ENTITY_NOT_FOUND, as propose_layout does
+// (issue #22): no card is filed for a table the tenant does not have.
 func (e *toolExecutor) proposeField(ctx context.Context, argsJSON string) string {
 	var a proposedField
 	// proposedField only carries the field attributes; entity is a sibling key on the same object.
@@ -1124,7 +1125,10 @@ func (e *toolExecutor) proposeField(ctx context.Context, argsJSON string) string
 		return toolErr("%s: %s", code, msg)
 	}
 	entity, live, fields, err := e.pendingFields(ctx, withEntity.Entity)
-	if err != nil && !errors.Is(err, metadata.ErrEntityNotFound) {
+	if errors.Is(err, metadata.ErrEntityNotFound) {
+		return toolErr("ENTITY_NOT_FOUND: entity %q không tồn tại và cũng chưa được propose_entity trong lượt này — propose_entity trước rồi propose_field trong CÙNG lượt", withEntity.Entity)
+	}
+	if err != nil {
 		return toolErr("PROPOSE_FIELD_FAILED: %v", err)
 	}
 	if i := slices.IndexFunc(fields, func(f metadata.FieldDefinition) bool { return f.Name == a.Name }); i >= 0 {
