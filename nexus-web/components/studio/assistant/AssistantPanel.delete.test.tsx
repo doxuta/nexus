@@ -36,7 +36,8 @@ import { parseStudioPath } from "@/lib/studioRoutes";
 import { AssistantMount } from "./AssistantMount";
 import { AssistantProvider } from "./AssistantProvider";
 
-const REPLY = "Tôi đã soạn thẻ xoá bảng crm_accounts (gói crm, 4 bản ghi). Tôi không bỏ qua được bước xác nhận: anh tự bấm Xoá trên thẻ và gõ lại tên bảng.";
+// The model is never told the record count (ADR 0003): the card shows it, and the reply sends the builder there.
+const REPLY = "Tôi đã soạn thẻ xoá bảng crm_accounts (gói crm; số bản ghi bị ẩn ghi trên thẻ). Tôi không bỏ qua được bước xác nhận: anh tự bấm Xoá trên thẻ và gõ lại tên bảng.";
 const DRAFT = [
   { kind: "delete_entity", deleteEntity: { entity: "crm_accounts", label: "Khách hàng", fieldCount: 12, packs: ["crm"], recordCount: 4 } },
   { kind: "field", field: { entity: "crm_contacts", name: "ghi_chu", label: "Ghi chú", fieldType: "text" } },
@@ -74,8 +75,8 @@ describe("AssistantPanel — a pack table delete asked for 'now, without asking 
     // The reply says it plainly; the card is honest about what it would hide.
     expect(await screen.findByText(/không bỏ qua được bước xác nhận/)).toBeTruthy();
     const card = screen.getByRole("article", { name: /Xoá bảng “Khách hàng”/ });
-    expect(within(card).getByText("Bảng Khách hàng · cài từ gói crm · khách chưa thấy")).toBeTruthy();
-    expect(within(card).getByText("Toàn bộ 4 bản ghi của bảng")).toBeTruthy();
+    expect(within(card).getByText("Bảng Khách hàng · có trong gói crm · khách chưa thấy")).toBeTruthy();
+    expect(within(card).getByText("Toàn bộ bản ghi của bảng (lúc đề xuất: 4 bản ghi)")).toBeTruthy();
 
     // "Áp dụng tất cả" counts and applies the other card only.
     fireEvent.click(screen.getByRole("button", { name: "Áp dụng tất cả (1)" }));
@@ -85,7 +86,7 @@ describe("AssistantPanel — a pack table delete asked for 'now, without asking 
 
     // The card's own delete asks, names the pack and the records, and stays shut until the exact name is typed.
     fireEvent.click(within(card).getByRole("button", { name: "Xoá…" }));
-    expect(within(card).getByText("Xoá bảng “Khách hàng” cùng 12 trường và 4 bản ghi của nó? Không hoàn tác được qua giao diện. Bảng này do gói crm cài.")).toBeTruthy();
+    expect(within(card).getByText("Xoá bảng “Khách hàng” cùng 12 trường và toàn bộ bản ghi của nó (lúc đề xuất: 4 bản ghi)? Không hoàn tác được qua giao diện. Gói crm có bảng này.")).toBeTruthy();
     const confirm = within(card).getByRole("button", { name: "Xoá bảng" });
     expect(confirm).toBeDisabled();
     fireEvent.click(confirm);

@@ -153,7 +153,8 @@ export function proposalView(item: AiDraftItem, ctx: Ctx = {}): ProposalView | n
     const n = deleteRecordCount(de);
     return base({
       title: V("deleteEntity", { name }),
-      // Issue #30 item 4: a pack's table says so, and the card counts what the delete hides when the server counted it.
+      // Issue #30 item 4: a table a pack ships says so (the ledger knows the pack ships a table by this name, not that it
+      // built this one), and the card counts what the delete hides as of the proposal, when the server counted it.
       where: packs ? where(tf("studio.assistant.where.packTable", { x: name, packs })) : table(name),
       changes: [
         { op: "remove", text: V("deleteEntity.fields", { n: de.fieldCount }) },
@@ -305,7 +306,7 @@ export function proposalWarnLink(item: AiDraftItem, link: Link): Omit<ProposalLi
 const deletePacks = (de: AiDraftDeleteEntity) => (Array.isArray(de.packs) ? de.packs.filter((p) => typeof p === "string").join(", ") : "");
 const deleteRecordCount = (de: AiDraftDeleteEntity) => (typeof de.recordCount === "number" ? de.recordCount : undefined);
 
-/** The delete_entity confirm question: the fields, the records it hides when counted, and the pack that installed it. */
+/** The delete_entity confirm question: the fields, all the records (with the count as of the proposal, when counted), and the packs that ship the table. */
 export function deleteEntityConfirmText(de: AiDraftDeleteEntity): string {
   const label = de.label || de.entity;
   const r = deleteRecordCount(de);

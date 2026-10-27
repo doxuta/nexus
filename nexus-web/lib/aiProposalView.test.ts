@@ -61,13 +61,15 @@ describe("proposalView", () => {
   it("delete_entity of a pack table names the pack and counts the records", () => {
     const pack = { kind: "delete_entity", deleteEntity: { entity: "crm_accounts", label: "Khách hàng", fieldCount: 12, packs: ["crm"], recordCount: 4 } } as AiDraftItem;
     const v = proposalView(pack)!;
-    expect(v.where).toBe("Bảng Khách hàng · cài từ gói crm");
-    expect(texts(v)).toEqual(["remove:Bảng cùng 12 trường", "remove:Toàn bộ 4 bản ghi của bảng"]);
-    expect(proposalView(pack, { delivered: false })!.where).toBe("Bảng Khách hàng · cài từ gói crm · khách chưa thấy");
-    expect(deleteEntityConfirmText(pack.deleteEntity!)).toBe("Xoá bảng “Khách hàng” cùng 12 trường và 4 bản ghi của nó? Không hoàn tác được qua giao diện. Bảng này do gói crm cài.");
+    expect(v.where).toBe("Bảng Khách hàng · có trong gói crm");
+    expect(texts(v)).toEqual(["remove:Bảng cùng 12 trường", "remove:Toàn bộ bản ghi của bảng (lúc đề xuất: 4 bản ghi)"]);
+    expect(proposalView(pack, { delivered: false })!.where).toBe("Bảng Khách hàng · có trong gói crm · khách chưa thấy");
+    // The count is as of the proposal, so the question still says "all of its records" (it may have changed since), and
+    // the ledger knows the pack ships a table by this name, not that the pack built this one.
+    expect(deleteEntityConfirmText(pack.deleteEntity!)).toBe("Xoá bảng “Khách hàng” cùng 12 trường và toàn bộ bản ghi của nó (lúc đề xuất: 4 bản ghi)? Không hoàn tác được qua giao diện. Gói crm có bảng này.");
     const empty = { ...pack, deleteEntity: { ...pack.deleteEntity!, packs: ["crm", "ticketing"], recordCount: 0 } } as AiDraftItem;
-    expect(proposalView(empty)!.where).toBe("Bảng Khách hàng · cài từ gói crm, ticketing");
-    expect(texts(proposalView(empty))).toContain("remove:Bảng chưa có bản ghi nào");
+    expect(proposalView(empty)!.where).toBe("Bảng Khách hàng · có trong gói crm, ticketing");
+    expect(texts(proposalView(empty))).toContain("remove:Toàn bộ bản ghi của bảng (lúc đề xuất: chưa có bản ghi nào)");
     // Not counted (an older server, a failed read) is "all of its records", never a number nobody read.
     expect(deleteEntityConfirmText(ITEMS.delete_entity.deleteEntity!)).toBe("Xoá bảng “Khuyến mãi” cùng 7 trường và toàn bộ bản ghi của nó? Không hoàn tác được qua giao diện.");
     expect(proposalView(ITEMS.delete_entity)!.where).toBe("Bảng Khuyến mãi");

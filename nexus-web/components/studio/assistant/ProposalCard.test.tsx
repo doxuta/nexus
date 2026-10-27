@@ -161,10 +161,10 @@ describe("ProposalCard — destructive (InlineConfirm)", () => {
 
   it("delete_entity of a pack table: the question names the pack and the records, and the retype still gates it", () => {
     const { onApply } = setup({ kind: "delete_entity", deleteEntity: { entity: "crm_accounts", label: "Khách hàng", fieldCount: 12, packs: ["crm"], recordCount: 4 } });
-    expect(screen.getByText("Bảng Khách hàng · cài từ gói crm")).toBeInTheDocument();
-    expect(screen.getByText("Toàn bộ 4 bản ghi của bảng")).toBeInTheDocument();
+    expect(screen.getByText("Bảng Khách hàng · có trong gói crm")).toBeInTheDocument();
+    expect(screen.getByText("Toàn bộ bản ghi của bảng (lúc đề xuất: 4 bản ghi)")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Xoá…" }));
-    expect(screen.getByText("Xoá bảng “Khách hàng” cùng 12 trường và 4 bản ghi của nó? Không hoàn tác được qua giao diện. Bảng này do gói crm cài.")).toBeInTheDocument();
+    expect(screen.getByText("Xoá bảng “Khách hàng” cùng 12 trường và toàn bộ bản ghi của nó (lúc đề xuất: 4 bản ghi)? Không hoàn tác được qua giao diện. Gói crm có bảng này.")).toBeInTheDocument();
     const confirm = screen.getByRole("button", { name: "Xoá bảng" });
     fireEvent.change(screen.getByLabelText("Gõ crm_accounts để xác nhận"), { target: { value: "Khách hàng" } });
     expect(confirm).toBeDisabled();
