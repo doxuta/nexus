@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -116,6 +117,36 @@ func TestMCPRateLimit_OffWhenBudgetsAreZero(t *testing.T) {
 	for range 10 {
 		if w := mcpCall(r, "203.0.113.7", "nxm_guess"); w.Code != http.StatusUnauthorized {
 			t.Fatalf("no budget configured: %d; want 401 (no brake)", w.Code)
+		}
+	}
+}
+
+// Behind Caddy every request comes from Caddy's address. Without TRUSTED_PROXY_CIDRS one prober spends every
+// client's lookup budget; with the compose network trusted (docker-compose.yml), each client has its own.
+func TestMCPRateLimit_BehindTheProxyEachClientHasItsOwnBudget(t *testing.T) {
+	_, compose, _ := net.ParseCIDR("10.213.47.0/24")
+	viaCaddy := func(r *gin.Engine, client string) int {
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{}`))
+		req.RemoteAddr = "10.213.47.2:5000" // Caddy on the compose network
+		req.Header.Set("X-Forwarded-For", client)
+		req.Header.Set("Authorization", "Bearer nxm_guess")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	for _, tc := range []struct {
+		name    string
+		trusted []*net.IPNet
+		want    int
+	}{
+		{"proxy not trusted: one bucket for everyone", nil, http.StatusTooManyRequests},
+		{"compose network trusted: a bucket per client", []*net.IPNet{compose}, http.StatusUnauthorized},
+	} {
+		r := (&mcpFake{}).router(MCPRateLimitConfig{ProbeMax: 2, KeyMax: 100, Window: time.Minute, TrustedProxyCIDRs: tc.trusted})
+		viaCaddy(r, "198.51.100.1")
+		viaCaddy(r, "198.51.100.1") // the prober spends its 2
+		if got := viaCaddy(r, "203.0.113.50"); got != tc.want {
+			t.Errorf("%s: another client's guess = %d; want %d", tc.name, got, tc.want)
 		}
 	}
 }

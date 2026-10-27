@@ -84,7 +84,8 @@ flowchart TD
 docker compose up --build
 ```
 
-Open <http://localhost:8080> (set `NEXUS_PORT` to use another port). Workspace code: `northwind`. For the English UI,
+Open <http://localhost:8080> (set `NEXUS_PORT` to use another port; `NEXUS_SUBNET` if its network `10.213.47.0/24`
+clashes with one you have, and run `docker compose down` once after changing it). Workspace code: `northwind`. For the English UI,
 open <http://localhost:8080/login?lang=en>: the choice is kept for the next pages.
 
 | Who | Email | Password | Sees |

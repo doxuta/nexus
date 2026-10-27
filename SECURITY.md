@@ -50,7 +50,10 @@ advisory.
     ([`internal/services/mcp_token_service.go:175-233`]). Logout-all and a password change revoke it
     ([`internal/services/auth_service_extra.go:202-222`]). Lookups of `nxm_` keys not yet seen working are throttled
     per IP with the `nxk_` budget, and a working key has its own request budget
-    ([`internal/middleware/mcp_ratelimit.go`](nexus-platform/internal/middleware/mcp_ratelimit.go)). A key's thread
+    ([`internal/middleware/mcp_ratelimit.go`](nexus-platform/internal/middleware/mcp_ratelimit.go)). Every per-IP
+    brake reads the client from X-Forwarded-For only when the peer is in `TRUSTED_PROXY_CIDRS`; behind a proxy, set
+    it to the proxy's network, or every client shares the proxy's bucket. The one-command demo sets it to its own
+    network ([`docker-compose.yml`](docker-compose.yml)). A key's thread
     takes at most 200 turns and one proposal at most 256 KiB
     ([`internal/mcpserver/mcpserver.go`](nexus-platform/internal/mcpserver/mcpserver.go)).
 - **`/mcp` and `/api/v1` are separate.** `/mcp` is mounted outside `/api/v1`, with its own bearer
