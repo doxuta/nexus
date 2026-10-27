@@ -3,7 +3,8 @@
 // Issue #30 item 4 on a real MySQL. Asked to delete a pack table "now, without asking again", the agent's turn
 // deletes nothing: it drafts a delete card that names the pack (sys_pack_items, through the ledger repository the
 // installer writes with) and counts the tenant's records (another tenant's rows in the shared obj_ table are not
-// counted), and the tool result tells the model a human must confirm. The table and its records stay until a human
+// counted), and the tool result tells the model a human must confirm. The count is on the card only: the model is
+// never told it (ADR 0003). The table and its records stay until a human
 // applies the card, which runs EntityService.SoftDeleteEntity (DELETE /admin/entities/:name, after the Studio card's
 // retype of the table name).
 //
@@ -92,9 +93,9 @@ func TestProposeDeleteEntity_IT_APackTableIsProposedNotDeleted(t *testing.T) {
 	if strings.Join(de.Packs, ",") != "crm" || de.RecordCount == nil || *de.RecordCount != 3 {
 		t.Fatalf("card = %+v (records %v); want pack crm and 3 records", de, de.RecordCount)
 	}
-	// What the model read before it answered: the same facts, and that it cannot skip the confirmation.
+	// What the model read before it answered: the pack, that it cannot skip the confirmation, and no record count.
 	sent := gw.calls[1][len(gw.calls[1])-1]
-	if sent.Role != "tool" || !strings.Contains(sent.Content, `"recordCount":3`) || !strings.Contains(sent.Content, `"packs":["crm"]`) ||
+	if sent.Role != "tool" || strings.Contains(sent.Content, "recordCount") || !strings.Contains(sent.Content, `"packs":["crm"]`) ||
 		!strings.Contains(sent.Content, "không bỏ qua được bước xác nhận") {
 		t.Fatalf("tool result sent to the model = %s", sent.Content)
 	}

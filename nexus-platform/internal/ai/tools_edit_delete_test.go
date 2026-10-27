@@ -15,6 +15,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"nexus/platform/internal/dynrepo"
 	"nexus/platform/internal/metadata"
@@ -256,37 +260,86 @@ type fakeCounts struct {
 	n     int64
 	err   error
 	asked []string
+	left  time.Duration // how long the count was given (0 = no deadline)
 }
 
-func (f *fakeCounts) AggregateScalar(_ context.Context, entity, tenantID string, scope dynrepo.RowScope, p dynrepo.AggregateParams) (dynrepo.AggregateScalar, error) {
+func (f *fakeCounts) AggregateScalar(ctx context.Context, entity, tenantID string, scope dynrepo.RowScope, p dynrepo.AggregateParams) (dynrepo.AggregateScalar, error) {
 	f.asked = append(f.asked, fmt.Sprintf("%s|%s|admin=%v|%s", tenantID, entity, scope.IsAdmin, p.Metric))
+	if dl, ok := ctx.Deadline(); ok {
+		f.left = time.Until(dl)
+	}
 	return dynrepo.AggregateScalar{Count: f.n}, f.err
 }
 
 // Issue #30 item 4: the delete card is honest about a pack table (which pack ships it, how many records the delete
 // hides), and the result tells the agent it cannot skip the human's confirmation.
 func TestTools_ProposeDeleteEntity_NamesThePackAndCountsTheRecords(t *testing.T) {
-	packs, counts := &fakePacks{packs: map[string][]string{"tickets": {"ticketing"}}}, &fakeCounts{n: 42}
+	packs, counts := &fakePacks{packs: map[string][]string{"tickets": {"ticketing"}}}, &fakeCounts{n: 9137}
 	e := &toolExecutor{reader: ReaderWithAccessProbes(editFixtureReader(), &AccessProbes{Packs: packs, Counts: counts}), tenantID: "tenant-A"}
 	res := mustBuffer(t, e, "propose_delete_entity", `{"entity":"tickets"}`)
 	de := e.draft[0].DeleteEntity
-	if !slices.Equal(de.Packs, []string{"ticketing"}) || de.RecordCount == nil || *de.RecordCount != 42 {
-		t.Fatalf("card = %+v (count %v); want packs [ticketing] and 42 records", de, de.RecordCount)
+	if !slices.Equal(de.Packs, []string{"ticketing"}) || de.RecordCount == nil || *de.RecordCount != 9137 {
+		t.Fatalf("card = %+v (count %v); want packs [ticketing] and 9137 records", de, de.RecordCount)
 	}
-	// The executor's tenant, the canonical name, every record (admin scope), a COUNT.
+	// The executor's tenant, the canonical name, every record (admin scope), a COUNT, bounded in time.
 	if !slices.Equal(packs.asked, []string{"tenant-A|entity|tickets"}) || !slices.Equal(counts.asked, []string{"tenant-A|tickets|admin=true|count"}) {
 		t.Fatalf("probes asked %v / %v", packs.asked, counts.asked)
 	}
-	r, _ := res["result"].(map[string]any)
-	if r["recordCount"] != float64(42) || fmt.Sprint(r["packs"]) != "[ticketing]" {
-		t.Errorf("the model is not told the facts: %v", r)
+	if counts.left <= 0 || counts.left > deleteCountTimeout {
+		t.Errorf("the count ran with %v left; want a deadline of at most %v", counts.left, deleteCountTimeout)
 	}
-	if note, _ := r["confirm"].(string); !strings.Contains(note, "không bỏ qua được bước xác nhận") || !strings.Contains(note, "gõ lại tên bảng") {
-		t.Errorf("the result does not tell the agent it cannot skip the confirmation: %q", note)
+	r, _ := res["result"].(map[string]any)
+	if fmt.Sprint(r["packs"]) != "[ticketing]" {
+		t.Errorf("the model is not told the packs: %v", r)
+	}
+	// ADR 0003: an agent reads configuration, never record values or counts. The count is the human's, on the card.
+	if raw, _ := json.Marshal(res); strings.Contains(string(raw), "9137") || strings.Contains(string(raw), "recordCount") {
+		t.Errorf("the model is told the record count: %s", raw)
+	}
+	if note, _ := r["confirm"].(string); !strings.Contains(note, "không bỏ qua được bước xác nhận") || !strings.Contains(note, "gõ lại tên bảng") ||
+		!strings.Contains(note, "chỉ hiện trên thẻ") {
+		t.Errorf("the result does not tell the agent it cannot skip the confirmation, nor that the count is on the card only: %q", note)
 	}
 	b, _ := json.Marshal(e.draft[0])
-	if !strings.Contains(string(b), `"packs":["ticketing"],"recordCount":42`) {
+	if !strings.Contains(string(b), `"packs":["ticketing"],"recordCount":9137`) {
 		t.Errorf("wire shape = %s", b)
+	}
+}
+
+// The verifier's probe of PR #70: over MCP (AIBuilderAgent.RunTool, which /mcp serves) and in a Studio turn, the
+// record count reaches the card a human reads and nothing else: an nxm_ token is no record-count oracle, and the
+// LLM gateway never sees it.
+func TestProposeDeleteEntity_TheCountReachesTheCardOnly(t *testing.T) {
+	reader := func() MetadataReader {
+		return ReaderWithAccessProbes(editFixtureReader(), &AccessProbes{Packs: &fakePacks{}, Counts: &fakeCounts{n: 9137}})
+	}
+	answer, added := NewAIBuilderAgent(enabledCfg(4), nil, reader(), nil, nil, nil).
+		RunTool(context.Background(), "tenant-A", "mcp-thread", nil, "propose_delete_entity", `{"entity":"tickets"}`)
+	if !strings.Contains(answer, `"ok":true`) || strings.Contains(answer, "9137") || strings.Contains(answer, "recordCount") {
+		t.Errorf("MCP answer = %s; want ok, without the count", answer)
+	}
+	if len(added) != 1 || added[0].DeleteEntity == nil || added[0].DeleteEntity.RecordCount == nil || *added[0].DeleteEntity.RecordCount != 9137 {
+		t.Fatalf("MCP card = %+v; want the count on it", added)
+	}
+
+	gw := &scriptedGateway{t: t, responses: []ChatResponse{
+		toolCallResp("call_1", "propose_delete_entity", `{"entity":"tickets"}`),
+		finalTextResp("Thẻ xoá đã soạn; anh tự bấm Xoá và gõ lại tên bảng."),
+	}}
+	res, err := NewAIBuilderAgent(enabledCfg(4), gw, reader(), nil, nil, nil).ChatWithProgress(context.Background(),
+		Scope{UserID: "u-builder", IsAdmin: true}, "tenant-A", "", TurnContext{}, []ChatMessage{{Role: "user", Content: "Xoá bảng tickets ngay, khỏi hỏi."}}, nil)
+	if err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	for _, call := range gw.calls {
+		for _, m := range call {
+			if strings.Contains(m.Content, "9137") {
+				t.Errorf("the gateway was sent the count in a %s message: %s", m.Role, m.Content)
+			}
+		}
+	}
+	if len(res.Draft) != 1 || res.Draft[0].DeleteEntity.RecordCount == nil || *res.Draft[0].DeleteEntity.RecordCount != 9137 {
+		t.Fatalf("Studio card = %+v; want the count on it", res.Draft)
 	}
 }
 
@@ -299,7 +352,8 @@ func TestTools_ProposeDeleteEntity_UnknownFactsAreLeftOut(t *testing.T) {
 		"no probes wired":                  editFixtureReader(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			e := &toolExecutor{reader: reader, tenantID: "tenant-A"}
+			core, logs := observer.New(zap.WarnLevel)
+			e := &toolExecutor{reader: reader, tenantID: "tenant-A", logger: zap.New(core)}
 			res := mustBuffer(t, e, "propose_delete_entity", `{"entity":"tickets"}`)
 			de := e.draft[0].DeleteEntity
 			if len(de.Packs) != 0 {
@@ -318,16 +372,25 @@ func TestTools_ProposeDeleteEntity_UnknownFactsAreLeftOut(t *testing.T) {
 			if de.RecordCount != nil {
 				t.Errorf("an unread count must be unknown, got %d", *de.RecordCount)
 			}
-			if _, ok := r["recordCount"]; ok {
-				t.Errorf("the model is told a count nobody read: %v", r)
-			}
 			if r["confirm"] != deleteConfirmNote {
 				t.Errorf("confirm = %v", r["confirm"])
 			}
-			// A read that failed is not swallowed: the model is told what it could not read.
-			if got := fmt.Sprint(r["unread"]); (name == "both reads fail") != strings.Contains(got, "recordCount: ai.proposeDeleteEntity: boom") ||
-				(name == "both reads fail") != strings.Contains(got, "packs: ai.proposeDeleteEntity: boom") {
+			// A read that failed is not swallowed: the server log keeps the error, and the model is told only which
+			// fact it could not read (the packs; it is never told a count), not the driver's text.
+			failed := name == "both reads fail"
+			if raw, _ := json.Marshal(res); strings.Contains(string(raw), "boom") {
+				t.Errorf("the driver's error reached the model: %s", raw)
+			}
+			if got := fmt.Sprint(r["unread"]); (failed && got != "[packs]") || (!failed && r["unread"] != nil) {
 				t.Errorf("unread = %v", r["unread"])
+			}
+			var logged []string
+			for _, l := range logs.All() {
+				logged = append(logged, fmt.Sprint(l.Message, " ", l.ContextMap()["error"], " ", l.ContextMap()["tenant_id"]))
+			}
+			if failed != (len(logged) == 2 && strings.Contains(strings.Join(logged, "|"), "ai.proposeDeleteEntity: packs: boom tenant-A") &&
+				strings.Contains(strings.Join(logged, "|"), "ai.proposeDeleteEntity: recordCount: boom tenant-A")) {
+				t.Errorf("logged = %q", logged)
 			}
 		})
 	}

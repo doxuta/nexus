@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"nexus/platform/internal/auth"
 	"nexus/platform/internal/ddl"
 	"nexus/platform/internal/dynrepo"
@@ -776,6 +778,8 @@ type toolExecutor struct {
 	turnTag string
 	// docs backs get_layout / list_workflows / list_reports / get_app (specs/067 L10-3); nil => DOC_READ_UNAVAILABLE.
 	docs *DocReaders
+	// logger keeps the error of a best-effort read the tool result leaves out; nil (unit tests) = not logged.
+	logger *zap.Logger
 }
 
 // execute runs the named tool with the model-supplied JSON arguments and returns the tool-result
@@ -2056,6 +2060,7 @@ type DraftDeleteEntity struct {
 	// Packs are the packs that ship the table (sys_pack_items); empty = built here, or not known.
 	Packs []string `json:"packs,omitempty"`
 	// RecordCount is how many of the tenant's records the delete hides, counted when proposed; nil = not counted.
+	// It is for the human who reads the card: the tool result never carries it (ADR 0003).
 	RecordCount *int64 `json:"recordCount,omitempty"`
 }
 
@@ -2268,23 +2273,27 @@ func (e *toolExecutor) proposeDeleteEntity(ctx context.Context, argsJSON string)
 		return toolErr("PROPOSE_DELETE_ENTITY_FAILED: %v", err)
 	}
 	de := &DraftDeleteEntity{Entity: ent.Name, Label: ent.Label, FieldCount: len(fields)}
-	// Issue #30 item 4: the card says what the delete hides. A failed read leaves that fact off the card (which then
-	// reads "all of its records") and goes to the model as "unread", so it says it could not count rather than guess;
-	// it never blocks the proposal, which deletes nothing.
+	// Issue #30 item 4: the card says what the delete hides. Both reads are best effort and never block the proposal,
+	// which deletes nothing: a failed one is logged and leaves its fact off the card (which then reads "all of its
+	// records"). The record count goes on the card ONLY, never into the result: the model and an MCP client read
+	// configuration, not record values or counts (ADR 0003). The packs are configuration; an unread one is named.
 	var unread []string
 	if c, ok := e.reader.(AccessProbeCarrier); ok {
 		if p := c.AccessProbes(); p != nil {
 			if p.Packs != nil {
 				packs, err := p.Packs.PacksOf(ctx, e.tenantID, vertical_pack.ItemEntity, ent.Name)
 				if err != nil {
-					unread = append(unread, fmt.Sprintf("packs: ai.proposeDeleteEntity: %v", err))
+					e.warn("ai.proposeDeleteEntity: packs", err)
+					unread = append(unread, "packs")
 				}
 				de.Packs = packs
 			}
 			if p.Counts != nil {
-				n, err := p.Counts.AggregateScalar(ctx, ent.Name, e.tenantID, dynrepo.AdminScope(), dynrepo.AggregateParams{Metric: dynrepo.MetricCount})
+				cctx, cancel := context.WithTimeout(ctx, deleteCountTimeout)
+				n, err := p.Counts.AggregateScalar(cctx, ent.Name, e.tenantID, dynrepo.AdminScope(), dynrepo.AggregateParams{Metric: dynrepo.MetricCount})
+				cancel()
 				if err != nil {
-					unread = append(unread, fmt.Sprintf("recordCount: ai.proposeDeleteEntity: %v", err))
+					e.warn("ai.proposeDeleteEntity: recordCount", err)
 				} else {
 					de.RecordCount = &n.Count
 				}
@@ -2299,20 +2308,29 @@ func (e *toolExecutor) proposeDeleteEntity(ctx context.Context, argsJSON string)
 	if len(de.Packs) > 0 {
 		out["packs"] = de.Packs
 	}
-	if de.RecordCount != nil {
-		out["recordCount"] = *de.RecordCount
-	}
 	if len(unread) > 0 {
 		out["unread"] = unread
 	}
 	return toolOK(out)
 }
 
+// warn logs a best-effort read the tool result leaves out, so its error is kept server-side rather than handed to
+// the model (or an MCP client) as driver text.
+func (e *toolExecutor) warn(msg string, err error) {
+	if e.logger != nil {
+		e.logger.Warn(msg, zap.String("tenant_id", e.tenantID), zap.Error(fmt.Errorf("%s: %w", msg, err)))
+	}
+}
+
+// deleteCountTimeout bounds the delete card's COUNT(*); past it the card reads "all of its records".
+// ponytail: a fixed bound, no knob; a table too big to count in time just shows no number.
+const deleteCountTimeout = 2 * time.Second
+
 // deleteConfirmNote rides every propose_delete_entity result: the agent cannot waive the human's confirmation
 // (issue #30 item 4, ADR 0001 addendum), and its reply has to say so even when asked to "delete now, don't ask".
 const deleteConfirmNote = "Chỉ là thẻ đề xuất: bảng chỉ bị xoá khi người duyệt tự bấm Xoá trên thẻ và gõ lại tên bảng. " +
 	"Bạn không bỏ qua được bước xác nhận này, kể cả khi người dùng bảo xoá ngay hay khỏi hỏi lại — nói thẳng điều đó trong câu trả lời, " +
-	"kèm số bản ghi bị ẩn và gói cài bảng (nếu có)."
+	"kèm gói có bảng này (nếu có). Số bản ghi bị ẩn chỉ hiện trên thẻ cho người duyệt, bạn không được biết: đừng nêu hay đoán con số, mời họ xem thẻ."
 
 // proposeRecords validates a batch of sample-record payloads with config-time PARITY to the apply
 // path (POST /:entity/bulk → RecordService.CreateBulk, which runs services.ValidateRecord per row)
