@@ -29,14 +29,21 @@ import type { StudioRoute } from "@/lib/studioRoutes";
 import { usePublishState } from "../usePublishState";
 import { useAssistantChat } from "./useAssistantChat";
 
+// How often an open MCP thread re-reads itself, and after how long without a new card it stops (issue #22).
+const FOLLOW_POLL_MS = 5_000;
+const FOLLOW_IDLE_MS = 10 * 60_000;
+/** A turn this tab sent (a read-back turn is m_<seq>, serverMessagesToTurns). */
+const ownTurn = (x: ChatTurn) => !x.id.startsWith("m_");
+
 type Ask = (entity: string, recordId: string) => void;
 const AskCtx = createContext<Ask | null>(null);
 /** null = no assistant on this page (outside the project frame, or the assistant is off) ⇒ callers must not draw the button. */
 export const useAskAssistant = (): Ask | null => useContext(AskCtx);
 
-type OpenThread = (sessionId: string) => Promise<void>;
+type OpenThread = (sessionId: string, liveUntil?: string) => Promise<void>;
 const OpenCtx = createContext<OpenThread | null>(null);
-/** Opens a saved conversation in the panel (an MCP agent's thread: issue #3); null where no panel mounts. Rejects when it cannot be read. */
+/** Opens a saved conversation in the panel (an MCP agent's thread: issue #3); null where no panel mounts. Rejects when it cannot be read.
+ *  liveUntil = the expiry of the agent key bound to the thread: until then the open thread follows what the agent adds (issue #22). */
 export const useOpenThread = (): OpenThread | null => useContext(OpenCtx);
 
 export type Attention = "working" | "proposal" | null;
@@ -137,7 +144,7 @@ export function AssistantProvider({ slug, projectName, route, params, panel, chi
   );
   const onDropped = useCallback(() => setRec(null), []);
   const chat = useAssistantChat({ context, onContextDropped: onDropped, assertScope });
-  const { turns, setTurns, sending, runTurn, reportApplyFailure, sessionId } = chat;
+  const { turns, setTurns, sending, runTurn, reportApplyFailure, sessionId, sessionIdRef } = chat;
 
   const ask = useCallback<Ask>((entity, recordId) => {
     setRec({ entity, recordId });
@@ -220,14 +227,53 @@ export function AssistantProvider({ slug, projectName, route, params, panel, chi
   const newChat = useCallback(() => { chat.reset(); setApplyMap({}); }, [chat]);
 
   // A saved conversation as a resumed session: its turns and cards, and what this browser already applied of it.
-  const openThread = useCallback<OpenThread>(async (id) => {
+  const [follow, setFollow] = useState<{ id: string; until: number } | null>(null);
+  const openThread = useCallback<OpenThread>(async (id, liveUntil) => {
     const s = await getAiSession(id);
     chat.reset();
     chat.setTurns(serverMessagesToTurns(s.messages));
     chat.setActiveSession(s.id);
     setApplyMap(loadApplyState(slug, s.id));
+    setFollow(liveUntil ? { id: s.id, until: Date.parse(liveUntil) } : null);
     setAssistantOpen(true);
   }, [chat, slug]);
+
+  // Issue #22: an MCP agent adds cards to the thread its key is bound to; the open thread re-reads itself while that
+  // key is live: on focus, and every FOLLOW_POLL_MS while the tab is visible until FOLLOW_IDLE_MS pass with nothing new
+  // (focus wakes it). Read-back turns keep their ids (m_<seq>), so a card's apply state survives the re-read. A turn of
+  // this tab's own stops it: its cards carry ids of this tab, which the server's copy would replace. That is judged
+  // again when the read lands, on the turns as they are then: the builder may have sent one while it was out.
+  const turnsRef = useRef(turns);
+  useEffect(() => { turnsRef.current = turns; });
+  const followId = follow && follow.id === sessionId ? follow.id : null;
+  const followUntil = follow?.until ?? 0;
+  useEffect(() => {
+    if (!followId) return;
+    let alive = true;
+    let grew = Date.now();
+    const read = async (woken: boolean) => {
+      const now = Date.now();
+      if (now >= followUntil) { setFollow(null); return; } // the key expired: nothing more will land here
+      if (woken) grew = now;
+      if (document.hidden || now - grew > FOLLOW_IDLE_MS) return;
+      if (turnsRef.current.some(ownTurn)) return;
+      const s = await getAiSession(followId).catch(() => null);
+      if (!alive || !s || sessionIdRef.current !== followId || s.messages.length <= turnsRef.current.length) return;
+      const next = serverMessagesToTurns(s.messages);
+      setTurns((cur) => (cur.some(ownTurn) || next.length <= cur.length ? cur : next));
+      grew = Date.now();
+    };
+    const poll = setInterval(() => void read(false), FOLLOW_POLL_MS);
+    const wake = () => void read(true);
+    window.addEventListener("focus", wake);
+    document.addEventListener("visibilitychange", wake);
+    return () => {
+      alive = false;
+      clearInterval(poll);
+      window.removeEventListener("focus", wake);
+      document.removeEventListener("visibilitychange", wake);
+    };
+  }, [followId, followUntil, sessionIdRef, setTurns]);
 
   // ── the dot on the header button while the panel is closed ──
   const open = useAssistantOpen();

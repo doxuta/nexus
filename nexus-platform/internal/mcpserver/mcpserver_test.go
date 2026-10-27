@@ -409,3 +409,85 @@ func TestCall_DuringAFreezeReadsWorkProposalsDoNot(t *testing.T) {
 		t.Fatalf("a read while frozen: %s (error %v); want it served", text(res), res.IsError)
 	}
 }
+
+// Issue #22: a key holder could grow its thread without end, and every proposal re-reads the whole
+// thread. A thread at its turn cap takes no more proposals (reads still work), with a code that says
+// what to do; one turn below it, a proposal lands.
+func TestCall_AFullThreadTakesNoMoreProposals(t *testing.T) {
+	th := &fakeThreads{msgs: make([]ai.Message, 2*maxThreadTurns)}
+	run := &fakeRunner{res: `{"ok":true,"result":{"buffered":"entity \"x\""}}`, added: []ai.DraftItem{{Kind: "entity", Entity: &ai.DraftEntity{Name: "x"}}}}
+	ts := serve(t, &fakeVerifier{}, run, th)
+
+	res := callTool(t, ts, "nexus_propose_entity", map[string]any{"name": "x"})
+	if !res.IsError || !strings.HasPrefix(text(res), "THREAD_FULL:") || len(run.calls)+len(th.appends) != 0 {
+		t.Fatalf("propose on a full thread: %s (error %v), ran %d, wrote %d; want THREAD_FULL before any work", text(res), res.IsError, len(run.calls), len(th.appends))
+	}
+	th.msgs = th.msgs[:2*maxThreadTurns-2]
+	if res = callTool(t, ts, "nexus_propose_entity", map[string]any{"name": "x"}); res.IsError || len(th.appends) != 1 {
+		t.Fatalf("one turn below the cap: %s (error %v); want the proposal to land", text(res), res.IsError)
+	}
+}
+
+// One proposal's thread row is capped: an oversized one is refused and nothing is written.
+func TestCall_AnOversizedProposalIsRefused(t *testing.T) {
+	big := []ai.DraftItem{{Kind: "records", Records: &ai.DraftRecords{Entity: "suppliers", Rows: []map[string]any{{"note": strings.Repeat("x", maxProposalBytes)}}}}}
+	run := &fakeRunner{res: `{"ok":true,"result":{"buffered":"1 record mẫu cho \"suppliers\""}}`, added: big}
+	th := &fakeThreads{}
+	res := callTool(t, serve(t, &fakeVerifier{}, run, th), "nexus_propose_records", map[string]any{"entity": "suppliers"})
+	if !res.IsError || !strings.HasPrefix(text(res), "PROPOSAL_TOO_LARGE:") || len(th.appends) != 0 {
+		t.Fatalf("an oversized proposal: %s (error %v), wrote %d; want PROPOSAL_TOO_LARGE and no write", text(res), res.IsError, len(th.appends))
+	}
+}
+
+// Issue #22: what the agent is told after a proposal follows the change class of that card, per kind of
+// envelope the builder tools write (internal/ai/change.go): access and the other direct types apply at once;
+// a NEW table, field or N-N relation is created at apply but hidden from the customer until a publish; an
+// edit of a draft type goes to drafts. No tool description promises a draft and a publish for every card.
+func TestProposedNote_FollowsTheChangeClassPerKind(t *testing.T) {
+	const now, hidden, drafts = "takes effect as soon as it is applied", "sees it only after it is published", "goes to drafts"
+	for _, tc := range []struct{ kind, docType, op, want string }{
+		{"access", "role", "update", now},
+		{"records", "records", "create", now},
+		{"approval", "approval", "create", now},
+		{"workqueue", "workqueue", "create", now},
+		{"relationship", "relationship", "create", hidden},
+		{"entity", "entity", "create", hidden},
+		{"field", "field", "create", hidden},
+		{"edit_field", "field", "update", drafts},
+		{"delete_field", "field", "delete", drafts},
+		{"delete_entity", "entity", "delete", drafts},
+		{"layout", "layout", "update", drafts},
+		{"workflow", "workflow", "create", drafts},
+		{"report", "report", "create", drafts},
+		{"dashboard", "dashboard", "create", drafts},
+		{"app", "app", "create", drafts},
+		{"no envelope", "", "", now},
+	} {
+		item := ai.DraftItem{Kind: tc.kind}
+		if tc.docType != "" {
+			item.Change = &ai.DraftChange{DocType: tc.docType, Op: tc.op}
+		}
+		got := proposedNote([]ai.DraftItem{item})
+		for _, phrase := range []string{now, hidden, drafts} {
+			if strings.Contains(got, phrase) != (phrase == tc.want) {
+				t.Errorf("%s (%s %s): %q; want only %q", tc.kind, tc.docType, tc.op, got, tc.want)
+				break
+			}
+		}
+	}
+	if got := proposedNote([]ai.DraftItem{{Change: &ai.DraftChange{DocType: "field", Op: "update"}}, {Change: &ai.DraftChange{DocType: "role", Op: "update"}}}); !strings.Contains(got, now) {
+		t.Errorf("a field edit with an access card: %q; want the immediate effect named", got)
+	}
+}
+
+func TestCall_TheNoteFollowsTheChangeClass(t *testing.T) {
+	run := &fakeRunner{res: `{"ok":true,"result":{"buffered":"x"}}`, added: []ai.DraftItem{{Kind: "access", Change: &ai.DraftChange{DocType: "role", Op: "update"}}}}
+	if got := text(callTool(t, serve(t, &fakeVerifier{}, run, &fakeThreads{}), "nexus_propose_access", nil)); !strings.Contains(got, "no draft or publish step") {
+		t.Errorf("nexus_propose_access result: %q; want the access card's own effect", got)
+	}
+	for _, tl := range tools(ai.ToolDefinitions()) {
+		if strings.Contains(tl.Description, "publishes it") {
+			t.Errorf("%s promises a draft and a publish for its card: %q", tl.Name, tl.Description[strings.LastIndex(tl.Description, "MCP:"):])
+		}
+	}
+}

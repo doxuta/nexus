@@ -16,8 +16,11 @@ import (
 	"go/printer"
 	"go/token"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
+
+	"nexus/platform/internal/config"
 )
 
 // hardeningOptions maps each RegisterAPIRoutes option main.go must pass to the source its argument
@@ -235,4 +238,47 @@ func isLiteral(e ast.Expr) bool {
 	}
 	_, ok := e.(*ast.BasicLit)
 	return ok
+}
+
+// TestMainWiresTheMCPBrake (issue #22): /mcp sits outside /api/v1, so none of RegisterAPIRoutes'
+// limiters reach it. Its own brake must sit in front of the handler on the route itself, with its
+// budgets and the trusted proxies read from config (a zero budget switches that brake off).
+func TestMainWiresTheMCPBrake(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	flat := strings.Join(strings.Fields(string(src)), "")
+	for _, want := range []string{
+		"mcpLimiter:=middleware.MCPRateLimit(middleware.MCPRateLimitConfig{",
+		"ProbeMax:cfg.APIKeyProbeMaxPerMin,",
+		"KeyMax:cfg.DataRateLimitPerMin,",
+		"TrustedProxyCIDRs:cfg.TrustedProxyCIDRs,",
+		`r.Any("/mcp",mcpLimiter,gin.WrapH(mcpserver.New(`,
+	} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("main.go lost %q — /mcp would answer guesses and floods unbraked", want)
+		}
+	}
+}
+
+// TestComposeTrustsItsOwnNetwork (issue #22): in the one-command demo every request reaches the API through
+// Caddy, so the per-IP brakes key on X-Forwarded-For only if TRUSTED_PROXY_CIDRS names the compose network.
+// Its default must be the network's fixed subnet, and parse.
+func TestComposeTrustsItsOwnNetwork(t *testing.T) {
+	src, err := os.ReadFile("../../../docker-compose.yml")
+	if err != nil {
+		t.Fatalf("read docker-compose.yml: %v", err)
+	}
+	trusted := regexp.MustCompile(`TRUSTED_PROXY_CIDRS: \$\{TRUSTED_PROXY_CIDRS:-\$\{NEXUS_SUBNET:-([^}]+)\}\}`).FindSubmatch(src)
+	subnet := regexp.MustCompile(`subnet: \$\{NEXUS_SUBNET:-([^}]+)\}`).FindSubmatch(src)
+	if trusted == nil || subnet == nil {
+		t.Fatalf("docker-compose.yml lost the api's TRUSTED_PROXY_CIDRS or the network's fixed subnet: every client behind Caddy shares one bucket")
+	}
+	if string(trusted[1]) != string(subnet[1]) {
+		t.Fatalf("TRUSTED_PROXY_CIDRS defaults to %s but the network is %s", trusted[1], subnet[1])
+	}
+	if nets, skipped := config.ParseTrustedProxyCIDRs(string(trusted[1])); len(nets) != 1 || len(skipped) != 0 {
+		t.Fatalf("TRUSTED_PROXY_CIDRS default %s does not parse: %v", trusted[1], skipped)
+	}
 }

@@ -118,7 +118,7 @@ describe("McpConnect", () => {
     global.fetch = routedFetch([LIVE]) as unknown as typeof fetch;
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Mở cuộc trò chuyện của khoá nxm_AbCdEfGhIjKl…" }));
-    await waitFor(() => expect(openThread).toHaveBeenCalledWith("sess-1"));
+    await waitFor(() => expect(openThread).toHaveBeenCalledWith("sess-1", LIVE.expiresAt)); // the key's expiry: the thread follows it until then
   });
 
   it("a deleted conversation says to revoke the key and make a new one", async () => {

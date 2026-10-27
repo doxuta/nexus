@@ -48,7 +48,7 @@ type Threads interface {
 }
 
 // instructions is what an MCP client hands its model about this server.
-const instructions = `Nexus is a platform for business apps whose apps are metadata: tables (entities), fields, relations, layouts, automation rules, reports, apps and access. These tools read ONE workspace's model and PROPOSE changes to it. A proposal changes nothing: it is saved as a card in the builder's Studio thread, where a human reviews it, applies it to drafts and publishes it. No tool applies, publishes or writes data, so tell the user the change is waiting for review. Read before you propose (nexus_list_entities, nexus_list_fields). Names are snake_case; labels are what users see. A call refused by a validator answers {"ok":false,"error":"CODE: message"}: fix the arguments and call again. Tool descriptions are in Vietnamese.`
+const instructions = `Nexus is a platform for business apps whose apps are metadata: tables (entities), fields, relations, layouts, automation rules, reports, apps and access. These tools read ONE workspace's model and PROPOSE changes to it. A proposal changes nothing: it is saved as a card in the builder's Studio thread, where a human reviews and applies it. No tool applies, publishes or writes data, so tell the user the change is waiting for review. Read before you propose (nexus_list_entities, nexus_list_fields). Names are snake_case; labels are what users see. A call refused by a validator answers {"ok":false,"error":"CODE: message"}: fix the arguments and call again. Tool descriptions are in Vietnamese.`
 
 type server struct {
 	tokens  Verifier
@@ -129,8 +129,35 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg, "code": code})
 }
 
-// proposedNote follows the result of a proposal: where it went, and that nothing changed yet.
-const proposedNote = "Saved as a card in the builder's Studio thread. Nothing has changed: a human reviews the card, applies it to drafts and publishes it."
+// proposedNote follows the result of a proposal: where it went, that nothing changed yet, and what the
+// human's apply does, by the change class of what it proposes (metaversion.ClassOf, issue #22): an edit
+// of a draft type goes to drafts once the project is delivered; a NEW document of a NewHidden type (a
+// table, a field, an N-N relation) is created at apply but the customer sees it only after a publish;
+// anything else (access, approvals, work queues, records) takes effect when applied. The most immediate
+// effect among the cards wins, and a card with no envelope counts as immediate (fail-safe).
+func proposedNote(added []ai.DraftItem) string {
+	const saved = "Saved as a card in the builder's Studio thread. Nothing has changed: a human reviews the card and applies it"
+	now, hidden := false, false
+	for _, it := range added {
+		c := metaversion.ClassOf("")
+		if it.Change != nil {
+			c = metaversion.ClassOf(it.Change.DocType)
+		}
+		switch {
+		case c.NewHidden && it.Change.Op != "update" && it.Change.Op != "delete": // a card that edits nothing is new
+			hidden = true
+		case c.Kind != metaversion.Draft:
+			now = true
+		}
+	}
+	switch {
+	case now:
+		return saved + ", and it takes effect as soon as it is applied: there is no draft or publish step for it."
+	case hidden:
+		return saved + ", which creates it; once the project is delivered the customer sees it only after it is published."
+	}
+	return saved + "; once the project is delivered it goes to drafts and reaches users when it is published."
+}
 
 // call runs one tool as the token's builder. A propose_* call first reads the thread's earlier
 // proposals still pending (so it may build on them, as within one chat turn), and a proposal that
@@ -174,6 +201,11 @@ func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (res *mcp.C
 		return out, nil
 	}
 	draft, err := json.Marshal(added)
+	if err == nil && len(draft) > maxProposalBytes {
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+			"PROPOSAL_TOO_LARGE: this proposal is %d KiB, more than the %d KiB one Studio card holds, so nothing was proposed. Split it into smaller proposals.",
+			len(draft)>>10, maxProposalBytes>>10)}}}, nil
+	}
 	if err == nil {
 		_, err = s.threads.AppendTurn(ctx, p.TenantID, p.UserID, p.SessionID, "",
 			"[MCP] Agent gọi "+req.Params.Name, "Agent đề xuất qua MCP: "+result(answer).Result.Buffered+".", draft, "")
@@ -181,7 +213,7 @@ func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (res *mcp.C
 	if err != nil {
 		return s.threadError(p, err), nil
 	}
-	out.Content = append(out.Content, &mcp.TextContent{Text: proposedNote})
+	out.Content = append(out.Content, &mcp.TextContent{Text: proposedNote(added)})
 	return out, nil
 }
 
@@ -199,13 +231,28 @@ func (s *server) frozen(ctx context.Context, p services.MCPPrincipal) (time.Time
 	return until, frozen
 }
 
+// Issue #22: a key holder could append to its thread without end, and every proposal re-reads the
+// whole thread. maxThreadTurns caps the turns one thread takes (the opening turn included); a key that
+// needs more is replaced by a new one, which opens a new thread. maxProposalBytes caps one turn's
+// draft row; the SDK's own 4 MiB request cap was the only bound before.
+const (
+	maxThreadTurns   = 200
+	maxProposalBytes = 256 << 10
+)
+
+// errThreadFull is a thread at maxThreadTurns.
+var errThreadFull = errors.New("mcpserver: thread full")
+
 // priorProposals reads the proposals of the token's thread that are still pending: a card the builder
 // applied, discarded or undid in the Studio is not replayed (issue #42), so the validators judge it
-// by the live schema and the builder's drafts only.
+// by the live schema and the builder's drafts only. A full thread is errThreadFull.
 func (s *server) priorProposals(ctx context.Context, p services.MCPPrincipal) ([]ai.DraftItem, error) {
 	_, msgs, err := s.threads.GetSession(ctx, p.TenantID, p.UserID, p.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("mcpserver.priorProposals: %w", err)
+	}
+	if len(msgs) >= 2*maxThreadTurns { // a turn is two messages: the call and the proposal
+		return nil, errThreadFull
 	}
 	return ai.PendingProposals(msgs), nil
 }
@@ -213,9 +260,12 @@ func (s *server) priorProposals(ctx context.Context, p services.MCPPrincipal) ([
 // threadError is the tool error of a proposal that cannot reach its thread.
 func (s *server) threadError(p services.MCPPrincipal, err error) *mcp.CallToolResult {
 	msg := "THREAD_UNAVAILABLE: the proposal could not be saved to the Studio thread, so nothing was proposed. Try again."
-	if errors.Is(err, ai.ErrSessionNotFound) {
+	switch {
+	case errors.Is(err, errThreadFull):
+		msg = fmt.Sprintf("THREAD_FULL: the Studio thread of this token holds %d turns, the most one thread takes, so nothing was proposed. Ask the builder to issue a new MCP token: it opens a new thread.", maxThreadTurns)
+	case errors.Is(err, ai.ErrSessionNotFound):
 		msg = "THREAD_DELETED: the builder deleted the Studio thread of this token, so nothing was proposed. Ask them to issue a new MCP token."
-	} else {
+	default:
 		s.logger.Error("mcpserver: token thread unavailable", zap.String("tenant_id", p.TenantID), zap.String("mcp_token_id", p.TokenID), zap.Error(err))
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}, IsError: true}

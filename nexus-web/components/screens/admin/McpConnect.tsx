@@ -111,7 +111,7 @@ function McpConnectSection({ slug }: { slug: string }) {
           <span className="slds-grid slds-grid_align-end gap-2">
             {openThread && (
               <Button variant="neutral" className="whitespace-nowrap" disabled={busy === k.id} aria-label={fill(t("studio.operate.mcp.open.rowOf"), { prefix: prefixText(k) })}
-                onClick={() => void act(k, () => openThread(k.sessionId), "studio.operate.mcp.open.error")}>
+                onClick={() => void act(k, () => openThread(k.sessionId, k.expiresAt), "studio.operate.mcp.open.error")}>
                 {t("studio.operate.mcp.open.row")}
               </Button>
             )}

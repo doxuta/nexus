@@ -509,7 +509,8 @@ export async function revokeMcpToken(id: string): Promise<void> {
   await adminReq<unknown>("DELETE", `/admin/mcp-tokens/${encodeURIComponent(id)}`);
 }
 
-/** Where an agent connects: the API's origin + /mcp (the one-command demo serves both on one origin). */
+/** Where an agent connects: the API's origin + /mcp (the one-command demo serves both on one origin; on `next dev` with a relative
+ * API base it is the dev origin, and app/mcp proxies it to the API). */
 export function mcpEndpoint(): string {
   return `${new URL(BASE, window.location.origin).origin}/mcp`;
 }

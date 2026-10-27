@@ -1518,8 +1518,16 @@ func main() {
 		})
 	})
 	// MCP (issue #3): agents propose, humans dispose. Outside /api/v1: its own bearer (nxm_ tokens
-	// only, refused everywhere else) and the SDK's stateless streamable HTTP transport.
-	r.Any("/mcp", gin.WrapH(mcpserver.New(mcpTokenSvc, aiAgent, aiSessionStore, tenantFreeze, logger)))
+	// only, refused everywhere else) and the SDK's stateless streamable HTTP transport. Issue #22: the
+	// API's brakes in front of it — an IP's lookups of tokens not yet seen working get the API-key
+	// brake's budget, each working token the data plane's per-key budget.
+	mcpLimiter := middleware.MCPRateLimit(middleware.MCPRateLimitConfig{
+		ProbeMax:          cfg.APIKeyProbeMaxPerMin,
+		KeyMax:            cfg.DataRateLimitPerMin,
+		Window:            time.Minute,
+		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
+	})
+	r.Any("/mcp", mcpLimiter, gin.WrapH(mcpserver.New(mcpTokenSvc, aiAgent, aiSessionStore, tenantFreeze, logger)))
 
 	// API v1 routes. RegisterAPIRoutes is the single wiring point shared with the integration
 	// tests: it mounts the PUBLIC /auth/* endpoints, then a PROTECTED sub-group fronted by

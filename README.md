@@ -84,7 +84,8 @@ flowchart TD
 docker compose up --build
 ```
 
-Open <http://localhost:8080> (set `NEXUS_PORT` to use another port). Workspace code: `northwind`. For the English UI,
+Open <http://localhost:8080> (set `NEXUS_PORT` to use another port; `NEXUS_SUBNET` if its network `10.213.47.0/24`
+clashes with one you have, and run `docker compose down` once after changing it). Workspace code: `northwind`. For the English UI,
 open <http://localhost:8080/login?lang=en>: the choice is kept for the next pages.
 
 | Who | Email | Password | Sees |
@@ -242,8 +243,6 @@ on this repository's Security tab.
 - **Open issues that matter:**
   - [#18](https://github.com/doxuta/nexus/issues/18): a record the rep can read but not edit answers `PUT` with 404,
     not 403.
-  - [#22](https://github.com/doxuta/nexus/issues/22): `/mcp` has no rate limit and no cap on turns per thread, and its
-    tool filter is a naming rule.
   - [#23](https://github.com/doxuta/nexus/issues/23): a table that is still hidden can be reached through N-N links
     and `?expand` with a crafted call and a granted role, and `PUT /admin/roles/:id` carries no version.
 

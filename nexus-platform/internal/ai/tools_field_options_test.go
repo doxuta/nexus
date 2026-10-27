@@ -132,40 +132,40 @@ func TestTools_ProposeField_OptionsValidationParity(t *testing.T) {
 		// ---- AI-TOOL-COVERAGE (Wave 4.6): the advanced types now on the AI surface ----
 		{
 			name: "auto_number (số chứng từ) → buffered, prefix/padding giữ nguyên",
-			args: `{"entity":"invoices","name":"invoice_no","label":"Số hoá đơn","fieldType":"auto_number",
+			args: `{"entity":"patients","name":"invoice_no","label":"Số hoá đơn","fieldType":"auto_number",
 				"options":{"prefix":"HĐ-","padding":5}}`,
 			wantOpts: map[string]any{"prefix": "HĐ-", "padding": float64(5)},
 		},
 		{
 			name: "formula (tổng tính toán) → buffered",
-			args: `{"entity":"invoice_lines","name":"line_total","label":"Thành tiền","fieldType":"formula",
+			args: `{"entity":"patients","name":"line_total","label":"Thành tiền","fieldType":"formula",
 				"options":{"formula":"quantity * unit_price","resultType":"currency"}}`,
 			wantOpts: map[string]any{"formula": "quantity * unit_price", "resultType": "currency"},
 		},
 		{
 			name:     "formula thiếu biểu thức → REJECT config-time",
-			args:     `{"entity":"invoices","name":"bad_f","label":"Bad","fieldType":"formula","options":{}}`,
+			args:     `{"entity":"patients","name":"bad_f","label":"Bad","fieldType":"formula","options":{}}`,
 			wantCode: "FIELD_FORMULA_INVALID",
 		},
 		// ---- ai-builder-field-type-parity: user + polymorphic_relation on the AI surface ----
 		{
 			name: "user (người phụ trách) không options → buffered",
-			args: `{"entity":"crm_tasks","name":"assignee","label":"Người phụ trách","fieldType":"user"}`,
+			args: `{"entity":"patients","name":"assignee","label":"Người phụ trách","fieldType":"user"}`,
 		},
 		{
 			name: "polymorphic_relation với targetEntities → buffered, đích giữ nguyên",
-			args: `{"entity":"crm_tasks","name":"related_to","label":"Liên quan tới","fieldType":"polymorphic_relation",
+			args: `{"entity":"patients","name":"related_to","label":"Liên quan tới","fieldType":"polymorphic_relation",
 				"options":{"targetEntities":["crm_accounts","crm_contacts"]}}`,
 			wantOpts: map[string]any{"targetEntities": []any{"crm_accounts", "crm_contacts"}},
 		},
 		{
 			name:     "polymorphic_relation thiếu targetEntities → FIELD_POLYMORPHIC_NO_TARGETS (không để tới Apply mới 422)",
-			args:     `{"entity":"crm_tasks","name":"related_to","label":"Liên quan tới","fieldType":"polymorphic_relation"}`,
+			args:     `{"entity":"patients","name":"related_to","label":"Liên quan tới","fieldType":"polymorphic_relation"}`,
 			wantCode: "FIELD_POLYMORPHIC_NO_TARGETS",
 		},
 		{
 			name: "polymorphic_relation tên > 21 ký tự → FIELD_POLYMORPHIC_NAME_TOO_LONG",
-			args: `{"entity":"crm_tasks","name":"related_record_targets","label":"Liên quan","fieldType":"polymorphic_relation",
+			args: `{"entity":"patients","name":"related_record_targets","label":"Liên quan","fieldType":"polymorphic_relation",
 				"options":{"targetEntities":["crm_accounts"]}}`,
 			wantCode: "FIELD_POLYMORPHIC_NAME_TOO_LONG",
 		},
