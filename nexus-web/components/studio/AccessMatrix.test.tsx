@@ -226,12 +226,13 @@ describe("delivered project: 'Áp ngay cho người dùng thật' (lát f2-direc
 describe("assistant preview (an access card)", () => {
   const card = (before: RoleGrant[], after: RoleGrant[], labels: Record<string, string>) =>
     mkChange("role", "update", { docKey: "r3", target: { name: "r3", entity: Object.keys(labels)[0] }, before: { grants: before, labels }, after: { grants: after, labels } });
-  function Page({ roles, tables }: { roles: RoleDetail[]; tables: { name: string; label: string }[] }) {
-    const ghost = accessGhost(useProposedChanges("role")[0] ?? null, roles, tables);
-    return <AccessMatrix roles={roles} tables={[...tables, ...ghost.pending]} proposed={ghost.proposed} roleHref={href} />;
+  // `tables` is what the page draws (?app= / ?bang= may leave some out), `built` every table of the project.
+  function Page({ roles, tables, built = tables }: { roles: RoleDetail[]; tables: { name: string; label: string }[]; built?: { name: string; label: string }[] }) {
+    const ghost = accessGhost(useProposedChanges("role")[0] ?? null, roles, built, tables);
+    return <AccessMatrix roles={roles} tables={[...tables, ...ghost.extra]} proposed={ghost.proposed} roleHref={href} />;
   }
-  const renderWith = (c: ReturnType<typeof mkChange> | null) =>
-    render(<WithPreview change={c}><Page roles={[FRONT, ODD]} tables={TABLES} /></WithPreview>);
+  const renderWith = (c: ReturnType<typeof mkChange> | null, tables = TABLES) =>
+    render(<WithPreview change={c}><Page roles={[FRONT, ODD]} tables={tables} built={TABLES} /></WithPreview>);
   const onVisit = card([g("invoice", "create")], [g("invoice", "create"), g("visit", "view"), g("visit", "create"), g("visit", "edit", "owner")], { visit: "Lịch hẹn" });
 
   it("tints the card's cell, says the level it leads to and the one it replaces; other cells stay plain", async () => {
@@ -269,6 +270,18 @@ describe("assistant preview (an access card)", () => {
     const td = screen.getByText("Xem và sửa · Đề xuất").closest("td")!;
     expect(within(td).queryByRole("combobox")).toBeNull();
     expect(screen.queryByRole("combobox", { name: /Phiếu hỗ trợ/ })).toBeNull();
+  });
+
+  // issue #23: the page filtered to an app that leaves the card's (built) table out still draws its ghost cell, on the
+  // table's real, editable column.
+  it("a built table outside the ?app= filter gets its column, so the ghost cell is drawn", async () => {
+    renderWith(onVisit, [TABLES[0]]);
+    const td = (await screen.findByText("Xem và sửa · Đề xuất")).closest("td")!;
+    expect(td.className).toContain("nx-proposed");
+    expect(within(td).getByRole("combobox", { name: name("Kế toán", "Lịch hẹn", "Không thấy") })).toBeInTheDocument();
+    const head = screen.getByRole("columnheader", { name: "Lịch hẹn" });
+    expect(head.className).not.toContain("nx-proposed");
+    expect(screen.getAllByRole("columnheader")).toHaveLength(3);
   });
 
   it("Bỏ (clear) removes the ghost and leaves the real grants alone", async () => {

@@ -69,7 +69,7 @@ func TestTools_AreTheBuilderAgentsReadAndProposeToolsOnly(t *testing.T) {
 	if len(got) != want {
 		t.Errorf("exposed %d tools, want the %d of the builder agent", len(got), want)
 	}
-	for _, n := range []string{"list_entities", "list_fields", "list_relationships", "snapshot_model", "explain_access",
+	for _, n := range []string{"list_entities", "list_fields", "list_relationships", "list_roles", "snapshot_model", "explain_access",
 		"propose_entity", "propose_field", "propose_relationship", "propose_layout"} {
 		if _, ok := got[toolPrefix+n]; !ok {
 			t.Errorf("core tool %s%s missing", toolPrefix, n)
