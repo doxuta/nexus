@@ -130,15 +130,31 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 }
 
 // proposedNote follows the result of a proposal: where it went, that nothing changed yet, and what the
-// human's apply does, by the change class of what it proposes (metaversion.ClassOf, issue #22): a draft
-// type reaches users on publish once the project is delivered; any other (access, relationships,
-// approvals, work queues, records) takes effect when applied.
+// human's apply does, by the change class of what it proposes (metaversion.ClassOf, issue #22): an edit
+// of a draft type goes to drafts once the project is delivered; a NEW document of a NewHidden type (a
+// table, a field, an N-N relation) is created at apply but the customer sees it only after a publish;
+// anything else (access, approvals, work queues, records) takes effect when applied. The most immediate
+// effect among the cards wins, and a card with no envelope counts as immediate (fail-safe).
 func proposedNote(added []ai.DraftItem) string {
 	const saved = "Saved as a card in the builder's Studio thread. Nothing has changed: a human reviews the card and applies it"
+	now, hidden := false, false
 	for _, it := range added {
-		if it.Change == nil || metaversion.ClassOf(it.Change.DocType).Kind != metaversion.Draft {
-			return saved + ", and it takes effect as soon as it is applied: there is no draft or publish step for it."
+		c := metaversion.ClassOf("")
+		if it.Change != nil {
+			c = metaversion.ClassOf(it.Change.DocType)
 		}
+		switch {
+		case c.NewHidden && it.Change.Op != "update" && it.Change.Op != "delete": // a card that edits nothing is new
+			hidden = true
+		case c.Kind != metaversion.Draft:
+			now = true
+		}
+	}
+	switch {
+	case now:
+		return saved + ", and it takes effect as soon as it is applied: there is no draft or publish step for it."
+	case hidden:
+		return saved + ", which creates it; once the project is delivered the customer sees it only after it is published."
 	}
 	return saved + "; once the project is delivered it goes to drafts and reaches users when it is published."
 }

@@ -439,19 +439,51 @@ func TestCall_AnOversizedProposalIsRefused(t *testing.T) {
 	}
 }
 
-// Issue #22: what the agent is told after a proposal follows the change class of that card (an access
-// card applies at once; a field goes to drafts on a delivered project), and no tool description
-// promises a draft and a publish step for every card.
-func TestCall_TheNoteFollowsTheChangeClass(t *testing.T) {
-	for _, tc := range []struct{ tool, kind, docType, want, not string }{
-		{"nexus_propose_access", "access", "role", "no draft or publish step", "goes to drafts"},
-		{"nexus_propose_field", "field", "field", "goes to drafts", "no draft or publish step"},
+// Issue #22: what the agent is told after a proposal follows the change class of that card, per kind of
+// envelope the builder tools write (internal/ai/change.go): access and the other direct types apply at once;
+// a NEW table, field or N-N relation is created at apply but hidden from the customer until a publish; an
+// edit of a draft type goes to drafts. No tool description promises a draft and a publish for every card.
+func TestProposedNote_FollowsTheChangeClassPerKind(t *testing.T) {
+	const now, hidden, drafts = "takes effect as soon as it is applied", "sees it only after it is published", "goes to drafts"
+	for _, tc := range []struct{ kind, docType, op, want string }{
+		{"access", "role", "update", now},
+		{"records", "records", "create", now},
+		{"approval", "approval", "create", now},
+		{"workqueue", "workqueue", "create", now},
+		{"relationship", "relationship", "create", hidden},
+		{"entity", "entity", "create", hidden},
+		{"field", "field", "create", hidden},
+		{"edit_field", "field", "update", drafts},
+		{"delete_field", "field", "delete", drafts},
+		{"delete_entity", "entity", "delete", drafts},
+		{"layout", "layout", "update", drafts},
+		{"workflow", "workflow", "create", drafts},
+		{"report", "report", "create", drafts},
+		{"dashboard", "dashboard", "create", drafts},
+		{"app", "app", "create", drafts},
+		{"no envelope", "", "", now},
 	} {
-		run := &fakeRunner{res: `{"ok":true,"result":{"buffered":"x"}}`, added: []ai.DraftItem{{Kind: tc.kind, Change: &ai.DraftChange{DocType: tc.docType}}}}
-		got := text(callTool(t, serve(t, &fakeVerifier{}, run, &fakeThreads{}), tc.tool, nil))
-		if !strings.Contains(got, tc.want) || strings.Contains(got, tc.not) {
-			t.Errorf("%s (%s card): %q; want %q", tc.tool, tc.docType, got, tc.want)
+		item := ai.DraftItem{Kind: tc.kind}
+		if tc.docType != "" {
+			item.Change = &ai.DraftChange{DocType: tc.docType, Op: tc.op}
 		}
+		got := proposedNote([]ai.DraftItem{item})
+		for _, phrase := range []string{now, hidden, drafts} {
+			if strings.Contains(got, phrase) != (phrase == tc.want) {
+				t.Errorf("%s (%s %s): %q; want only %q", tc.kind, tc.docType, tc.op, got, tc.want)
+				break
+			}
+		}
+	}
+	if got := proposedNote([]ai.DraftItem{{Change: &ai.DraftChange{DocType: "field", Op: "update"}}, {Change: &ai.DraftChange{DocType: "role", Op: "update"}}}); !strings.Contains(got, now) {
+		t.Errorf("a field edit with an access card: %q; want the immediate effect named", got)
+	}
+}
+
+func TestCall_TheNoteFollowsTheChangeClass(t *testing.T) {
+	run := &fakeRunner{res: `{"ok":true,"result":{"buffered":"x"}}`, added: []ai.DraftItem{{Kind: "access", Change: &ai.DraftChange{DocType: "role", Op: "update"}}}}
+	if got := text(callTool(t, serve(t, &fakeVerifier{}, run, &fakeThreads{}), "nexus_propose_access", nil)); !strings.Contains(got, "no draft or publish step") {
+		t.Errorf("nexus_propose_access result: %q; want the access card's own effect", got)
 	}
 	for _, tl := range tools(ai.ToolDefinitions()) {
 		if strings.Contains(tl.Description, "publishes it") {
