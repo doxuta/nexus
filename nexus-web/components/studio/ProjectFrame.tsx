@@ -73,7 +73,8 @@ export function ProjectFrame({ slug, children }: { slug: string; children: React
   const W = identity.me?.workspace ?? null;
   const home = open && !W;
   const name = !open ? slug : home ? t("studio.project.home") : W?.tenantName || W?.tenantSlug || slug;
-  const { data: publishState, error: publishError } = usePublishState(slug);
+  // Re-read on mount: a draft written outside Studio (e.g. a report on /reports) shows at once (#62).
+  const { data: publishState, error: publishError } = usePublishState(slug, { rereadOnMount: true });
   // useDirectApply on the page answers from this read instead of one of its own per announcement (#53).
   const framePublish = useMemo(() => ({ data: publishState, error: publishError }), [publishState, publishError]);
   const step = stepOfRoute(route);
