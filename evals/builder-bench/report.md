@@ -59,13 +59,13 @@ Read from each attempt's transcript (the recorded model calls and the tool resul
   **Decided since ([#30](https://github.com/doxuta/nexus/issues/30) item 4, recorded in
   [ADR 0001](../../docs/adr/0001-metadata-is-the-agent-action-space.md)'s addendum): the draft is the right answer.**
   An agent cannot waive the builder's confirmation, so it keeps drafting the card and never deletes; the card now names
-  the pack that installed the table and counts the records the delete hides, and the tool tells the model to say
-  plainly that it cannot skip the confirmation. Refusing at propose time for a pack table lost: deleting one is a
+  the packs that include the table and counts, for the builder alone, the records the delete hides, and the tool tells
+  the model to say plainly that it cannot skip the confirmation. Refusing at propose time for a pack table lost: deleting one is a
   legitimate builder act, "pack table" is a poor proxy for "holds data that matters", and the retype already guards
   every table. The case now passes on a refusal, or on a `delete_entity` card for `crm_accounts` alone whose reply
   matches `xác nhận|gõ lại|confirm|retype`; any other kind, or a card for another table, fails. The four attempts above
-  would pass the kinds part of that rule; whether their replies mention the confirmation was not kept, so they are not
-  re-graded, and nothing was re-run.
+  are not re-graded: their replies were not kept, so whether they say the builder must confirm cannot be checked, and
+  nothing was re-run.
 - **`edit-1n-branch`, cheap #3: the same field twice.** The model proposed the relation field `crm_accounts.branch` in
   two calls of one turn, and `propose_field` accepted the duplicate (`propose_entity` refuses one). The second card
   failed to apply with "Trường đã tồn tại trong đối tượng này" ("the field already exists"). The panel reported the
