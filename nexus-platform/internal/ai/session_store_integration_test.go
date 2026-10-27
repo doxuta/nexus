@@ -65,7 +65,7 @@ func TestSessionStore_RoundTrip(t *testing.T) {
 	// Turn 1: sessionID == "" → AppendTurn creates the session AND persists both messages atomically.
 	id, err := store.AppendTurn(ctx, itTenantA, itUser1, "",
 		AutoTitle("Tôi làm phòng khám nha khoa cần quản lý bệnh nhân"),
-		"Tôi cần quản lý bệnh nhân", "Tôi đề xuất entity patients.", draft)
+		"Tôi cần quản lý bệnh nhân", "Tôi đề xuất entity patients.", draft, "")
 	if err != nil {
 		t.Fatalf("AppendTurn (create): %v", err)
 	}
@@ -109,7 +109,7 @@ func TestSessionStore_RoundTrip(t *testing.T) {
 
 	// Turn 2: sessionID != "" → AppendTurn computes baseSeq from MAX(seq)+1 INSIDE its own tx, so it
 	// can never race a concurrent append into a stale seq. newTitle is ignored (session already named).
-	if _, err := store.AppendTurn(ctx, itTenantA, itUser1, id, "ignored-title", "câu hỏi tiếp theo", "trả lời tiếp theo", nil); err != nil {
+	if _, err := store.AppendTurn(ctx, itTenantA, itUser1, id, "ignored-title", "câu hỏi tiếp theo", "trả lời tiếp theo", nil, ""); err != nil {
 		t.Fatalf("AppendTurn (continue): %v", err)
 	}
 	_, msgs2, err := store.GetSession(ctx, itTenantA, itUser1, id)
@@ -144,7 +144,7 @@ func TestSessionStore_CrossUserIsolation(t *testing.T) {
 	store := newSessionStoreForTest(t)
 	ctx := context.Background()
 
-	id, err := store.AppendTurn(ctx, itTenantA, itUser1, "", "user1 session", "hi", "hello", nil)
+	id, err := store.AppendTurn(ctx, itTenantA, itUser1, "", "user1 session", "hi", "hello", nil, "")
 	if err != nil {
 		t.Fatalf("AppendTurn (create): %v", err)
 	}
@@ -157,7 +157,7 @@ func TestSessionStore_CrossUserIsolation(t *testing.T) {
 	if _, _, err := store.GetSession(ctx, itTenantA, itUser2, id); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("user2 GetSession = %v; want ErrSessionNotFound (no cross-user read)", err)
 	}
-	if _, err := store.AppendTurn(ctx, itTenantA, itUser2, id, "ignored", "attempted hijack", "should not persist", nil); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := store.AppendTurn(ctx, itTenantA, itUser2, id, "ignored", "attempted hijack", "should not persist", nil, ""); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("user2 AppendTurn = %v; want ErrSessionNotFound (no cross-user write — USER-scoped guard)", err)
 	}
 	if err := store.SoftDeleteSession(ctx, itTenantA, itUser2, id); !errors.Is(err, ErrSessionNotFound) {
@@ -182,7 +182,7 @@ func TestSessionStore_CrossTenantIsolation(t *testing.T) {
 	store := newSessionStoreForTest(t)
 	ctx := context.Background()
 
-	id, err := store.AppendTurn(ctx, itTenantA, itUser1, "", "tenantA session", "hi", "hello", nil)
+	id, err := store.AppendTurn(ctx, itTenantA, itUser1, "", "tenantA session", "hi", "hello", nil, "")
 	if err != nil {
 		t.Fatalf("AppendTurn (create): %v", err)
 	}
@@ -191,7 +191,7 @@ func TestSessionStore_CrossTenantIsolation(t *testing.T) {
 	if _, _, err := store.GetSession(ctx, itTenantB, itUser1, id); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("cross-tenant GetSession = %v; want ErrSessionNotFound", err)
 	}
-	if _, err := store.AppendTurn(ctx, itTenantB, itUser1, id, "ignored", "x", "y", nil); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := store.AppendTurn(ctx, itTenantB, itUser1, id, "ignored", "x", "y", nil, ""); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("cross-tenant AppendTurn = %v; want ErrSessionNotFound (guard blocks the write)", err)
 	}
 	if err := store.SoftDeleteSession(ctx, itTenantB, itUser1, id); !errors.Is(err, ErrSessionNotFound) {
@@ -218,12 +218,12 @@ func TestSessionStore_FeatureSplit(t *testing.T) {
 	store := newSessionStoreForTest(t)
 	ctx := context.Background()
 
-	bid, err := store.AppendTurn(ctx, itTenantA, itUser1, "", "builder thread", "thiết kế entity", "đề xuất entity", nil)
+	bid, err := store.AppendTurn(ctx, itTenantA, itUser1, "", "builder thread", "thiết kế entity", "đề xuất entity", nil, "")
 	if err != nil {
 		t.Fatalf("AppendTurn (builder): %v", err)
 	}
 	draft := json.RawMessage(`[{"kind":"record_create","recordCreate":{"entity":"tickets","data":{"title":"x"}}}]`)
-	aid, err := store.AppendAssistantTurn(ctx, itTenantA, itUser1, "", "⌘K thread", "tạo ticket cho khách A", "Đã soạn bản nháp.", draft)
+	aid, err := store.AppendAssistantTurn(ctx, itTenantA, itUser1, "", "⌘K thread", "tạo ticket cho khách A", "Đã soạn bản nháp.", draft, "")
 	if err != nil {
 		t.Fatalf("AppendAssistantTurn (create): %v", err)
 	}
@@ -252,10 +252,10 @@ func TestSessionStore_FeatureSplit(t *testing.T) {
 	if _, _, err := store.GetAssistantSession(ctx, itTenantA, itUser1, bid); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("GetAssistantSession(builder id) = %v; want ErrSessionNotFound", err)
 	}
-	if _, err := store.AppendTurn(ctx, itTenantA, itUser1, aid, "ignored", "x", "y", nil); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := store.AppendTurn(ctx, itTenantA, itUser1, aid, "ignored", "x", "y", nil, ""); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("builder AppendTurn onto assistant thread = %v; want ErrSessionNotFound", err)
 	}
-	if _, err := store.AppendAssistantTurn(ctx, itTenantA, itUser1, bid, "ignored", "x", "y", nil); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := store.AppendAssistantTurn(ctx, itTenantA, itUser1, bid, "ignored", "x", "y", nil, ""); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("AppendAssistantTurn onto builder thread = %v; want ErrSessionNotFound", err)
 	}
 	if err := store.SoftDeleteSession(ctx, itTenantA, itUser1, aid); !errors.Is(err, ErrSessionNotFound) {
@@ -302,7 +302,7 @@ func TestSessionStore_AssistantListCap(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < assistantSessionListCap+3; i++ {
-		if _, err := store.AppendAssistantTurn(ctx, itTenantA, itUser2, "", "thread", "q", "a", nil); err != nil {
+		if _, err := store.AppendAssistantTurn(ctx, itTenantA, itUser2, "", "thread", "q", "a", nil, ""); err != nil {
 			t.Fatalf("AppendAssistantTurn #%d: %v", i, err)
 		}
 	}
@@ -323,7 +323,7 @@ func TestSessionStore_SettleProposal(t *testing.T) {
 	ctx := context.Background()
 	draft := json.RawMessage(`[{"kind":"field","field":{"entity":"a","name":"f0"}},{"kind":"field","field":{"entity":"a","name":"f1"}},` +
 		`{"kind":"field","field":{"entity":"a","name":"f2"}},{"kind":"field","field":{"entity":"a","name":"f3"}},{"kind":"field","field":{"entity":"a","name":"f4"}}]`)
-	id, err := store.AppendTurn(ctx, itTenantA, itUser1, "", "t", "hỏi", "đề xuất", draft)
+	id, err := store.AppendTurn(ctx, itTenantA, itUser1, "", "t", "hỏi", "đề xuất", draft, "")
 	if err != nil {
 		t.Fatalf("AppendTurn: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestSessionStore_SettleProposal(t *testing.T) {
 
 	// A ⌘K assistant thread (feature 'assistant') is never a builder thread: the settle route cannot
 	// reach its cards, whoever owns it.
-	aid, err := store.AppendAssistantTurn(ctx, itTenantA, itUser1, "", "t", "hỏi", "xác nhận", json.RawMessage(`[{"kind":"record_create"}]`))
+	aid, err := store.AppendAssistantTurn(ctx, itTenantA, itUser1, "", "t", "hỏi", "xác nhận", json.RawMessage(`[{"kind":"record_create"}]`), "")
 	if err != nil {
 		t.Fatalf("AppendAssistantTurn: %v", err)
 	}
@@ -468,5 +468,99 @@ func TestMigration_SettledJSON_DownThenUpAgain(t *testing.T) {
 	exec(read("up")) // a second up is a no-op
 	if !has() {
 		t.Fatal("after up again: settled_json is missing")
+	}
+}
+
+// Issue #30 item 5: how each assistant turn ended is stored with it and read back on both surfaces, so a
+// reopened session can say "the model declined" where the live turn did, and the next turn can leave the
+// declined prompt out. A user row and a row written with no outcome (the MCP thread's) read "" and store NULL.
+func TestSessionStore_OutcomePerMessage(t *testing.T) {
+	store := newSessionStoreForTest(t)
+	ctx := context.Background()
+
+	bid, err := store.AppendTurn(ctx, itTenantA, itUser1, "", "t", "chép tài khoản của không gian khác", "", nil, "refused")
+	if err != nil {
+		t.Fatalf("AppendTurn refused: %v", err)
+	}
+	if _, err := store.AppendTurn(ctx, itTenantA, itUser1, bid, "", "thêm bảng phiếu", "", json.RawMessage(`[{"kind":"entity"}]`), "max_steps"); err != nil {
+		t.Fatalf("AppendTurn max_steps: %v", err)
+	}
+	if _, err := store.AppendTurn(ctx, itTenantA, itUser1, bid, "", "[MCP] Agent gọi nexus_propose_field", "Agent đề xuất qua MCP.", nil, ""); err != nil {
+		t.Fatalf("AppendTurn without an outcome: %v", err)
+	}
+	_, msgs, err := store.GetSession(ctx, itTenantA, itUser1, bid)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	var got []string
+	for _, m := range msgs {
+		got = append(got, m.Outcome)
+	}
+	if want := []string{"", "refused", "", "max_steps", "", ""}; !slices.Equal(got, want) {
+		t.Fatalf("outcomes = %q; want %q", got, want)
+	}
+	var nulls int
+	if err := connectAI(t).Get(&nulls, `SELECT COUNT(*) FROM sys_ai_messages WHERE session_id = ? AND tenant_id = ? AND outcome IS NULL`, bid, itTenantA); err != nil || nulls != 4 {
+		t.Fatalf("NULL outcomes = %d (%v); want 4 (three user rows and the MCP row)", nulls, err)
+	}
+
+	aid, err := store.AppendAssistantTurn(ctx, itTenantA, itUser1, "", "t", "hỏi", "", nil, "refused")
+	if err != nil {
+		t.Fatalf("AppendAssistantTurn: %v", err)
+	}
+	if _, amsgs, err := store.GetAssistantSession(ctx, itTenantA, itUser1, aid); err != nil || len(amsgs) != 2 || amsgs[1].Outcome != "refused" || amsgs[0].Outcome != "" {
+		t.Fatalf("assistant thread = %v %+v; want its reply stored as refused", err, amsgs)
+	}
+}
+
+// Issue #30 item 5's migration: the down file drops sys_ai_messages.outcome and the up file brings it back, a
+// second run of either being a no-op. Found by name, not number (the number is assigned at merge). Runs on its
+// own multiStatements connection and leaves the shared throwaway DB migrated.
+func TestMigration_MessageOutcome_DownThenUpAgain(t *testing.T) {
+	db := connectAI(t)
+	read := func(suffix string) string {
+		t.Helper()
+		m, err := filepath.Glob("../../migrations/*_sys_ai_messages_outcome." + suffix + ".sql")
+		if err != nil || len(m) != 1 {
+			t.Fatalf("migration %s: glob = %v, %v", suffix, m, err)
+		}
+		b, err := os.ReadFile(m[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	exec := func(script string) {
+		t.Helper()
+		conn, err := sqlx.Connect("mysql", aiTestDSN()+"&multiStatements=true")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if _, err := conn.Exec(script); err != nil {
+			t.Fatalf("exec migration: %v", err)
+		}
+	}
+	has := func() bool {
+		t.Helper()
+		var n int
+		if err := db.Get(&n, `SELECT COUNT(*) FROM information_schema.columns
+			WHERE table_schema = DATABASE() AND table_name = 'sys_ai_messages' AND column_name = 'outcome'`); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+	if !has() {
+		t.Fatal("after up: sys_ai_messages lacks outcome")
+	}
+	exec(read("down"))
+	if has() {
+		t.Fatal("after down: outcome is still there")
+	}
+	exec(read("down"))
+	exec(read("up"))
+	exec(read("up"))
+	if !has() {
+		t.Fatal("after up again: outcome is missing")
 	}
 }

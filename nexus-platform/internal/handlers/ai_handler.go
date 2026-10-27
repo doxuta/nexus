@@ -47,7 +47,7 @@ type ContextResolver interface {
 type SessionStore interface {
 	ListSessions(ctx context.Context, tenantID, userID string) ([]ai.SessionSummary, error)
 	GetSession(ctx context.Context, tenantID, userID, id string) (ai.Session, []ai.Message, error)
-	AppendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage) (string, error)
+	AppendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage, outcome string) (string, error)
 	SoftDeleteSession(ctx context.Context, tenantID, userID, id string) error
 	SettleProposal(ctx context.Context, tenantID, userID, sessionID string, seq, index int) error
 }
@@ -403,7 +403,7 @@ func (h *AIBuilderHandler) runTurn(c *gin.Context, t preparedTurn, onStep func(a
 	// Persist the whole turn ATOMICALLY (session creation for a new thread + both messages + the
 	// updated_at bump, all in one DB transaction — see the method doc for why this replaced 3
 	// separate calls). newTitle is only used when sessionID is "" (ignored by the store otherwise).
-	persistedID, perr := h.store.AppendTurn(ctx, t.tenantID, t.userID, t.sessionID, ai.AutoTitle(t.message), t.message, res.Reply, marshalDraft(res.Draft))
+	persistedID, perr := h.store.AppendTurn(ctx, t.tenantID, t.userID, t.sessionID, ai.AutoTitle(t.message), t.message, res.Reply, marshalDraft(res.Draft), res.Outcome)
 	if perr != nil {
 		fail(h.classifyPersistError(t.tenantID, perr))
 		return nil, false
@@ -597,17 +597,22 @@ func marshalDraft(draft []ai.DraftItem) json.RawMessage {
 
 // sessionDTO maps a session + its messages to the camelCase API shape (api-conventions §Response
 // Format). Each message's stored draft_json is decoded back to draft[] so the FE re-renders an
-// applicable draft-card on resume.
+// applicable draft-card on resume, and an assistant turn carries the outcome it ended with (absent when
+// none was recorded) so a resumed turn reads as the live one did.
 func (h *AIBuilderHandler) sessionDTO(sess ai.Session, msgs []ai.Message) gin.H {
 	out := make([]gin.H, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, gin.H{
+		row := gin.H{
 			"seq":       m.Seq,
 			"role":      m.Role,
 			"content":   m.Content,
 			"draft":     h.decodeDraft(m.DraftJSON),
 			"createdAt": m.CreatedAt,
-		})
+		}
+		if m.Outcome != "" {
+			row["outcome"] = m.Outcome
+		}
+		out = append(out, row)
 	}
 	return gin.H{
 		"id":        sess.ID,

@@ -85,7 +85,7 @@ type threadCall struct{ tenantID, userID, sessionID, title, user, assistant stri
 
 type fakeThreads struct{ calls []threadCall }
 
-func (f *fakeThreads) AppendTurn(_ context.Context, tenantID, userID, sessionID, title, user, assistant string, _ json.RawMessage) (string, error) {
+func (f *fakeThreads) AppendTurn(_ context.Context, tenantID, userID, sessionID, title, user, assistant string, _ json.RawMessage, _ string) (string, error) {
 	f.calls = append(f.calls, threadCall{tenantID, userID, sessionID, title, user, assistant})
 	return "sess-1", nil
 }

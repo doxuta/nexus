@@ -91,9 +91,15 @@ type Message struct {
 	DraftJSON json.RawMessage
 	// Settled lists the indexes of DraftJSON's items the builder applied, discarded or undid in the
 	// Studio (issue #42, SettleProposal); nil = none settled.
-	Settled   []int
+	Settled []int
+	// Outcome is how an assistant turn ended (mig 000101): "ok", "max_steps" or "refused", as the live
+	// turn answered it; "" = not recorded (a user row, a row from before, the MCP thread's rows).
+	Outcome   string
 	CreatedAt time.Time
 }
+
+// Refused reports an assistant turn the model declined: its prompt is not replayed to the model again.
+func (m Message) Refused() bool { return m.Role == "assistant" && m.Outcome == outcomeRefused }
 
 // messageRow is the scan target for a sys_ai_messages row. draft_json is nullable, so it scans into
 // a *json.RawMessage (a bare json.RawMessage cannot receive SQL NULL — the workflow repo uses the
@@ -108,6 +114,7 @@ type messageRow struct {
 	Content     string           `db:"content"`
 	DraftJSON   *json.RawMessage `db:"draft_json"`
 	SettledJSON *json.RawMessage `db:"settled_json"`
+	Outcome     string           `db:"outcome"`
 	CreatedAt   time.Time        `db:"created_at"`
 }
 
@@ -186,7 +193,8 @@ func (s *SessionStore) getSession(ctx context.Context, tenantID, userID, id, fea
 		return Session{}, nil, fmt.Errorf("ai.SessionStore.GetSession: %w", err)
 	}
 
-	const mq = `SELECT id, session_id, tenant_id, seq, role, COALESCE(content, '') AS content, draft_json, settled_json, created_at
+	const mq = `SELECT id, session_id, tenant_id, seq, role, COALESCE(content, '') AS content, draft_json, settled_json,
+			COALESCE(outcome, '') AS outcome, created_at
 		FROM sys_ai_messages
 		WHERE session_id = ? AND tenant_id = ?
 		ORDER BY seq ASC, created_at ASC, id ASC`
@@ -198,7 +206,7 @@ func (s *SessionStore) getSession(ctx context.Context, tenantID, userID, id, fea
 	for _, r := range rows {
 		m := Message{
 			ID: r.ID, SessionID: r.SessionID, TenantID: r.TenantID,
-			Seq: r.Seq, Role: r.Role, Content: r.Content, CreatedAt: r.CreatedAt,
+			Seq: r.Seq, Role: r.Role, Content: r.Content, Outcome: r.Outcome, CreatedAt: r.CreatedAt,
 		}
 		if r.DraftJSON != nil {
 			m.DraftJSON = *r.DraftJSON
@@ -233,23 +241,25 @@ func (s *SessionStore) getSession(ctx context.Context, tenantID, userID, id, fea
 //     concurrent append into a stale seq.
 //
 // Both messages (user @ baseSeq, assistant @ baseSeq+1) are inserted, session.updated_at is bumped,
-// and the transaction commits. Returns the (possibly newly created) session id.
+// and the transaction commits. outcome is how the assistant turn ended (Result.Outcome: "ok",
+// "max_steps", "refused"), stored on the assistant row; "" stores NULL (a writer with no model turn,
+// such as the MCP thread). Returns the (possibly newly created) session id.
 //
 // Feature (mig 000059): AppendTurn is the BUILDER write path — it mints sessions with
 // feature='builder' and its existing-session guard only resolves builder threads. The ⌘K
 // assistant writes through AppendAssistantTurn; the two surfaces can never append onto each
 // other's threads (a cross-feature id is ErrSessionNotFound, same no-leak contract as cross-user).
-func (s *SessionStore) AppendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage) (string, error) {
-	return s.appendTurn(ctx, tenantID, userID, sessionID, newTitle, userContent, assistantContent, assistantDraft, SessionFeatureBuilder)
+func (s *SessionStore) AppendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage, outcome string) (string, error) {
+	return s.appendTurn(ctx, tenantID, userID, sessionID, newTitle, userContent, assistantContent, assistantDraft, outcome, SessionFeatureBuilder)
 }
 
 // AppendAssistantTurn is AppendTurn for the ⌘K assistant surface (feature='assistant').
-func (s *SessionStore) AppendAssistantTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage) (string, error) {
-	return s.appendTurn(ctx, tenantID, userID, sessionID, newTitle, userContent, assistantContent, assistantDraft, SessionFeatureAssistant)
+func (s *SessionStore) AppendAssistantTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage, outcome string) (string, error) {
+	return s.appendTurn(ctx, tenantID, userID, sessionID, newTitle, userContent, assistantContent, assistantDraft, outcome, SessionFeatureAssistant)
 }
 
 // appendTurn is the one atomic turn-write body both feature wrappers share.
-func (s *SessionStore) appendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage, feature string) (string, error) {
+func (s *SessionStore) appendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage, outcome, feature string) (string, error) {
 	tx, err := s.db.BeginTxx(ctx, nil)
 	if err != nil {
 		return "", fmt.Errorf("ai.SessionStore.AppendTurn: begin: %w", err)
@@ -290,15 +300,15 @@ func (s *SessionStore) appendTurn(ctx context.Context, tenantID, userID, session
 	}
 
 	const insMsg = `INSERT INTO sys_ai_messages
-		(id, session_id, tenant_id, seq, role, content, draft_json, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		(id, session_id, tenant_id, seq, role, content, draft_json, outcome, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?)`
 	if _, err := tx.ExecContext(ctx, insMsg,
-		uuid.NewString(), sessionID, tenantID, baseSeq, "user", userContent, nil, now,
+		uuid.NewString(), sessionID, tenantID, baseSeq, "user", userContent, nil, "", now,
 	); err != nil {
 		return "", fmt.Errorf("ai.SessionStore.AppendTurn: insert user message: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, insMsg,
-		uuid.NewString(), sessionID, tenantID, baseSeq+1, "assistant", assistantContent, nullableJSON(assistantDraft), now,
+		uuid.NewString(), sessionID, tenantID, baseSeq+1, "assistant", assistantContent, nullableJSON(assistantDraft), outcome, now,
 	); err != nil {
 		return "", fmt.Errorf("ai.SessionStore.AppendTurn: insert assistant message: %w", err)
 	}

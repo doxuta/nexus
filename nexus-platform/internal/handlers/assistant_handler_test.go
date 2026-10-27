@@ -51,8 +51,8 @@ func (s *fakeAssistantStore) GetAssistantSession(ctx context.Context, tenantID, 
 	return s.GetSession(ctx, tenantID, userID, id)
 }
 
-func (s *fakeAssistantStore) AppendAssistantTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage) (string, error) {
-	return s.AppendTurn(ctx, tenantID, userID, sessionID, newTitle, userContent, assistantContent, assistantDraft)
+func (s *fakeAssistantStore) AppendAssistantTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage, outcome string) (string, error) {
+	return s.AppendTurn(ctx, tenantID, userID, sessionID, newTitle, userContent, assistantContent, assistantDraft, outcome)
 }
 
 func (s *fakeAssistantStore) SoftDeleteAssistantSession(ctx context.Context, tenantID, userID, id string) error {
@@ -248,7 +248,7 @@ func TestAssistantHandler_SessionRoutes(t *testing.T) {
 	store := newFakeAssistantStore()
 	// Own thread WITH a persisted draft turn, seeded through the store's own write path.
 	draft := json.RawMessage(`[{"kind":"record_update","recordUpdate":{"entity":"orders","recordId":"r-9","data":{"status":"delivered"},"before":{"status":"open"}}}]`)
-	ownID, err := store.AppendAssistantTurn(context.Background(), "t1", "u1", "", "đổi trạng thái đơn", "đổi trạng thái đơn X", "Đã soạn bản nháp.", draft)
+	ownID, err := store.AppendAssistantTurn(context.Background(), "t1", "u1", "", "đổi trạng thái đơn", "đổi trạng thái đơn X", "Đã soạn bản nháp.", draft, "ok")
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}

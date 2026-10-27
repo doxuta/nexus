@@ -100,7 +100,7 @@ func (s *fakeSessionStore) GetSession(_ context.Context, tenantID, userID, id st
 // AppendTurn mirrors ai.SessionStore.AppendTurn: sessionID=="" creates a new session owned by
 // (tenantID, userID); sessionID!="" requires a USER-scoped ownership match (owned) else
 // ErrSessionNotFound — matching the real store's post-review-hardened guard.
-func (s *fakeSessionStore) AppendTurn(_ context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage) (string, error) {
+func (s *fakeSessionStore) AppendTurn(_ context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage, outcome string) (string, error) {
 	if s.appendTurnErr != nil {
 		return "", s.appendTurnErr
 	}
@@ -126,7 +126,7 @@ func (s *fakeSessionStore) AppendTurn(_ context.Context, tenantID, userID, sessi
 	}
 	se.msgs = append(se.msgs,
 		ai.Message{SessionID: sessionID, TenantID: tenantID, Seq: baseSeq, Role: "user", Content: userContent},
-		ai.Message{SessionID: sessionID, TenantID: tenantID, Seq: baseSeq + 1, Role: "assistant", Content: assistantContent, DraftJSON: assistantDraft},
+		ai.Message{SessionID: sessionID, TenantID: tenantID, Seq: baseSeq + 1, Role: "assistant", Content: assistantContent, DraftJSON: assistantDraft, Outcome: outcome},
 	)
 	return sessionID, nil
 }

@@ -48,7 +48,7 @@ type UserTurnGuard interface {
 type AssistantSessionStore interface {
 	ListAssistantSessions(ctx context.Context, tenantID, userID string) ([]ai.SessionSummary, error)
 	GetAssistantSession(ctx context.Context, tenantID, userID, id string) (ai.Session, []ai.Message, error)
-	AppendAssistantTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage) (string, error)
+	AppendAssistantTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage, outcome string) (string, error)
 	SoftDeleteAssistantSession(ctx context.Context, tenantID, userID, id string) error
 }
 
@@ -205,7 +205,7 @@ func (h *AssistantHandler) Ask(c *gin.Context) {
 	// Persist the turn atomically (lazy session mint on success — a 502/504 retry mints nothing),
 	// stamped feature='assistant' (F9-5) so the thread lives in the ⌘K rail, never the Builder's.
 	// The draft round-trips through draft_json so a resumed thread re-renders its confirm cards.
-	persistedID, perr := h.store.AppendAssistantTurn(ctx, tenantID, userID, sessionID, ai.AutoTitle(message), message, res.Reply, marshalDraft(res.Draft))
+	persistedID, perr := h.store.AppendAssistantTurn(ctx, tenantID, userID, sessionID, ai.AutoTitle(message), message, res.Reply, marshalDraft(res.Draft), res.Outcome)
 	if perr != nil {
 		if errors.Is(perr, ai.ErrSessionNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy phiên", "code": "SESSION_NOT_FOUND"})
@@ -268,13 +268,17 @@ func (h *AssistantHandler) GetSession(c *gin.Context) {
 	}
 	out := make([]gin.H, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, gin.H{
+		row := gin.H{
 			"seq":       m.Seq,
 			"role":      m.Role,
 			"content":   m.Content,
 			"drafts":    h.decodeDrafts(m.DraftJSON),
 			"createdAt": m.CreatedAt,
-		})
+		}
+		if m.Outcome != "" {
+			row["outcome"] = m.Outcome // how the turn ended, as the builder's session read says it
+		}
+		out = append(out, row)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": gin.H{
 		"id":        sess.ID,

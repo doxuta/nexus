@@ -47,7 +47,7 @@ type mcpTokenRepo interface {
 // mcpThreads opens the token's assistant thread (ai.SessionStore.AppendTurn: the one write path into
 // a thread, which creates it when sessionID is "").
 type mcpThreads interface {
-	AppendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage) (string, error)
+	AppendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage, outcome string) (string, error)
 }
 
 // mcpLiveReader reads the issuing builder's live row and their workspace (auth.UserRepository:
@@ -116,7 +116,7 @@ func (s *MCPTokenService) Issue(ctx context.Context, sub auth.Subject, expiresAt
 		"[MCP] Kết nối agent bên ngoài",
 		fmt.Sprintf("Đề xuất của agent kết nối qua MCP bằng token %s (hết hạn %s UTC) hiện ở đây thành thẻ. Agent chỉ đề xuất: bạn xem từng thẻ, Áp dụng vào bản nháp rồi Xuất bản.",
 			shown, exp.UTC().Format("2006-01-02 15:04")),
-		nil)
+		nil, "")
 	if err != nil {
 		return nil, "", fmt.Errorf("services.MCPTokenService.Issue: open thread: %w", err)
 	}
