@@ -1,7 +1,11 @@
 package ai
 
 import (
-	"os"
+	"bytes"
+	"go/ast"
+	"go/parser"
+	"go/printer"
+	"go/token"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -19,8 +23,24 @@ import (
 // human reads it and adds it here: Get*/List*/Load*/Find* read; the rest are named one by one.
 var readVerbs = regexp.MustCompile(`^(Get|List|Load|Find)[A-Z]|^Get$|^(Authorize|HeadCutoff|ColumnExists|RefEntity|AccessProbes|PrivilegedHolders)$`)
 
+// writeWords may not appear anywhere in a read method's name: GetOrCreate, FindOrCreate or ListAndPurge
+// start like a read and then write.
+var writeWords = []string{"Create", "Update", "Delete", "Insert", "Upsert", "Save", "Set", "Put", "Write", "Apply",
+	"Publish", "Revoke", "Grant", "Remove", "Purge", "Touch", "Append", "Mark", "Settle", "Exec", "Execute", "Store",
+	"Add", "Drop", "Reset", "Clear", "Bump", "Commit", "Rollback", "Send", "Enqueue", "Post", "Patch", "Replace",
+	"Restore", "Install", "Import", "Move", "Rename", "Assign"}
+
+var camelWords = regexp.MustCompile(`[A-Z][a-z0-9]*`)
+
+func isReadMethod(name string) bool {
+	if !readVerbs.MatchString(name) {
+		return false
+	}
+	return !slices.ContainsFunc(camelWords.FindAllString(name, -1), func(w string) bool { return slices.Contains(writeWords, w) })
+}
+
 // executorRoots are the types the executor reaches: its own fields, and the probes it gets by
-// type-asserting its reader to AccessProbeCarrier (the only assertion it makes, pinned below).
+// type-asserting its reader to AccessProbeCarrier (the only interface it asserts to, pinned below).
 var executorRoots = []reflect.Type{
 	reflect.TypeOf(toolExecutor{}),
 	reflect.TypeOf((*AccessProbeCarrier)(nil)).Elem(),
@@ -38,6 +58,10 @@ func TestToolExecutor_ReadOnlyPinCatchesAWriter(t *testing.T) {
 	type writer interface {
 		GetEntityByName() error
 		CreateEntity() error
+		GetOrCreateEntity() error
+		FindOrCreateRole() error
+		ListAndPurgeDrafts() error
+		ListFieldsIncludingDeleted() error
 	}
 	type withWriter struct {
 		reader MetadataReader
@@ -45,38 +69,129 @@ func TestToolExecutor_ReadOnlyPinCatchesAWriter(t *testing.T) {
 		hook   func()
 	}
 	got := strings.Join(readOnlyViolations([]reflect.Type{reflect.TypeOf(withWriter{})}), "\n")
-	for _, want := range []string{"CreateEntity", "func"} {
+	for _, want := range []string{"CreateEntity", "GetOrCreateEntity", "FindOrCreateRole", "ListAndPurgeDrafts", "func"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the pin let %q through: %s", want, got)
 		}
 	}
-	if strings.Contains(got, "GetEntityByName") {
+	if strings.Contains(got, "GetEntityByName") || strings.Contains(got, "ListFieldsIncludingDeleted") {
 		t.Errorf("a read method was reported: %s", got)
 	}
 }
 
-// The executor reaches further dependencies only by asserting its reader to another interface; each
-// such interface must be a root above. Read from source: reflection cannot see an assertion.
-func TestToolExecutor_ReaderAssertionsArePinned(t *testing.T) {
+// The executor reaches further dependencies only by asserting a value to another type, which reflection
+// cannot see. So the package's source is read: every type assertion or type-switch case to anything but
+// plain data (basic types, maps, slices, any) must be listed here, and an interface the executor reaches
+// that way must also be a root above.
+var allowedAssertions = map[string]string{
+	"AccessProbeCarrier": "the reader's probes: a root of the pin",
+	"UserTokenLedger":    "the budget guard's ledger (agent loop), not reachable from toolExecutor",
+	"*replayer":          "the cassette gateway (cassette.go), not reachable from toolExecutor",
+}
+
+func TestToolExecutor_TypeAssertionsArePinned(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	assert := regexp.MustCompile(`\breader\.\((\w+)\)`)
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
-		src, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, m := range assert.FindAllStringSubmatch(string(src), -1) {
-			if !slices.ContainsFunc(executorRoots, func(r reflect.Type) bool { return r.Name() == m[1] }) {
-				t.Errorf("%s asserts the reader to %s: add it to executorRoots so the read-only pin covers it", f, m[1])
-			}
+		for _, bad := range assertionViolations(t, f, nil) {
+			t.Error(bad)
 		}
 	}
+}
+
+// The scan must catch the shapes a regex missed: a package-qualified or pointer target, a chained
+// assertion on an embedded reader, a type switch.
+func TestToolExecutor_TypeAssertionScanCatchesEveryShape(t *testing.T) {
+	src := `package ai
+func (e *toolExecutor) x() {
+	_, _ = e.reader.(AccessProbeCarrier)
+	_, _ = e.reader.(services.MetadataWriter)
+	_ = e.reader.(*readerWithAccessProbes).MetadataReader.(MetadataReader)
+	r := e.reader
+	switch r.(type) {
+	case interface{ CreateEntity() error }, nil:
+	}
+	_, _ = e.args.(map[string]any)
+	_, _ = e.args.(string)
+}`
+	got := strings.Join(assertionViolations(t, "sample.go", []byte(src)), "\n")
+	for _, want := range []string{"services.MetadataWriter", "*readerWithAccessProbes", "MetadataReader", "CreateEntity"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the scan let an assertion to %s through: %s", want, got)
+		}
+	}
+	for _, ok := range []string{"AccessProbeCarrier", "map[string]any", "string", "nil"} {
+		if strings.Contains(got, "to "+ok+":") {
+			t.Errorf("the scan reported %s: %s", ok, got)
+		}
+	}
+}
+
+// assertionViolations parses one file (src, or the file at name when src is nil) and reports each type
+// assertion or type-switch case whose target is neither plain data nor in allowedAssertions.
+func assertionViolations(t *testing.T, name string, src []byte) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	var source any // a nil []byte would parse as an empty file
+	if src != nil {
+		source = src
+	}
+	file, err := parser.ParseFile(fset, name, source, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	render := func(n ast.Node) string {
+		var b bytes.Buffer
+		_ = printer.Fprint(&b, fset, n)
+		return b.String()
+	}
+	var out []string
+	check := func(at token.Pos, target ast.Expr) {
+		if isPlainData(target) {
+			return
+		}
+		if typ := render(target); allowedAssertions[typ] == "" {
+			out = append(out, fset.Position(at).String()+" asserts to "+typ+": list it in allowedAssertions, and add an interface the executor reaches to executorRoots")
+		}
+	}
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.TypeAssertExpr:
+			if n.Type != nil { // nil = the x.(type) of a switch, judged by its cases below
+				check(n.Pos(), n.Type)
+			}
+		case *ast.TypeSwitchStmt:
+			for _, c := range n.Body.List {
+				for _, target := range c.(*ast.CaseClause).List {
+					check(target.Pos(), target)
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// isPlainData reports a target that carries no behaviour: a predeclared type, a map, a slice or an array
+// of plain data, or the empty interface.
+func isPlainData(e ast.Expr) bool {
+	switch e := e.(type) {
+	case *ast.Ident:
+		return slices.Contains([]string{"any", "nil", "string", "bool", "error", "byte", "rune", "int", "int8", "int16", "int32",
+			"int64", "uint", "uint8", "uint16", "uint32", "uint64", "float32", "float64"}, e.Name)
+	case *ast.MapType:
+		return isPlainData(e.Key) && isPlainData(e.Value)
+	case *ast.ArrayType:
+		return isPlainData(e.Elt)
+	case *ast.InterfaceType:
+		return len(e.Methods.List) == 0
+	}
+	return false
 }
 
 // readOnlyViolations walks the types reachable from roots and reports every method that is not a read
@@ -93,7 +208,7 @@ func readOnlyViolations(roots []reflect.Type) []string {
 		switch t.Kind() {
 		case reflect.Interface:
 			for i := range t.NumMethod() {
-				if m := t.Method(i); !readVerbs.MatchString(m.Name) {
+				if m := t.Method(i); !isReadMethod(m.Name) {
 					out = append(out, path+" ("+t.String()+") has "+m.Name+": not a read")
 				}
 			}
