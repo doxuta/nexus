@@ -564,12 +564,19 @@ func (h *AIBuilderHandler) SettleProposal(c *gin.Context) {
 // the agent replays (the agent prepends its OWN persona + grounding). Defense-in-depth: only
 // user/assistant roles feed the gateway (persisted rows are always one of those, server-written),
 // and an empty-content assistant turn (a max_steps turn that produced only a draft) is skipped so
-// the gateway never receives an empty assistant message.
+// the gateway never receives an empty assistant message. A turn the model declined is left out whole,
+// its prompt with its empty reply: Anthropic's guidance on a refusal is to remove or reset the declined
+// turn before going on, and replaying it would put the declined prompt and the next one in a row as two
+// user messages (issue #30 item 5). Each prompt is followed by its own reply (AppendTurn writes a turn's
+// two rows at consecutive seqs), so the reply after a user row says how that prompt ended.
 func buildHistory(prior []ai.Message, newUserMsg string) []ai.ChatMessage {
 	hist := make([]ai.ChatMessage, 0, len(prior)+1)
-	for _, m := range prior {
+	for i, m := range prior {
 		switch m.Role {
 		case "user":
+			if i+1 < len(prior) && prior[i+1].Refused() {
+				continue
+			}
 			hist = append(hist, ai.ChatMessage{Role: "user", Content: m.Content})
 		case "assistant":
 			if strings.TrimSpace(m.Content) == "" {
