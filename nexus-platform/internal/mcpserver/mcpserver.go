@@ -174,6 +174,11 @@ func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (res *mcp.C
 		return out, nil
 	}
 	draft, err := json.Marshal(added)
+	if err == nil && len(draft) > maxProposalBytes {
+		return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(
+			"PROPOSAL_TOO_LARGE: this proposal is %d KiB, more than the %d KiB one Studio card holds, so nothing was proposed. Split it into smaller proposals.",
+			len(draft)>>10, maxProposalBytes>>10)}}}, nil
+	}
 	if err == nil {
 		_, err = s.threads.AppendTurn(ctx, p.TenantID, p.UserID, p.SessionID, "",
 			"[MCP] Agent gọi "+req.Params.Name, "Agent đề xuất qua MCP: "+result(answer).Result.Buffered+".", draft)
@@ -199,13 +204,28 @@ func (s *server) frozen(ctx context.Context, p services.MCPPrincipal) (time.Time
 	return until, frozen
 }
 
+// Issue #22: a key holder could append to its thread without end, and every proposal re-reads the
+// whole thread. maxThreadTurns caps the turns one thread takes (the opening turn included); a key that
+// needs more is replaced by a new one, which opens a new thread. maxProposalBytes caps one turn's
+// draft row; the SDK's own 4 MiB request cap was the only bound before.
+const (
+	maxThreadTurns   = 200
+	maxProposalBytes = 256 << 10
+)
+
+// errThreadFull is a thread at maxThreadTurns.
+var errThreadFull = errors.New("mcpserver: thread full")
+
 // priorProposals reads the proposals of the token's thread that are still pending: a card the builder
 // applied, discarded or undid in the Studio is not replayed (issue #42), so the validators judge it
-// by the live schema and the builder's drafts only.
+// by the live schema and the builder's drafts only. A full thread is errThreadFull.
 func (s *server) priorProposals(ctx context.Context, p services.MCPPrincipal) ([]ai.DraftItem, error) {
 	_, msgs, err := s.threads.GetSession(ctx, p.TenantID, p.UserID, p.SessionID)
 	if err != nil {
 		return nil, fmt.Errorf("mcpserver.priorProposals: %w", err)
+	}
+	if len(msgs) >= 2*maxThreadTurns { // a turn is two messages: the call and the proposal
+		return nil, errThreadFull
 	}
 	return ai.PendingProposals(msgs), nil
 }
@@ -213,9 +233,12 @@ func (s *server) priorProposals(ctx context.Context, p services.MCPPrincipal) ([
 // threadError is the tool error of a proposal that cannot reach its thread.
 func (s *server) threadError(p services.MCPPrincipal, err error) *mcp.CallToolResult {
 	msg := "THREAD_UNAVAILABLE: the proposal could not be saved to the Studio thread, so nothing was proposed. Try again."
-	if errors.Is(err, ai.ErrSessionNotFound) {
+	switch {
+	case errors.Is(err, errThreadFull):
+		msg = fmt.Sprintf("THREAD_FULL: the Studio thread of this token holds %d turns, the most one thread takes, so nothing was proposed. Ask the builder to issue a new MCP token: it opens a new thread.", maxThreadTurns)
+	case errors.Is(err, ai.ErrSessionNotFound):
 		msg = "THREAD_DELETED: the builder deleted the Studio thread of this token, so nothing was proposed. Ask them to issue a new MCP token."
-	} else {
+	default:
 		s.logger.Error("mcpserver: token thread unavailable", zap.String("tenant_id", p.TenantID), zap.String("mcp_token_id", p.TokenID), zap.Error(err))
 	}
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: msg}}, IsError: true}

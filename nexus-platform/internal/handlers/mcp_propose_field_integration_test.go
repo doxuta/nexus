@@ -1,10 +1,12 @@
 //go:build integration
 
-// Issue #22 item 1 over a real /mcp on real MySQL: propose_field judges a dependent picklist against the
-// builder's DRAFT of its parent (a delivered project, read the way cmd/server/main.go's aiDraftFieldReader
-// reads fields), and files no card for a table that is not in the token's tenant.
+// Issue #22 over a real /mcp on real MySQL. Item 1: propose_field judges a dependent picklist against
+// the builder's DRAFT of its parent (a delivered project, read the way cmd/server/main.go's
+// aiDraftFieldReader reads fields), and files no card for a table that is not in the token's tenant.
+// Item 2: the brake in front of /mcp, judged on the real handler's answers.
 //
-// Run: go test -tags=integration ./internal/handlers/ -run TestMCP_ProposeField
+// Run: go test -tags=integration ./internal/handlers/ -run 'TestMCP_(ProposeField|Brake)'
+
 package handlers
 
 import (
@@ -13,7 +15,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
@@ -25,6 +29,7 @@ import (
 	"nexus/platform/internal/mcpserver"
 	"nexus/platform/internal/metadata"
 	"nexus/platform/internal/metaversion"
+	"nexus/platform/internal/middleware"
 	"nexus/platform/internal/services"
 )
 
@@ -125,4 +130,48 @@ func TestMCP_ProposeFieldJudgesTheBuildersDraftAndItsOwnTenant(t *testing.T) {
 			t.Fatalf("cards in the thread = %d (%v); want only the accepted one", cards, err)
 		}
 	})
+}
+
+// The brake trusts two answers of the real handler: a 2xx marks a token working, a 401 forgets it.
+func TestMCP_BrakeStopsGuessesNotTheWorkingKey(t *testing.T) {
+	gdb, sx := a4SetupMigratedDB(t)
+	ctx := context.Background()
+	const tenant = "ten-mcp-brake"
+	builderID := mcpBuilder(t, gdb, tenant, "mcp-brake")
+	store := ai.NewSessionStore(sx)
+	mcpSvc := services.NewMCPTokenService(auth.NewMCPTokenRepository(gdb), store, auth.NewUserRepository(gdb))
+	tok, secret, err := mcpSvc.Issue(ctx, auth.Subject{UserID: builderID, TenantID: tenant, IsAdmin: true}, nil)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	agent := ai.NewAIBuilderAgent(config.AIConfig{}, nil, metadata.NewRepository(gdb), nil, nil, zap.NewNop())
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	// as cmd/server/main.go, with a small IP budget
+	r.Any("/mcp", middleware.MCPRateLimit(middleware.MCPRateLimitConfig{ProbeMax: 3, KeyMax: 100, Window: time.Minute}),
+		gin.WrapH(mcpserver.New(mcpSvc, agent, store, nil, zap.NewNop())))
+
+	for i, step := range []struct {
+		credential string
+		want       int
+	}{
+		{secret, 200},       // a real key's first call: the IP's lookup 1 of 3; it works from now on
+		{"nxm_guess1", 401}, // lookup 2
+		{"nxm_guess2", 401}, // lookup 3
+		{"nxm_guess3", 429}, // the IP's budget is spent: refused before any lookup
+		{secret, 200},       // the working key is not the prober
+	} {
+		if got := mcpStatus(t, r, step.credential); got != step.want {
+			t.Fatalf("step %d: %d; want %d", i+1, got, step.want)
+		}
+	}
+	if err := mcpSvc.Revoke(ctx, tenant, builderID, tok.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if got := mcpStatus(t, r, secret); got != 401 { // the key's own budget, and now forgotten
+		t.Fatalf("the revoked key: %d; want 401", got)
+	}
+	if got := mcpStatus(t, r, secret); got != 429 { // back on the spent IP budget
+		t.Fatalf("the revoked key again: %d; want 429", got)
+	}
 }

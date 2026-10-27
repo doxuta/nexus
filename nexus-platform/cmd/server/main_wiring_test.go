@@ -236,3 +236,25 @@ func isLiteral(e ast.Expr) bool {
 	_, ok := e.(*ast.BasicLit)
 	return ok
 }
+
+// TestMainWiresTheMCPBrake (issue #22): /mcp sits outside /api/v1, so none of RegisterAPIRoutes'
+// limiters reach it. Its own brake must sit in front of the handler on the route itself, with its
+// budgets and the trusted proxies read from config (a zero budget switches that brake off).
+func TestMainWiresTheMCPBrake(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	flat := strings.Join(strings.Fields(string(src)), "")
+	for _, want := range []string{
+		"mcpLimiter:=middleware.MCPRateLimit(middleware.MCPRateLimitConfig{",
+		"ProbeMax:cfg.APIKeyProbeMaxPerMin,",
+		"KeyMax:cfg.DataRateLimitPerMin,",
+		"TrustedProxyCIDRs:cfg.TrustedProxyCIDRs,",
+		`r.Any("/mcp",mcpLimiter,gin.WrapH(mcpserver.New(`,
+	} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("main.go lost %q — /mcp would answer guesses and floods unbraked", want)
+		}
+	}
+}

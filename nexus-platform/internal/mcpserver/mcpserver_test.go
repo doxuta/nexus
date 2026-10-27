@@ -409,3 +409,32 @@ func TestCall_DuringAFreezeReadsWorkProposalsDoNot(t *testing.T) {
 		t.Fatalf("a read while frozen: %s (error %v); want it served", text(res), res.IsError)
 	}
 }
+
+// Issue #22: a key holder could grow its thread without end, and every proposal re-reads the whole
+// thread. A thread at its turn cap takes no more proposals (reads still work), with a code that says
+// what to do; one turn below it, a proposal lands.
+func TestCall_AFullThreadTakesNoMoreProposals(t *testing.T) {
+	th := &fakeThreads{msgs: make([]ai.Message, 2*maxThreadTurns)}
+	run := &fakeRunner{res: `{"ok":true,"result":{"buffered":"entity \"x\""}}`, added: []ai.DraftItem{{Kind: "entity", Entity: &ai.DraftEntity{Name: "x"}}}}
+	ts := serve(t, &fakeVerifier{}, run, th)
+
+	res := callTool(t, ts, "nexus_propose_entity", map[string]any{"name": "x"})
+	if !res.IsError || !strings.HasPrefix(text(res), "THREAD_FULL:") || len(run.calls)+len(th.appends) != 0 {
+		t.Fatalf("propose on a full thread: %s (error %v), ran %d, wrote %d; want THREAD_FULL before any work", text(res), res.IsError, len(run.calls), len(th.appends))
+	}
+	th.msgs = th.msgs[:2*maxThreadTurns-2]
+	if res = callTool(t, ts, "nexus_propose_entity", map[string]any{"name": "x"}); res.IsError || len(th.appends) != 1 {
+		t.Fatalf("one turn below the cap: %s (error %v); want the proposal to land", text(res), res.IsError)
+	}
+}
+
+// One proposal's thread row is capped: an oversized one is refused and nothing is written.
+func TestCall_AnOversizedProposalIsRefused(t *testing.T) {
+	big := []ai.DraftItem{{Kind: "records", Records: &ai.DraftRecords{Entity: "suppliers", Rows: []map[string]any{{"note": strings.Repeat("x", maxProposalBytes)}}}}}
+	run := &fakeRunner{res: `{"ok":true,"result":{"buffered":"1 record mẫu cho \"suppliers\""}}`, added: big}
+	th := &fakeThreads{}
+	res := callTool(t, serve(t, &fakeVerifier{}, run, th), "nexus_propose_records", map[string]any{"entity": "suppliers"})
+	if !res.IsError || !strings.HasPrefix(text(res), "PROPOSAL_TOO_LARGE:") || len(th.appends) != 0 {
+		t.Fatalf("an oversized proposal: %s (error %v), wrote %d; want PROPOSAL_TOO_LARGE and no write", text(res), res.IsError, len(th.appends))
+	}
+}
