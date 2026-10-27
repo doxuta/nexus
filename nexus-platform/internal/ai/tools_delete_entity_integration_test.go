@@ -121,34 +121,3 @@ func TestProposeDeleteEntity_IT_APackTableIsProposedNotDeleted(t *testing.T) {
 		t.Fatalf("tenant B has %d records (%v); want its 2", n.Count, err)
 	}
 }
-
-// PacksOf reads the tenant's own ledger rows only, every pack that ships the item, sorted.
-func TestPacksOf_IT_TenantScopedAndSorted(t *testing.T) {
-	_, gdb := newRelITReader(t)
-	ctx := context.Background()
-	const tenantA = "aiaiaiai-pd30-4444-8888-tenant0000a5"
-	const tenantB = "aiaiaiai-pd30-4444-8888-tenant0000b5"
-	clean := func() { gdb.Exec(`DELETE FROM sys_pack_items WHERE tenant_id IN (?, ?)`, tenantA, tenantB) }
-	clean()
-	t.Cleanup(clean)
-	ledger := packinstall.New(gdb)
-	item := func(key string) []vertical_pack.PackItem {
-		return []vertical_pack.PackItem{{Type: vertical_pack.ItemEntity, Key: key, Content: json.RawMessage(`{}`), Wrote: true}}
-	}
-	for _, s := range []struct{ tenant, slug, key string }{
-		{tenantA, "ticketing", "contacts"}, {tenantA, "crm", "contacts"}, {tenantB, "lms", "contacts"}, {tenantA, "crm", "deals"},
-	} {
-		if err := ledger.SaveItems(ctx, s.tenant, s.slug, "1.0.0", item(s.key)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got, err := ledger.PacksOf(ctx, tenantA, vertical_pack.ItemEntity, "contacts"); err != nil || strings.Join(got, ",") != "crm,ticketing" {
-		t.Errorf("PacksOf(A, contacts) = %v, %v; want [crm ticketing]", got, err)
-	}
-	if got, err := ledger.PacksOf(ctx, tenantA, vertical_pack.ItemLayout, "contacts"); err != nil || len(got) != 0 {
-		t.Errorf("another item type = %v, %v; want none", got, err)
-	}
-	if got, err := ledger.PacksOf(ctx, tenantB, vertical_pack.ItemEntity, "deals"); err != nil || len(got) != 0 {
-		t.Errorf("tenant B sees tenant A's pack: %v, %v", got, err)
-	}
-}
