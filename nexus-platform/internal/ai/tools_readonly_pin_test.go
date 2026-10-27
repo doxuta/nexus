@@ -17,7 +17,7 @@ import (
 
 // readVerbs are the method names an executor dependency may have. A new method fails the pin until a
 // human reads it and adds it here: Get*/List*/Load*/Find* read; the rest are named one by one.
-var readVerbs = regexp.MustCompile(`^(Get|List|Load|Find)[A-Z]|^Get$|^(Authorize|HeadCutoff|ColumnExists|RefEntity|AccessProbes)$`)
+var readVerbs = regexp.MustCompile(`^(Get|List|Load|Find)[A-Z]|^Get$|^(Authorize|HeadCutoff|ColumnExists|RefEntity|AccessProbes|PrivilegedHolders)$`)
 
 // executorRoots are the types the executor reaches: its own fields, and the probes it gets by
 // type-asserting its reader to AccessProbeCarrier (the only assertion it makes, pinned below).
