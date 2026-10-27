@@ -79,13 +79,19 @@ function renderValue(v: unknown): string {
   if (typeof v === "object") return JSON.stringify(v);
   return String(v);
 }
+// A key whose stored value is the same on both sides is not a change (issue #67): a role update carries the
+// role's name on both sides so the row names the role, and drawn it read as a rename. The stored values are
+// compared, not their rendering (two amounts can draw the same "1,2 tr"); the server's JSON has stable key order.
 function buildDiffRows(diff: { before?: Record<string, unknown>; after?: Record<string, unknown> }) {
   const keys = Array.from(new Set([...Object.keys(diff.before ?? {}), ...Object.keys(diff.after ?? {})]));
-  return keys.map((k) => ({ field: k, before: renderValue(diff.before?.[k]), after: renderValue(diff.after?.[k]) }));
+  return keys
+    .filter((k) => !(k in (diff.before ?? {}) && k in (diff.after ?? {}) && JSON.stringify(diff.before?.[k]) === JSON.stringify(diff.after?.[k])))
+    .map((k) => ({ field: k, before: renderValue(diff.before?.[k]), after: renderValue(diff.after?.[k]) }));
 }
 
 const SESSION_META = "__workspace_session__";
 const LAYOUT_META = "__layout__";
+const ROLE_META = "__role__";
 
 /** The action word of a row: a workspace session is "Mở"/"Đóng" (D-9 reuses create/delete), the rest by action. */
 function rowVerb(entry: AuditEntry): string {
@@ -109,6 +115,14 @@ function layoutTarget(entry: AuditEntry, tableLabel: (entityName: string) => str
   if (!entity) return undefined;
   const viewKey = `audit.layout.view.${view}` as I18nKey;
   return [tableLabel(entity), view ? t(viewKey) : ""].filter(Boolean).join(" · ");
+}
+
+/** A role row's record cell names the role (issue #67): its name is in the diff, on both sides of an update, but an
+ * unchanged name is no longer drawn there. */
+function roleTarget(entry: AuditEntry): string | undefined {
+  if (entry.entityName !== ROLE_META) return undefined;
+  const name = entry.diff?.after?.name ?? entry.diff?.before?.name;
+  return typeof name === "string" && name ? name : undefined;
 }
 
 /** The loaded list for one request key (filter + refresh tick). */
@@ -416,7 +430,7 @@ function AuditRow({ entry, actorName, entityLabel, tableLabel, defaultOpen }: {
   const actorDisplay = actorName ?? entry.actorLabel ?? SYSTEM_ACTORS[entry.actorUserId] ?? shortId(entry.actorUserId);
   const verb = rowVerb(entry);
   const until = sessionUntil(entry);
-  const target = layoutTarget(entry, tableLabel);
+  const target = layoutTarget(entry, tableLabel) ?? roleTarget(entry);
   const at = fmtAt(entry.at);
   const toggleLabel = tf("page.audit.toggleDiff", { actor: actorDisplay, entity: entityLabel, at });
 

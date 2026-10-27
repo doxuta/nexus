@@ -270,6 +270,55 @@ describe("AuditLog", () => {
     });
   });
 
+  // issue #67: a role update's diff carries the role's name on both sides (so the row names the role);
+  // drawn as a "name | X | X" row it read as a rename. A key whose value did not change is not drawn,
+  // and a role row names its role in the record column instead.
+  describe("unchanged keys (issue #67)", () => {
+    const GRANT = { entityName: "crm_accounts", action: "view", accessLevel: "all" };
+    const ROLE: AuditEntry = {
+      id: "r1", actorUserId: "u1", entityName: "__role__", recordId: "4f1c0de0-0000-4000-8000-000000000003", action: "update",
+      diff: {
+        before: { name: "crm_sales_rep", actions: [GRANT] },
+        after: { name: "crm_sales_rep", actions: [GRANT, { entityName: "tickets", action: "view", accessLevel: "all" }] },
+      },
+      at: "2026-10-27T01:00:00Z",
+    };
+    const SAME: AuditEntry = { ...ROLE, id: "r2", diff: { before: { name: "crm_sales_rep" }, after: { name: "crm_sales_rep" } } };
+
+    it("a grants-only role update shows the grants, no name row, and names the role in the record column", async () => {
+      vi.mocked(listAuditFiltered).mockResolvedValue({ entries: [ROLE], limit: 50 });
+      render(<AuditLog />);
+      const diff = await screen.findByRole("table", { name: "Trường thay đổi" });
+      expect(within(diff).getByText("actions")).toBeInTheDocument();
+      expect(within(diff).queryByText("name")).not.toBeInTheDocument();
+      expect(within(diff).queryByText("crm_sales_rep")).not.toBeInTheDocument();
+      expect(screen.getByText("crm_sales_rep").closest("td")).not.toBeNull();
+      expect(screen.queryByText("4f1c0de0")).not.toBeInTheDocument();
+    });
+
+    it("a save that changed nothing has no diff to open", async () => {
+      vi.mocked(listAuditFiltered).mockResolvedValue({ entries: [SAME, UPDATE], limit: 50 });
+      render(<AuditLog />);
+      expect(await screen.findByText("crm_sales_rep")).toBeInTheDocument(); // the role row, named
+      // Only the contact update keeps a toggle; the role row that changed nothing has none.
+      expect(toggles()).toHaveLength(1);
+      expect(toggles()[0]).toHaveAccessibleName(/Liên hệ/);
+    });
+
+    it("judges the stored values, not how they render: a change that draws the same is still a row", async () => {
+      // 1 200 000 and 1 200 001 both draw "1,2 tr"; an object or an array is compared whole.
+      const MONEY: AuditEntry = { ...UPDATE, diff: {
+        before: { stage: "won", amount: { amount: 1_200_000 }, tags: ["a"], owner: { id: "u1" } },
+        after: { stage: "won", amount: { amount: 1_200_001 }, tags: ["a"], owner: { id: "u2" }, note: null },
+      } };
+      vi.mocked(listAuditFiltered).mockResolvedValue({ entries: [MONEY], limit: 50 });
+      render(<AuditLog />);
+      const diff = await screen.findByRole("table", { name: "Trường thay đổi" });
+      const fields = within(diff).getAllByRole("rowheader").map((th) => th.textContent);
+      expect(fields).toEqual(["amount", "owner", "note"]);
+    });
+  });
+
   // specs/062 L3 T056: the builder's name on the customer's trail, the layout rows, the session rows.
   describe("builder rows (specs/062 L3)", () => {
     const BUILDER = "b0000000-aaaa-4bbb-8ccc-000000000001";
