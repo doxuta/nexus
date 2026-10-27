@@ -350,8 +350,8 @@ type streamChunk struct {
 }
 
 // foldStream folds a streamed completion into the ChatResponse a non-streamed one gives: the text and the
-// refusal text joined, each tool call's arguments joined by its index (its id, type and name are taken as
-// sent, so a gateway that repeats them on every piece, as 9router does, is read right), the last finish
+// refusal text joined, each tool call's arguments joined by its index ("{}" when none came; its id, type and
+// name are taken as sent, so a gateway that repeats them on every piece, as 9router does, is read right), the last finish
 // reason and stop reasons, and the last usage the stream sent (OpenAI sends it once, after the finish).
 // A stream is finished by [DONE] or a finish reason (9router sends no [DONE]); one that stops before
 // either, or that sends an error event, is an error: its partial tool calls are not an answer.
@@ -429,6 +429,13 @@ func foldStream(body []byte) (ChatResponse, error) {
 		return ChatResponse{}, errors.New("the stream ended before the answer finished")
 	}
 	if choice != nil {
+		// A call without arguments streams no piece of them; a whole answer sends "{}", and the gateway
+		// refuses "" when the call is sent back (9router: "tool_use.input: Input should be an object").
+		for i := range choice.Message.ToolCalls {
+			if strings.TrimSpace(choice.Message.ToolCalls[i].Function.Arguments) == "" {
+				choice.Message.ToolCalls[i].Function.Arguments = "{}"
+			}
+		}
 		out.Choices = []ChatChoice{*choice}
 	}
 	return out, nil

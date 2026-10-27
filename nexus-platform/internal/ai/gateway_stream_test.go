@@ -80,6 +80,17 @@ func TestGateway_Complete_FoldsTheStream(t *testing.T) {
 				{ID: "toolu_2", Type: "function", Function: ToolCallFunc{Name: "list_entities", Arguments: "{}"}},
 			}}, FinishReason: "tool_calls"}},
 				Usage: Usage{PromptTokens: 36836, CompletionTokens: 120, TotalTokens: 36956}}},
+		{"a tool call without arguments streams no piece of them: read as {}, as a whole answer sends it",
+			// 9router, 2026-10-27: list_packs came back with arguments "" and the next call, which sent it back,
+			// failed with 400 "tool_use.input: Input should be an object".
+			sse(`{"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"toolu_1","type":"function","function":{"name":"list_roles","arguments":""}}]},"finish_reason":null}]}`,
+				`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"toolu_1","function":{"arguments":"{\"grants\": true}"}}]},"finish_reason":null}]}`,
+				`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"toolu_2","type":"function","function":{"name":"list_packs","arguments":""}}]},"finish_reason":null}]}`,
+				`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`),
+			ChatResponse{Choices: []ChatChoice{{Message: ChatMessage{Role: "assistant", ToolCalls: []ToolCall{
+				{ID: "toolu_1", Type: "function", Function: ToolCallFunc{Name: "list_roles", Arguments: `{"grants": true}`}},
+				{ID: "toolu_2", Type: "function", Function: ToolCallFunc{Name: "list_packs", Arguments: "{}"}},
+			}}, FinishReason: "tool_calls"}}}},
 		{"no [DONE], usage on the finish chunk: 9router's stream as recorded on 2026-10-27",
 			"data: " + `{"id":"chatcmpl-msg_011","object":"chat.completion.chunk","created":1793086291,"model":"claude-opus-5-5","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}` + "\n\n" +
 				"data: " + `{"id":"chatcmpl-msg_011","object":"chat.completion.chunk","created":1793086291,"model":"claude-opus-5-5","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}` + "\n\n" +
