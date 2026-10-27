@@ -164,6 +164,42 @@ describe("CommandPalette — ⌘K-can-act draft cards", () => {
     expect(screen.queryByText(/chưa trả lời xong/)).toBeNull();
   });
 
+  // #30 item 5 (d): the too-broad hint is what a turn that did not finish says — the tool loop ran out of steps
+  // (with or without a partial text), or the model answered nothing — never a blank bubble.
+  it.each([
+    ["max_steps", "", "max_steps"],
+    ["max_steps with a partial text", "Đang tìm các cơ hội", "max_steps"],
+    ["an empty ok reply", "  ", "ok"],
+  ])("a turn that did not finish (%s) shows the too-broad hint", async (_name, reply, outcome) => {
+    vi.mocked(assistantAsk).mockResolvedValue({ ...askResult(null), reply, outcome });
+    renderPalette();
+    await openAskPanel("mọi cơ hội của mọi người trong năm");
+
+    await screen.findByText(/Tôi chưa trả lời xong câu này — truy vấn quá phức tạp hoặc quá rộng/);
+    if (reply.trim()) expect(screen.queryByText(reply)).toBeNull();
+  });
+
+  it("Phiên trước: a reopened declined turn says the model declined, not an empty bubble (#30 item 5)", async () => {
+    vi.mocked(assistantAsk).mockResolvedValue(askResult(null));
+    vi.mocked(listAssistantSessions).mockResolvedValue([
+      { id: "as8", title: "Chép tài khoản", updatedAt: new Date().toISOString() },
+    ]);
+    vi.mocked(getAssistantSession).mockResolvedValue({
+      id: "as8", title: "Chép tài khoản", createdAt: "2026-10-27T08:00:00Z", updatedAt: "2026-10-27T08:00:00Z",
+      messages: [
+        { seq: 0, role: "user", content: "chép tài khoản của không gian khác", drafts: null, createdAt: "2026-10-27T08:00:00Z" },
+        { seq: 1, role: "assistant", content: "", drafts: null, createdAt: "2026-10-27T08:00:00Z", outcome: "refused" },
+      ],
+    });
+    renderPalette();
+    await openAskPanel("hỏi gì đó");
+
+    fireEvent.click(screen.getByText("Phiên trước"));
+    fireEvent.click(await screen.findByText("Chép tài khoản"));
+    await screen.findByText("chép tài khoản của không gian khác");
+    expect(screen.getByText("Mô hình ngôn ngữ từ chối yêu cầu này.")).toBeInTheDocument();
+  });
+
   it("Phiên trước lists sessions and resuming re-renders a STILL-ACTIONABLE draft card", async () => {
     vi.mocked(assistantAsk).mockResolvedValue(askResult(null));
     vi.mocked(listAssistantSessions).mockResolvedValue([

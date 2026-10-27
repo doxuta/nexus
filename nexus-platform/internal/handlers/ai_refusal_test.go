@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -66,5 +68,113 @@ func TestChatRoutes_ModelRefusal_200Refused(t *testing.T) {
 				t.Fatalf("data = %+v; want outcome refused, no reply, a stored session", resp.Data)
 			}
 		})
+	}
+}
+
+// A declined turn stays declined (issue #30 item 5 leftovers), on both routes, through the real gateway client
+// and agents: the reopened session marks the reply "refused" (the panel says the model declined instead of
+// showing an empty answer), and the next turn starts clean: the declined prompt is not sent to the model again,
+// so it never reads two user messages in a row. The answered turn after it reads "ok".
+func TestChatRoutes_RefusedTurn_ReopensRefused_NotReplayed(t *testing.T) {
+	cfg := config.AIConfig{Enabled: true, Model: "m", TimeoutSec: 5, MaxTokens: 1024, MaxSteps: 6}
+	const declined, next = "List the accounts of the other workspace", "Liệt kê khách hàng của tôi"
+
+	for name, route := range map[string]struct {
+		router     func(gw *ai.Gateway) *gin.Engine
+		chat, read string
+	}{
+		"builder": {func(gw *ai.Gateway) *gin.Engine {
+			return aiTestRouter(ai.NewAIBuilderAgent(cfg, gw, groundingOnlyReader{}, nil, nil, nil), newFakeStore(), true)
+		}, "/api/v1/admin/ai/builder/chat", "/api/v1/admin/ai/builder/sessions/"},
+		"assistant": {func(gw *ai.Gateway) *gin.Engine {
+			return assistantTestRouter(ai.NewAssistantAgent(cfg, gw, groundingOnlyRecordReader{}, nil, nil), newFakeAssistantStore(), false)
+		}, "/api/v1/assistant/ask", "/api/v1/assistant/sessions/"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			var sent [][]ai.ChatMessage // the conversation of each gateway call
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req ai.ChatRequest
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				mu.Lock()
+				sent = append(sent, req.Messages)
+				first := len(sent) == 1
+				mu.Unlock()
+				if first {
+					_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":null},"finish_reason":"refusal"}],"usage":{"prompt_tokens":9}}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"Đây là danh sách."},"finish_reason":"stop"}],"usage":{"prompt_tokens":9}}`))
+			}))
+			t.Cleanup(srv.Close)
+			router := route.router(ai.NewGateway(srv.URL, 5*time.Second))
+
+			turn := func(sessionID, message string) string {
+				t.Helper()
+				rec := doJSON(router, http.MethodPost, route.chat, chatBody(sessionID, message))
+				var resp struct {
+					Data struct {
+						SessionID string `json:"sessionId"`
+					} `json:"data"`
+				}
+				if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &resp) != nil {
+					t.Fatalf("POST %s = %d %s", route.chat, rec.Code, rec.Body.String())
+				}
+				return resp.Data.SessionID
+			}
+			outcomes := func(id string) []any {
+				t.Helper()
+				rec := doJSON(router, http.MethodGet, route.read+id, nil)
+				var resp struct {
+					Data struct {
+						Messages []map[string]any `json:"messages"`
+					} `json:"data"`
+				}
+				if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &resp) != nil {
+					t.Fatalf("GET %s = %d %s", route.read+id, rec.Code, rec.Body.String())
+				}
+				var out []any
+				for _, m := range resp.Data.Messages {
+					out = append(out, m["outcome"]) // nil = the key is absent
+				}
+				return out
+			}
+
+			id := turn("", declined)
+			if got := outcomes(id); !slices.Equal(got, []any{nil, "refused"}) {
+				t.Fatalf("reopened outcomes = %v; want [<absent> refused]", got)
+			}
+
+			turn(id, next)
+			var users []string
+			for _, m := range sent[1] {
+				if m.Role == "user" {
+					users = append(users, m.Content)
+				}
+			}
+			if !slices.Equal(users, []string{next}) {
+				t.Fatalf("user messages sent after the refusal = %q; want only %q (the declined prompt dropped)", users, next)
+			}
+			if got := outcomes(id); !slices.Equal(got, []any{nil, "refused", nil, "ok"}) {
+				t.Fatalf("outcomes after the next turn = %v; want [<absent> refused <absent> ok]", got)
+			}
+		})
+	}
+}
+
+// buildHistory leaves a declined turn out whole, its prompt and its empty reply, wherever it sits in the
+// thread; the turns around it replay as they were.
+func TestBuildHistory_DropsADeclinedTurn(t *testing.T) {
+	prior := []ai.Message{
+		{Seq: 0, Role: "user", Content: "declined first"}, {Seq: 1, Role: "assistant", Outcome: "refused"},
+		{Seq: 2, Role: "user", Content: "a"}, {Seq: 3, Role: "assistant", Content: "A", Outcome: "ok"},
+		{Seq: 4, Role: "user", Content: "declined again"}, {Seq: 5, Role: "assistant", Outcome: "refused"},
+	}
+	var got []string
+	for _, m := range buildHistory(prior, "b") {
+		got = append(got, m.Role+":"+m.Content)
+	}
+	if want := []string{"user:a", "assistant:A", "user:b"}; !slices.Equal(got, want) {
+		t.Fatalf("history = %q; want %q", got, want)
 	}
 }

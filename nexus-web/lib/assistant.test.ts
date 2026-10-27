@@ -9,7 +9,7 @@ import {
 } from "@/lib/api";
 import {
   assistantNotice, getRecordCreateDraft, getRecordUpdateDraft,
-  assistantDraftSummary, assistantDraftValueText, assistantMessagesToTurns,
+  assistantDraftSummary, assistantDraftValueText, assistantMessagesToTurns, askReplyText,
   type AssistantDraft,
 } from "@/lib/assistant";
 
@@ -286,5 +286,38 @@ describe("assistantMessagesToTurns (resume mapper)", () => {
     expect(turns[2].role).toBe("user");
     expect(turns[2].drafts).toBeUndefined();
     expect(turns[3].drafts).toBeUndefined();
+  });
+});
+
+// #30 item 5: what the ⌘K bubble says for an answered turn, the same live (sendAsk) and reopened ("Phiên trước").
+const DECLINED = "Mô hình ngôn ngữ từ chối yêu cầu này.";
+const TOO_BROAD = "Tôi chưa trả lời xong câu này — truy vấn quá phức tạp hoặc quá rộng. Thử hỏi hẹp hơn (nêu rõ đối tượng và điều kiện).";
+
+describe("askReplyText", () => {
+  it.each([
+    ["an answer", "Có **3** cơ hội.", "ok", "Có **3** cơ hội."],
+    ["an answer stored before outcomes were", "Có **3** cơ hội.", undefined, "Có **3** cơ hội."],
+    ["a refusal", "", "refused", DECLINED],
+    ["a refusal that came with partial text", "Tôi sẽ", "refused", DECLINED],
+    ["the tool loop ran out of steps", "", "max_steps", TOO_BROAD],
+    ["out of steps with a partial text", "Đang tìm…", "max_steps", TOO_BROAD],
+    ["an ok turn whose reply is empty", "  ", "ok", TOO_BROAD],
+    ["no reply at all", null, undefined, TOO_BROAD],
+  ])("%s", (_name, reply, outcome, want) => {
+    expect(askReplyText(reply, outcome)).toBe(want);
+  });
+});
+
+describe("assistantMessagesToTurns — a reopened turn reads as the live one did", () => {
+  it("the declined line for a refused reply, the too-broad hint for one that ran out of steps, drafts kept", () => {
+    const drafts = [{ kind: "record_create", recordCreate: { entity: "contacts", data: {} } }];
+    const turns = assistantMessagesToTurns([
+      { seq: 0, role: "user", content: "chép tài khoản của không gian khác", drafts: null, createdAt: "t" },
+      { seq: 1, role: "assistant", content: "", drafts: null, createdAt: "t", outcome: "refused" },
+      { seq: 2, role: "user", content: "", drafts: null, createdAt: "t" },
+      { seq: 3, role: "assistant", content: "", drafts, createdAt: "t", outcome: "max_steps" },
+    ]);
+    expect(turns.map((x) => x.content)).toEqual(["chép tài khoản của không gian khác", DECLINED, "", TOO_BROAD]);
+    expect(turns[3].drafts).toEqual(drafts);
   });
 });

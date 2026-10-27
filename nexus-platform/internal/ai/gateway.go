@@ -42,13 +42,16 @@ var (
 // "tool". For an assistant turn that calls tools, ToolCalls is populated (and Content may be
 // empty). For a tool RESULT message, Role is "tool", ToolCallID echoes the id of the call being
 // answered, and Content carries the tool's JSON output. Name is optional (tool name on a tool
-// message). Empty fields are omitted so the wire shape matches what the gateway expects.
+// message). Refusal is OpenAI's reason text on an answer the model declined (read only, never sent: a
+// declined message never enters the conversation). Empty fields are omitted so the wire shape matches
+// what the gateway expects.
 type ChatMessage struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	Name       string     `json:"name,omitempty"`
+	Refusal    string     `json:"refusal,omitempty"`
 }
 
 // ToolCall is a single function call the model requested. Arguments is a RAW JSON string (the
@@ -92,10 +95,18 @@ type ChatRequest struct {
 	MaxTokens int           `json:"max_tokens,omitempty"`
 }
 
-// ChatResponse is the subset of the OpenAI-compatible response the loop consumes.
+// ChatResponse is the subset of the OpenAI-compatible response the loop consumes. StopReason is Claude's
+// top-level field, which a proxy may pass through as it is (decoded as any, like ChatChoice.StopReason).
 type ChatResponse struct {
-	Choices []ChatChoice `json:"choices"`
-	Usage   Usage        `json:"usage"`
+	Choices    []ChatChoice `json:"choices"`
+	Usage      Usage        `json:"usage"`
+	StopReason any          `json:"stop_reason,omitempty"`
+}
+
+// Refused reports a response whose model declined the request, wherever the gateway put the signal: Claude's
+// top-level stop_reason "refusal" (a response that may carry no choice at all) or the first choice's.
+func (r ChatResponse) Refused() bool {
+	return r.StopReason == "refusal" || (len(r.Choices) > 0 && r.Choices[0].Refused())
 }
 
 // ChatChoice wraps one assistant message (the loop only ever reads choices[0]).
@@ -107,10 +118,11 @@ type ChatChoice struct {
 	StopReason any `json:"stop_reason,omitempty"`
 }
 
-// Refused reports a model that declined the request (HTTP 200, stop_reason "refusal" in Claude's API, relayed
-// as finish_reason "refusal"). Its text and tool calls may be cut short and are not an answer.
+// Refused reports a model that declined the request (HTTP 200): Claude's stop_reason "refusal", relayed as
+// finish_reason "refusal" or copied onto the choice as it is, and OpenAI's finish_reason "content_filter" or
+// message.refusal text. Its text and tool calls may be cut short and are not an answer.
 func (c ChatChoice) Refused() bool {
-	return c.FinishReason == "refusal" || c.StopReason == "refusal"
+	return c.FinishReason == "refusal" || c.FinishReason == "content_filter" || c.StopReason == "refusal" || c.Message.Refusal != ""
 }
 
 // Usage carries the token counts the ledger records (spec §5). PromptTokens is ALL the input the model

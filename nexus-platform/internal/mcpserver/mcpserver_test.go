@@ -150,7 +150,7 @@ func (f *fakeThreads) GetSession(_ context.Context, tenantID, userID, id string)
 	return ai.Session{ID: id}, f.msgs, nil
 }
 
-func (f *fakeThreads) AppendTurn(_ context.Context, tenantID, userID, sessionID, _, user, assistant string, draft json.RawMessage) (string, error) {
+func (f *fakeThreads) AppendTurn(_ context.Context, tenantID, userID, sessionID, _, user, assistant string, draft json.RawMessage, _ string) (string, error) {
 	if f.appendErr != nil {
 		return "", f.appendErr
 	}

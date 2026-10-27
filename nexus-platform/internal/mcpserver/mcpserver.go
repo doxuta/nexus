@@ -44,7 +44,7 @@ type Freezer interface {
 // Threads reads and appends the token's assistant thread (ai.SessionStore).
 type Threads interface {
 	GetSession(ctx context.Context, tenantID, userID, id string) (ai.Session, []ai.Message, error)
-	AppendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage) (string, error)
+	AppendTurn(ctx context.Context, tenantID, userID, sessionID, newTitle, userContent, assistantContent string, assistantDraft json.RawMessage, outcome string) (string, error)
 }
 
 // instructions is what an MCP client hands its model about this server.
@@ -176,7 +176,7 @@ func (s *server) call(ctx context.Context, req *mcp.CallToolRequest) (res *mcp.C
 	draft, err := json.Marshal(added)
 	if err == nil {
 		_, err = s.threads.AppendTurn(ctx, p.TenantID, p.UserID, p.SessionID, "",
-			"[MCP] Agent gọi "+req.Params.Name, "Agent đề xuất qua MCP: "+result(answer).Result.Buffered+".", draft)
+			"[MCP] Agent gọi "+req.Params.Name, "Agent đề xuất qua MCP: "+result(answer).Result.Buffered+".", draft, "")
 	}
 	if err != nil {
 		return s.threadError(p, err), nil

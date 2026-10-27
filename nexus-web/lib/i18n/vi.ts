@@ -4841,6 +4841,7 @@ const vi = {
   "studio.assistant.cancelled": "Đã huỷ. Phần máy chủ đã chạy vẫn tính vào hạn mức.",
   "studio.assistant.maxSteps": "Đề xuất chưa hoàn tất, hỏi tiếp.",
   "studio.assistant.refused": "Mô hình ngôn ngữ từ chối yêu cầu này.",
+  "studio.assistant.tooBroad": "Tôi chưa trả lời xong câu này — truy vấn quá phức tạp hoặc quá rộng. Thử hỏi hẹp hơn (nêu rõ đối tượng và điều kiện).",
   "studio.assistant.disabledNotice": "Trợ lý chưa bật trên máy chủ này.",
   "studio.assistant.speaker.user": "Anh",
   "studio.assistant.speaker.assistant": "Trợ lý",

@@ -123,18 +123,18 @@ func (a *AssistantAgent) Ask(ctx context.Context, recordScope services.RecordSco
 		// Sum real token spend across every billed call of the turn (same accounting as Chat).
 		usage.add(resp.Usage)
 
+		// A refusal ends the turn unused, as in the builder's loop (read before the choices, as there).
+		if resp.Refused() {
+			outcome = outcomeRefused
+			return Result{Draft: exec.draft, Usage: usage, RunID: runID, Outcome: outcome}, nil
+		}
+
 		if len(resp.Choices) == 0 {
 			outcome = outcomeGatewayError
 			return Result{RunID: runID, Draft: exec.draft, Outcome: outcome},
 				fmt.Errorf("ai.Ask: %w: gateway returned no choices", ErrGateway)
 		}
 		msg := resp.Choices[0].Message
-
-		// A refusal ends the turn unused, as in the builder's loop.
-		if resp.Choices[0].Refused() {
-			outcome = outcomeRefused
-			return Result{Draft: exec.draft, Usage: usage, RunID: runID, Outcome: outcome}, nil
-		}
 
 		if len(msg.ToolCalls) == 0 {
 			outcome = outcomeOK

@@ -223,20 +223,21 @@ func (a *AIBuilderAgent) ChatWithProgress(ctx context.Context, scope Scope, tena
 		// separate gateway round-trip → its tokens are a real cost, so we SUM, not overwrite).
 		usage.add(resp.Usage)
 
+		// A refusal ends the turn before its partial text or tool calls are used; proposals from earlier calls
+		// stay, as on max_steps. The outcome is what tells the panel the model declined (issue #30 item 5). It is
+		// read before the choices: Claude's top-level stop_reason may come with none.
+		if resp.Refused() {
+			a.emitStep(onStep, StepEvent{Step: step + 1, MaxSteps: a.cfg.MaxSteps, Phase: StepPhaseFinal})
+			outcome = outcomeRefused
+			return Result{Draft: finalizeDraft(exec.draft, turn), Usage: usage, RunID: runID, Outcome: outcome}, nil
+		}
+
 		if len(resp.Choices) == 0 {
 			outcome = outcomeGatewayError
 			return Result{RunID: runID, Draft: exec.draft, Outcome: outcome},
 				fmt.Errorf("ai.Chat: %w: gateway returned no choices", ErrGateway)
 		}
 		msg := resp.Choices[0].Message
-
-		// A refusal ends the turn before its partial text or tool calls are used; proposals from earlier calls
-		// stay, as on max_steps. The outcome is what tells the panel the model declined (issue #30 item 5).
-		if resp.Choices[0].Refused() {
-			a.emitStep(onStep, StepEvent{Step: step + 1, MaxSteps: a.cfg.MaxSteps, Phase: StepPhaseFinal})
-			outcome = outcomeRefused
-			return Result{Draft: finalizeDraft(exec.draft, turn), Usage: usage, RunID: runID, Outcome: outcome}, nil
-		}
 
 		// Final text (no tool calls) → the turn is done.
 		if len(msg.ToolCalls) == 0 {

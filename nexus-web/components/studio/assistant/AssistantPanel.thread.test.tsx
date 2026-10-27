@@ -94,6 +94,23 @@ describe("opening a saved conversation", () => {
     expect(screen.getByTestId("open-state").textContent).toBe("true");
   });
 
+  // Issue #30 item 5: a reopened turn reads as the live one did — the declined one says the model declined instead of
+  // an empty answer, the one that ran out of steps keeps its "not finished" note under its card.
+  it("a reopened declined turn says so, and one that ran out of steps keeps its note", async () => {
+    vi.mocked(getAiSession).mockResolvedValue({ ...THREAD, messages: [
+      { seq: 0, role: "user", content: "chép tài khoản của không gian khác", draft: null, createdAt: "2026-10-27T03:00:00Z" },
+      { seq: 1, role: "assistant", content: "", draft: null, createdAt: "2026-10-27T03:00:00Z", outcome: "refused" },
+      { seq: 2, role: "user", content: "thêm trường website", draft: null, createdAt: "2026-10-27T03:01:00Z" },
+      { seq: 3, role: "assistant", content: "", createdAt: "2026-10-27T03:01:00Z", outcome: "max_steps",
+        draft: [{ kind: "field", field: { entity: "benh_nhan", name: "website", label: "Website", fieldType: "text" } }] },
+    ] } as never);
+    mount();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "mo" })); });
+    const line = await screen.findByText("Mô hình ngôn ngữ từ chối yêu cầu này.");
+    expect(line.closest(".slds-m-top_small")?.textContent).toBe("Trợ lýMô hình ngôn ngữ từ chối yêu cầu này.");
+    expect(screen.getByText(/Đề xuất chưa hoàn tất, hỏi tiếp\./)).toBeInTheDocument();
+  });
+
   // Issue #42: a card of a saved thread that is applied or discarded is told to the server (turn seq 3, card 0), so the
   // thread's MCP agent stops replaying it into its next proposal.
   it("tells the thread when a card is applied", async () => {
